@@ -36,11 +36,19 @@ public:
   void setTalking(bool talking) {
     if (talking != _talking) {
       _talking = talking;
+      if (!talking) _mouthAmp = 0;  // close mouth when speech ends
       _dirty = true;
     }
   }
 
   bool isTalking() const { return _talking; }
+
+  // Drive the lip-sync mouth from the live audio loudness (0..100).
+  // Called from speak() with each played chunk's peak amplitude.
+  void setMouthAmplitude(uint8_t level) {
+    _mouthAmp = level > 100 ? 100 : level;
+    if (_talking) _dirty = true;
+  }
 
   // Call frequently from loop(); handles blinking, talking mouth, redraws.
   void update() {
@@ -98,6 +106,7 @@ private:
   bool _dirty = true;
   bool _blinking = false;
   bool _talking = false;
+  uint8_t _mouthAmp = 0;  // live audio loudness while talking (0..100)
   uint32_t _blinkUntil = 0;
   uint32_t _nextBlinkAt = 3000;
 
@@ -116,40 +125,31 @@ private:
   }
 
   void drawAnimatedMouth(int cx, int cy) {
-    // Ondas + vibración (no apertura de boca). Estilo ecualizador / señal de audio.
-    uint32_t t = millis();
-    float time = t / 22.0f;
-    int vibeX = (int)(2.0f * sinf(time * 2.1f)) + (int)(1.0f * sinf(time * 5.3f));
-    int vibeY = (int)(1.5f * sinf(time * 3.7f));
-    cx += vibeX;
-    cy += vibeY;
+    // Real lip-sync: the mouth opens proportionally to the live audio loudness
+    // (_mouthAmp, fed from speak()). A little vibration keeps it lively.
+    float time = millis() / 22.0f;
+    cx += (int)(1.5f * sinf(time * 2.1f));
 
-    _canvas.fillRect(cx - 46, cy - 22, 92, 28, TFT_BLACK);
+    _canvas.fillRect(cx - 52, cy - 26, 104, 48, TFT_BLACK);  // clear mouth area
 
-    // Boca base: línea fina que tiembla
-    _canvas.fillRoundRect(cx - 24, cy - 2, 48, 5, 2, FACE_COLOR);
+    const int halfW = 26;
+    int openH = 4 + (_mouthAmp * 22) / 100;  // 4 px (closed) .. 26 px (wide open)
 
-    // Ondas viajando sobre la boca (3 franjas)
-    for (int row = 0; row < 3; row++) {
-      float rowPhase = row * 0.55f;
-      for (int dx = -32; dx <= 32; dx++) {
-        float wave = sinf(dx * 0.19f + time + rowPhase);
-        int y = cy - 10 + row * 5 + (int)(4.5f * wave);
-        _canvas.drawPixel(cx + dx, y, FACE_COLOR);
-        if (dx % 2 == 0) {
-          _canvas.drawPixel(cx + dx, y + 1, FACE_COLOR);
-        }
-      }
+    // Outer lips
+    _canvas.fillRoundRect(cx - halfW, cy - openH / 2, halfW * 2, openH, openH / 2, FACE_COLOR);
+    // Dark cavity once the mouth is open enough (reads as an open mouth)
+    if (openH >= 12) {
+      int ih = openH - 8;
+      _canvas.fillRoundRect(cx - halfW + 5, cy - ih / 2, (halfW - 5) * 2, ih, ih / 2, TFT_BLACK);
     }
 
-    // Barras laterales pulsando (vibración visual)
+    // Side equalizer bars react to the same loudness
     const int barCount = 4;
     for (int i = 0; i < barCount; i++) {
       float ph = time * 1.6f + i * 0.85f;
-      int h = 3 + (int)(6.0f * (0.5f + 0.5f * sinf(ph)));
-      int jitter = (int)(2.0f * sinf(ph * 2.2f));
-      _canvas.fillRect(cx - 42 + i * 5, cy - 14 - h + jitter, 3, h, FACE_COLOR);
-      _canvas.fillRect(cx + 30 + i * 5, cy - 14 - h - jitter, 3, h, FACE_COLOR);
+      int h = 2 + (int)((2 + _mouthAmp / 6) * (0.5f + 0.5f * sinf(ph)));
+      _canvas.fillRect(cx - 46 + i * 4, cy - h / 2, 3, h, FACE_COLOR);
+      _canvas.fillRect(cx + 34 + i * 4, cy - h / 2, 3, h, FACE_COLOR);
     }
   }
 

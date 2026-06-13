@@ -57,8 +57,8 @@ Variables: `OLLAMA_URL`, `OLLAMA_MODEL`, `WHISPER_MODEL`, `WHISPER_DEVICE`,
 - [x] Micrófono ES8311 validado en hardware
 - [x] Despertar por toque de pantalla
 - [x] Voz de respuesta por el parlante (TTS)
+- [x] Lip-sync: boca animada según la amplitud del audio
 - [ ] Wake word por voz estable ("Hi ESP")
-- [ ] Animación de boca al hablar
 
 ---
 
@@ -116,8 +116,8 @@ Env vars: `OLLAMA_URL`, `OLLAMA_MODEL`, `WHISPER_MODEL`, `WHISPER_DEVICE`,
 - [x] ES8311 mic validated on hardware
 - [x] Touch-to-wake
 - [x] Spoken reply through the speaker (TTS)
+- [x] Lip-sync talking mouth (audio-driven)
 - [ ] Stable voice wake word ("Hi ESP")
-- [ ] Talking mouth animation
 
 ---
 
