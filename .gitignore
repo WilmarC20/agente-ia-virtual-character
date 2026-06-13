@@ -1,0 +1,18 @@
+# Secrets — never commit (WiFi credentials, server URL)
+firmware/agente-ia/secrets.h
+
+# Generated SPIFFS image (build it with upload_spiffs.ps1 from data/)
+firmware/agente-ia/spiffs.bin
+
+# Python
+server/.venv/
+server/__pycache__/
+*.pyc
+
+# Downloaded/large runtime assets
+server/voices/
+
+# Local recordings / scratch / logs
+server/debug_audio/
+tmp/
+*.log
