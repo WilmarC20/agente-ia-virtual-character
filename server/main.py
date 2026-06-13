@@ -57,7 +57,7 @@ CAPTURE_DIR = SERVER_DIR / "debug_audio"
 LAST_CONVERSE_WAV = CAPTURE_DIR / "last_converse.wav"
 SAVE_AUDIO_CAPTURES = os.environ.get("SAVE_AUDIO_CAPTURES", "1") != "0"
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://192.168.1.100:11434")
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://192.168.0.103:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
 # "base" en CPU ~2-8s; "small" + vad_filter suele COLGARSE en Windows.
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base")
@@ -102,19 +102,17 @@ corta cantable (2-4 líneas).
 desde su memoria local (beep, laugh, yawn, glitch, power_up, error).
 """
 
-WAKE_PHRASES = (
-    "hi esp",
-    "hiesp",
-    "hey esp",
-    "hola esp",
-    "oye esp",
-    "hi es p",
-    "high esp",
-    "hai esp",
-    "hay esp",
-    "hi espe",
-    "hies pe",
-    "h i esp",
+# PC-side wake phrase (Whisper-based, via /wake-check). Spanish "Hola asistente"
+# with common Whisper spellings. Override the whole list with env WAKE_PHRASES
+# (comma-separated) to use a different phrase without touching code.
+WAKE_PHRASES = tuple(
+    p.strip()
+    for p in os.environ.get(
+        "WAKE_PHRASES",
+        "hola asistente,ola asistente,hola asistent,ola asistent,hola sistente,"
+        "hola acistente,olas istente",
+    ).lower().split(",")
+    if p.strip()
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -426,10 +424,10 @@ def is_wake_phrase(text: str) -> bool:
     for phrase in WAKE_PHRASES:
         if phrase.replace(" ", "") in compact or phrase in norm:
             return True
-    if "esp" in compact or "espe" in compact:
-        for cue in ("hi", "hey", "hola", "oye", "hai", "high", "hay"):
-            if cue in compact:
-                return True
+    # Fuzzy: any "asistente"-like transcription counts as the wake phrase.
+    for core in ("asistente", "asistent", "acistente", "sistente", "asustente"):
+        if core in compact:
+            return True
     return False
 
 
@@ -607,8 +605,8 @@ async def wake_check(request: Request):
         return {"wake": False, "heard": ""}
     text = await transcribe_wav(
         wav_bytes,
-        language="en",
-        initial_prompt="Hi ESP, hey ESP, hola ESP",
+        language="es",
+        initial_prompt="Hola asistente.",
         beam_size=1,
     )
     wake = is_wake_phrase(text)

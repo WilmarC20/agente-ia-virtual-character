@@ -20,8 +20,12 @@ public:
     drainI2sRx(i2s, ms);
   }
 
-  Recording record(I2SClass &i2s, MicLevelCallback onLevel = nullptr) {
-    Serial.println("record: start");
+  // noVoiceTimeoutMs: how long to wait for speech before giving up (short for the
+  // PC-wake probe so the loop stays responsive). quiet: suppress serial logging
+  // (the wake probe runs repeatedly, so it shouldn't spam the log).
+  Recording record(I2SClass &i2s, MicLevelCallback onLevel = nullptr,
+                   uint32_t noVoiceTimeoutMs = RECORD_NO_VOICE_MS, bool quiet = false) {
+    if (!quiet) Serial.println("record: start");
     prepareCapture(i2s);
 
     Recording rec;
@@ -95,8 +99,8 @@ public:
         if (silenceMs >= RECORD_SILENCE_MS) break;
       } else {
         noVoiceMs += chunkMs;
-        if (noVoiceMs >= RECORD_NO_VOICE_MS) {
-          Serial.println("record: no voice timeout");
+        if (noVoiceMs >= noVoiceTimeoutMs) {
+          if (!quiet) Serial.println("record: no voice timeout");
           break;
         }
       }
@@ -106,7 +110,7 @@ public:
 
     uint32_t durationMs = total * 1000 / AUDIO_SAMPLE_RATE;
     if (!voiceStarted || durationMs < RECORD_MIN_MS) {
-      Serial.printf("record: no valid audio (voice=%d ms=%u)\n", voiceStarted, durationMs);
+      if (!quiet) Serial.printf("record: no valid audio (voice=%d ms=%u)\n", voiceStarted, durationMs);
       free(buf);
       return rec;
     }
@@ -114,7 +118,7 @@ public:
     writeWavHeader(buf, total * 2);
     rec.wav = buf;
     rec.size = 44 + total * 2;
-    Serial.printf("Recorded %u samples, %u ms @ %u Hz\n", total, durationMs, AUDIO_SAMPLE_RATE);
+    if (!quiet) Serial.printf("Recorded %u samples, %u ms @ %u Hz\n", total, durationMs, AUDIO_SAMPLE_RATE);
     return rec;
   }
 

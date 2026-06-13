@@ -36,6 +36,13 @@ volatile bool wakeDetected = false;
 State state = State::Sleeping;
 uint32_t emotionHoldUntil = 0;
 uint32_t wakeIgnoreUntil = 0;
+bool g_wakeNetRunning = false;  // true only while on-device WakeNet is actively feeding
+
+#if WAKE_MODE_PC
+#define WAKE_HINT "Di \"Hola asistente\" o toca"
+#else
+#define WAKE_HINT "Di \"Hi ESP\" o toca la pantalla"
+#endif
 
 #if ENABLE_WAKEWORD
 // WakeNet input format: which stereo slot carries the mic. Set at boot by
@@ -101,8 +108,10 @@ void onMicLevel(uint32_t rms) {
 
 void pauseWakeListener() {
 #if ENABLE_WAKEWORD
-  ESP_SR.pause();
-  delay(SR_PAUSE_SETTLE_MS);
+  if (g_wakeNetRunning) {
+    ESP_SR.pause();
+    delay(SR_PAUSE_SETTLE_MS);
+  }
 #endif
 }
 
@@ -162,6 +171,7 @@ bool restoreMicBusAfterPlayback(I2SClass &i2s) {
 
 void resumeWakeListener() {
 #if ENABLE_WAKEWORD
+  if (!g_wakeNetRunning) return;  // PC wake mode: nothing to resume
   // ESP_SR holds a pointer to the I2SClass OBJECT and reads via i2s->readBytes(),
   // which resolves the current rx channel on every call. So even though restore did
   // i2s.end()/begin() and swapped the underlying handle, resume() picks it up — no
@@ -178,6 +188,7 @@ void resumeWakeListener() {
 bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,
               bool &sing, bool &doSpeak, String &soundEffect);
 void speak(const String &text, bool sing);
+bool checkWakePhrase(const uint8_t *wav, size_t size);
 
 void setup() {
   Serial.begin(115200);
@@ -231,19 +242,26 @@ void setup() {
     delay(600);
   }
 
-#if ENABLE_WAKEWORD
+#if ENABLE_WAKEWORD && !WAKE_MODE_PC
+  // On-device WakeNet ("Hi ESP"). Disabled while WAKE_MODE_PC is on so it doesn't
+  // fight the PC-wake recorder for the I2S bus. Kept here to RETAKE later.
   g_srInputFormat = detectMicInputFormat(i2s);
   ESP_SR.onEvent(onSrEvent);
   if (!ESP_SR.begin(i2s, srCommands, 0, SR_CHANNELS_STEREO, SR_MODE_WAKEWORD, g_srInputFormat)) {
     Serial.println("ESP_SR init failed! Check partition scheme: ESP SR 16M");
     face.showText("Error: WakeNet no inicio", TFT_RED);
   } else {
+    g_wakeNetRunning = true;
     Serial.printf("WakeNet ready (Hi ESP), input=%s\n", g_srInputFormat);
   }
 #endif
 
-  face.showText("Di \"Hi ESP\" o toca la pantalla");
+  face.showText(WAKE_HINT);
+#if WAKE_MODE_PC
+  Serial.println("Ready - PC wake (\"Hola asistente\") + touch");
+#else
   Serial.println("Ready - WakeNet + touch");
+#endif
 }
 
 void loop() {
@@ -262,7 +280,26 @@ void loop() {
         }
       }
 
-#if ENABLE_WAKEWORD
+#if WAKE_MODE_PC
+      // PC-side wake: skip during the post-TTS echo cooldown. record() (quiet, short
+      // no-voice timeout) returns null fast when idle; on speech, ask the server if it
+      // was the wake phrase ("Hola asistente").
+      if (millis() >= wakeIgnoreUntil) {
+        Recording probe = recorder.record(i2s, nullptr, 700, true);
+        if (probe.wav) {
+          bool wake = checkWakePhrase(probe.wav, probe.size);
+          free(probe.wav);
+          if (wake) {
+            Serial.println("PC wake detected (Hola asistente)");
+            face.clearMicLevel();
+            state = State::Listening;
+            break;
+          }
+        }
+      }
+#endif
+
+#if ENABLE_WAKEWORD && !WAKE_MODE_PC
       if (wakeDetected && millis() < wakeIgnoreUntil) {
         wakeDetected = false;
       } else if (wakeDetected) {
@@ -284,7 +321,7 @@ void loop() {
       face.clearMicLevel();
 
       if (!rec.wav) {
-        face.showText("No escuche nada. Di \"Hi ESP\"");
+        face.showText("No escuche nada. " WAKE_HINT);
         face.setEmotion(Emotion::Neutral);
         resumeWakeListener();
         state = State::Sleeping;
@@ -337,7 +374,7 @@ void loop() {
   if (emotionHoldUntil && millis() > emotionHoldUntil) {
     emotionHoldUntil = 0;
     face.setEmotion(Emotion::Neutral);
-    face.showText("Di \"Hi ESP\" o toca la pantalla");
+    face.showText(WAKE_HINT);
   }
 
   delay(10);
@@ -462,6 +499,28 @@ void speak(const String &text, bool sing) {
   Serial.printf("TTS played %u bytes PCM sing=%d\n", pcmWritten, sing);
   delay(400);
   wakeIgnoreUntil = millis() + WAKE_COOLDOWN_MS;
+}
+
+// PC-side wake: POST a short clip to /wake-check; server transcribes it (Whisper)
+// and returns whether it contains the wake phrase ("Hola asistente").
+bool checkWakePhrase(const uint8_t *wav, size_t size) {
+  HTTPClient http;
+  http.setTimeout(15000);
+  if (!http.begin(String(BRAIN_SERVER_URL) + "/wake-check")) return false;
+  http.addHeader("Content-Type", "audio/wav");
+  int code = http.POST((uint8_t *)wav, size);
+  if (code != 200) {
+    http.end();
+    return false;
+  }
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, http.getString());
+  http.end();
+  if (err) return false;
+  bool wake = doc["wake"] | false;
+  const char *heard = doc["heard"] | "";
+  if (heard[0]) Serial.printf("wake-check heard='%s' wake=%d\n", heard, wake);
+  return wake;
 }
 
 bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,

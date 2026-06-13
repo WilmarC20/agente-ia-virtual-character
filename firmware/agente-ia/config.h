@@ -43,7 +43,14 @@
 #define I2S_DRAIN_AFTER_PLAY_MS   500
 #define SR_PAUSE_SETTLE_MS        280
 // WakeNet (ESP-SR): "Hi ESP" on-device. Requires ESP SR 16M partition scheme.
+// Kept compiled so we can RETAKE it later; the board mic is too quiet for it to
+// fire reliably today, so the active wake path is WAKE_MODE_PC below.
 #define ENABLE_WAKEWORD     1
+// Wake path selector: 1 = PC-side "Hola asistente" (records a clip, server
+// /wake-check transcribes it with Whisper). 0 = on-device WakeNet "Hi ESP".
+// Touch-to-wake works in BOTH modes. The probe reuses record()'s tuned VAD to
+// gate out silence, so no extra threshold is needed here.
+#define WAKE_MODE_PC        1
 // ES8311 places the mono mic on ONE stereo slot (L or R). WakeNet's input_format
 // must point at that slot or it hears silence. Auto-detected at boot by energy.
 // Fallback if probe is inconclusive; "MN" = mic LEFT, "NM" = mic RIGHT.
