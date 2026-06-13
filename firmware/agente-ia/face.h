@@ -125,29 +125,35 @@ private:
   }
 
   void drawAnimatedMouth(int cx, int cy) {
-    // Bender-style metal mouth: a wide rounded frame with vertical "teeth" that
-    // opens with the live audio loudness (_mouthAmp, fed from speak()).
-    _canvas.fillRect(cx - 56, cy - 30, 112, 60, TFT_BLACK);  // clear mouth area
+    // Bender grin: a fixed-size block of teeth (filled), split by a LENS-shaped gap
+    // in the middle (almond: pointed at the sides, bulging in the centre). The lens
+    // flexes open/closed with the live audio loudness (_mouthAmp) — that's the
+    // "inner lines moving" of the real Bender mouth.
+    _canvas.fillRect(cx - 56, cy - 26, 112, 52, TFT_BLACK);  // clear mouth area
 
-    const int halfW = 40;                      // wide mouth (Bender)
-    int openH = 9 + (_mouthAmp * 26) / 100;     // 9 px (closed, teeth row) .. 35 px (open)
-    int top = cy - openH / 2;
+    const int halfW = 42;
+    const int frameH = 30;            // teeth block height stays fixed (only the gap moves)
+    const int top = cy - frameH / 2;
 
-    // Outer metal frame (double line = thicker border)
-    _canvas.drawRoundRect(cx - halfW, top, halfW * 2, openH, 5, FACE_COLOR);
-    _canvas.drawRoundRect(cx - halfW + 1, top + 1, halfW * 2 - 2, openH - 2, 4, FACE_COLOR);
+    // Solid teeth block + crisp outline
+    _canvas.fillRoundRect(cx - halfW, top, halfW * 2, frameH, 5, FACE_COLOR);
 
-    // Vertical teeth (the iconic Bender grille)
-    const int teeth = 9;
+    // Parabolic lens opening (0 at the corners, widest in the centre)
+    int lensMax = 3 + (_mouthAmp * 11) / 100;  // 3 px (closed grin) .. 14 px half-height
+    for (int dx = -halfW + 3; dx <= halfW - 3; dx++) {
+      float n = (float)dx / (halfW - 3);
+      int gap = (int)(lensMax * (1.0f - n * n));
+      if (gap > 0) _canvas.drawFastVLine(cx + dx, cy - gap, gap * 2, TFT_BLACK);
+    }
+
+    // Vertical tooth separators
+    const int teeth = 8;
     for (int i = 1; i < teeth; i++) {
       int x = cx - halfW + (halfW * 2 * i) / teeth;
-      _canvas.drawFastVLine(x, top + 1, openH - 2, FACE_COLOR);
+      _canvas.drawFastVLine(x, top + 2, frameH - 4, TFT_BLACK);
     }
 
-    // Horizontal split between upper and lower teeth when the mouth is open
-    if (openH >= 18) {
-      _canvas.drawFastHLine(cx - halfW + 2, cy, halfW * 2 - 4, FACE_COLOR);
-    }
+    _canvas.drawRoundRect(cx - halfW, top, halfW * 2, frameH, 5, FACE_COLOR);
   }
 
   void draw() {
