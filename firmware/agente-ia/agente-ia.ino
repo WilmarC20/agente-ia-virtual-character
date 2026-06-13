@@ -432,7 +432,19 @@ void speak(const String &text, bool sing) {
       off = min(headerSkip, n);
       headerSkip -= off;
     }
-    if (n > off) pcmWritten += playMonoPcm16(i2s, buf + off, n - off);
+    if (n > off) {
+      // Lip-sync: drive the mouth from this chunk's peak amplitude before playing it.
+      const int16_t *samples = (const int16_t *)(buf + off);
+      size_t nSamples = (n - off) / 2;
+      int32_t peak = 0;
+      for (size_t i = 0; i < nSamples; i++) {
+        int32_t a = abs(samples[i]);
+        if (a > peak) peak = a;
+      }
+      int32_t level = peak / 150;  // ~full-scale TTS peak -> ~100
+      face.setMouthAmplitude((uint8_t)(level > 100 ? 100 : level));
+      pcmWritten += playMonoPcm16(i2s, buf + off, n - off);
+    }
 
     if (millis() - lastMouthUpdate > 40) {
       face.update();
