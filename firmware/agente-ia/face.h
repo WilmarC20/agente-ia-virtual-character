@@ -125,31 +125,28 @@ private:
   }
 
   void drawAnimatedMouth(int cx, int cy) {
-    // Real lip-sync: the mouth opens proportionally to the live audio loudness
-    // (_mouthAmp, fed from speak()). A little vibration keeps it lively.
-    float time = millis() / 22.0f;
-    cx += (int)(1.5f * sinf(time * 2.1f));
+    // Bender-style metal mouth: a wide rounded frame with vertical "teeth" that
+    // opens with the live audio loudness (_mouthAmp, fed from speak()).
+    _canvas.fillRect(cx - 56, cy - 30, 112, 60, TFT_BLACK);  // clear mouth area
 
-    _canvas.fillRect(cx - 52, cy - 26, 104, 48, TFT_BLACK);  // clear mouth area
+    const int halfW = 40;                      // wide mouth (Bender)
+    int openH = 9 + (_mouthAmp * 26) / 100;     // 9 px (closed, teeth row) .. 35 px (open)
+    int top = cy - openH / 2;
 
-    const int halfW = 26;
-    int openH = 4 + (_mouthAmp * 22) / 100;  // 4 px (closed) .. 26 px (wide open)
+    // Outer metal frame (double line = thicker border)
+    _canvas.drawRoundRect(cx - halfW, top, halfW * 2, openH, 5, FACE_COLOR);
+    _canvas.drawRoundRect(cx - halfW + 1, top + 1, halfW * 2 - 2, openH - 2, 4, FACE_COLOR);
 
-    // Outer lips
-    _canvas.fillRoundRect(cx - halfW, cy - openH / 2, halfW * 2, openH, openH / 2, FACE_COLOR);
-    // Dark cavity once the mouth is open enough (reads as an open mouth)
-    if (openH >= 12) {
-      int ih = openH - 8;
-      _canvas.fillRoundRect(cx - halfW + 5, cy - ih / 2, (halfW - 5) * 2, ih, ih / 2, TFT_BLACK);
+    // Vertical teeth (the iconic Bender grille)
+    const int teeth = 9;
+    for (int i = 1; i < teeth; i++) {
+      int x = cx - halfW + (halfW * 2 * i) / teeth;
+      _canvas.drawFastVLine(x, top + 1, openH - 2, FACE_COLOR);
     }
 
-    // Side equalizer bars react to the same loudness
-    const int barCount = 4;
-    for (int i = 0; i < barCount; i++) {
-      float ph = time * 1.6f + i * 0.85f;
-      int h = 2 + (int)((2 + _mouthAmp / 6) * (0.5f + 0.5f * sinf(ph)));
-      _canvas.fillRect(cx - 46 + i * 4, cy - h / 2, 3, h, FACE_COLOR);
-      _canvas.fillRect(cx + 34 + i * 4, cy - h / 2, 3, h, FACE_COLOR);
+    // Horizontal split between upper and lower teeth when the mouth is open
+    if (openH >= 18) {
+      _canvas.drawFastHLine(cx - halfW + 2, cy, halfW * 2 - 4, FACE_COLOR);
     }
   }
 
