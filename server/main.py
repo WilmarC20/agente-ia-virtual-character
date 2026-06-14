@@ -51,6 +51,7 @@ def _enable_cuda_dlls() -> None:
 _enable_cuda_dlls()
 
 from tts_engine import shutdown_piper_daemon, synthesize_wav_16k, warm_piper_daemon
+import ha_client as ha
 
 SERVER_DIR = Path(__file__).resolve().parent
 CAPTURE_DIR = SERVER_DIR / "debug_audio"
@@ -100,6 +101,24 @@ Estructura obligatoria del JSON:
 corta cantable (2-4 líneas).
 - Usa "sound_effect" con criterio cómico para que el ESP32 reproduzca sonidos cortos \
 desde su memoria local (beep, laugh, yawn, glitch, power_up, error).
+"""
+
+# Appended to the system prompt only when Home Assistant is configured. Carries the
+# live device list and teaches the model to emit an optional "actions" field.
+HOME_PROMPT = """
+
+CONTROL DEL HOGAR (Home Assistant). Podés encender, apagar o alternar dispositivos.
+Cuando el usuario pida controlar algo, AGREGÁ al JSON un campo "actions" (lista):
+"actions": [{{"entity_id": "<id EXACTO de la lista>", "command": "on" | "off" | "toggle"}}]
+Reglas:
+- Usá SOLO entity_id que estén en la lista de abajo; si no está, no lo inventes y avisá en "reply".
+- Para escenas y scripts usá command "on".
+- En "reply" confirmá en español, corto, lo que hiciste.
+- Si preguntan por el estado de algo, respondé con los estados de la lista y NO incluyas "actions".
+- Si el pedido NO es de domótica, no incluyas "actions".
+
+Dispositivos disponibles (nombre (entity_id) = estado):
+{devices}
 """
 
 # PC-side wake phrase (Whisper-based, via /wake-check). Spanish "Hola asistente"
@@ -497,7 +516,12 @@ def ollama_fallback(raw: str = "") -> dict:
 
 
 async def ask_ollama(user_text: str, *, use_history: bool = False) -> dict:
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    system_content = SYSTEM_PROMPT
+    if ha.ha_enabled():
+        devices = await asyncio.to_thread(ha.devices_prompt)
+        if devices:
+            system_content += HOME_PROMPT.format(devices=devices)
+    messages = [{"role": "system", "content": system_content}]
     if use_history:
         messages.extend(_conversation_history)
     messages.append({"role": "user", "content": user_text})
@@ -552,6 +576,11 @@ async def ask_ollama(user_text: str, *, use_history: bool = False) -> dict:
         "speak": speak,
         "sound_effect": sound_effect,
     }
+
+    actions = data.get("actions")
+    if isinstance(actions, list) and actions and ha.ha_enabled() and not wants_face_only(user_text):
+        result["ha_actions"] = await asyncio.to_thread(ha.execute_actions, actions)
+        log.info("HA actions -> %s", result["ha_actions"])
 
     if use_history:
         _conversation_history.append({"role": "user", "content": user_text})

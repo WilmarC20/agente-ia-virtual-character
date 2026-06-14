@@ -1,5 +1,7 @@
-# Secrets — never commit (WiFi credentials, server URL)
+# Secrets — never commit (WiFi credentials, Home Assistant token, server URL)
 firmware/agente-ia/secrets.h
+server/secrets.local.ps1
+server/.env
 
 # Generated SPIFFS image (build it with upload_spiffs.ps1 from data/)
 firmware/agente-ia/spiffs.bin
