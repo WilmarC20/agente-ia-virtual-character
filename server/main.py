@@ -75,7 +75,10 @@ WHISPER_CONVERSE_PROMPT = os.environ.get(
     "cara sorprendida, cántame una canción, hola, cómo estás, qué hora es, Hi ESP.",
 )
 
-EMOTIONS = ["neutral", "happy", "sad", "angry", "surprised", "thinking", "sleepy"]
+EMOTIONS = [
+    "neutral", "happy", "sad", "angry", "surprised", "thinking", "sleepy",
+    "love", "excited", "cool", "confused", "dizzy",
+]
 SOUND_EFFECTS = ["none", "beep", "laugh", "error", "yawn", "power_up", "glitch"]
 
 _conversation_history: deque = deque(maxlen=6)
@@ -91,7 +94,8 @@ Tus respuestas DEBEN ser cortas (máximo 2 o 3 oraciones). DEBES responder ÚNIC
 en formato JSON estricto, sin texto antes ni después, sin bloques markdown.
 
 Estructura obligatoria del JSON:
-{"emotion": "neutral" | "happy" | "sad" | "angry" | "surprised" | "thinking" | "sleepy", \
+{"emotion": "neutral" | "happy" | "sad" | "angry" | "surprised" | "thinking" | "sleepy" \
+| "love" | "excited" | "cool" | "confused" | "dizzy", \
 "reply": "Texto para el TTS", "speak": true | false, "sing": true | false, \
 "sound_effect": "none" | "beep" | "laugh" | "error" | "yawn" | "power_up" | "glitch"}
 
