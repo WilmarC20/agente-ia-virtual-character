@@ -3,6 +3,10 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
+# Load local secrets (HA token, etc.) if present — gitignored, never committed.
+$secretsFile = Join-Path $PSScriptRoot "secrets.local.ps1"
+if (Test-Path $secretsFile) { . $secretsFile; Write-Host "Secrets cargados (secrets.local.ps1)" }
+
 $py = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $py)) {
     Write-Host "Creating venv..."
@@ -37,8 +41,8 @@ if ($env:TTS_ENGINE -eq "sapi") {
 $env:TTS_VOICE = if ($env:TTS_VOICE) { $env:TTS_VOICE } else { "es_MX-claude-high" }
 $env:EDGE_TTS_VOICE = if ($env:EDGE_TTS_VOICE) { $env:EDGE_TTS_VOICE } else { "es-MX-DaliaNeural" }
 
-# Solo red local (la placa usa 192.168.1.100). NO usar 0.0.0.0.
-$bindHost = if ($env:BRAIN_BIND_HOST) { $env:BRAIN_BIND_HOST } else { "192.168.1.100" }
+# Solo red local (la placa usa 192.168.0.103). NO usar 0.0.0.0.
+$bindHost = if ($env:BRAIN_BIND_HOST) { $env:BRAIN_BIND_HOST } else { "192.168.0.103" }
 
 Write-Host "Starting brain server on http://${bindHost}:8000"
 Write-Host "Whisper: model=$env:WHISPER_MODEL device=$env:WHISPER_DEVICE compute=$env:WHISPER_COMPUTE_TYPE beam=$env:WHISPER_BEAM_SIZE best_of=$env:WHISPER_BEST_OF"

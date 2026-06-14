@@ -40,6 +40,13 @@ Whisper usa GPU (CUDA) si está disponible, si no CPU.
 Variables: `OLLAMA_URL`, `OLLAMA_MODEL`, `WHISPER_MODEL`, `WHISPER_DEVICE`,
 `EDGE_TTS_VOICE`, `TTS_ENGINE` (`edge` | `sapi` | `piper`), `BRAIN_BIND_HOST`.
 
+### Domótica (Home Assistant)
+
+Opcional. El agente puede leer y controlar dispositivos de Home Assistant por voz
+("prende la luz del estudio"). Copiá `server/secrets.local.ps1.example` a
+`server/secrets.local.ps1` (gitignoreado) y poné tu `HA_URL` y un token de larga
+duración en `HA_TOKEN`. Si no lo configurás, el agente funciona igual sin domótica.
+
 ## Firmware (Arduino IDE)
 
 1. Instalá el core **esp32 by Espressif 3.x** (Gestor de placas).
@@ -98,6 +105,13 @@ Whisper uses the GPU (CUDA) when available, otherwise CPU.
 
 Env vars: `OLLAMA_URL`, `OLLAMA_MODEL`, `WHISPER_MODEL`, `WHISPER_DEVICE`,
 `EDGE_TTS_VOICE`, `TTS_ENGINE` (`edge` | `sapi` | `piper`), `BRAIN_BIND_HOST`.
+
+### Home automation (Home Assistant)
+
+Optional. The agent can read and control Home Assistant devices by voice
+("turn on the studio light"). Copy `server/secrets.local.ps1.example` to
+`server/secrets.local.ps1` (gitignored) and set `HA_URL` and a long-lived
+`HA_TOKEN`. Without it, the agent runs fine without home automation.
 
 ## Firmware (Arduino IDE)
 
