@@ -3,6 +3,9 @@ firmware/agente-ia/secrets.h
 server/secrets.local.ps1
 server/.env
 
+# Persistent agent memory (personal: the human's name, facts, mood)
+server/agent_state.json
+
 # Generated SPIFFS image (build it with upload_spiffs.ps1 from data/)
 firmware/agente-ia/spiffs.bin
 
