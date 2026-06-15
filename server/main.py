@@ -427,6 +427,17 @@ async def transcribe_wav(
         return ""
 
 
+async def _ha_cache_warmer():
+    """Keep the HA states cache hot in the background so /converse never waits on the
+    slow ~4s /api/states fetch — requests just read the warm snapshot."""
+    while True:
+        try:
+            await asyncio.to_thread(ha.get_states, True)
+        except Exception as e:
+            log.warning("HA cache warm failed: %s", e)
+        await asyncio.sleep(20)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("Preloading Whisper (model=%s)...", WHISPER_MODEL)
@@ -434,6 +445,8 @@ async def lifespan(app: FastAPI):
     log.info("Brain server ready — whisper=%s timeout=%.0fs", WHISPER_MODEL, WHISPER_TIMEOUT_S)
     if os.environ.get("TTS_ENGINE", "sapi").lower() == "piper":
         asyncio.create_task(asyncio.to_thread(warm_piper_daemon))
+    if ha.ha_enabled():
+        asyncio.create_task(_ha_cache_warmer())
     yield
     shutdown_piper_daemon()
     _transcribe_pool.shutdown(wait=False, cancel_futures=True)
