@@ -154,6 +154,14 @@ Podés agregar al JSON, SOLO si corresponde, estos campos opcionales:
 - "mood": tu humor de fondo en una palabra (ej. contento, juguetón, nostálgico).
 """
 
+# The character talks on its own after a while idle (firmware calls /idle).
+IDLE_USER_PROMPT = (
+    "[Nadie te habla hace rato.] Solta un comentario espontaneo MUY breve (una sola "
+    "oracion), en tu personalidad tierna y sarcastica, como pensando en voz alta. "
+    "Aprovecha el contexto (hora, quien esta en casa, lo que recordas del humano) si "
+    "viene al caso. No saludes formal ni hagas preguntas de soporte; varia para no repetirte."
+)
+
 # PC-side wake phrase (Whisper-based, via /wake-check). Spanish "Hola asistente"
 # with common Whisper spellings. Override the whole list with env WAKE_PHRASES
 # (comma-separated) to use a different phrase without touching code.
@@ -679,6 +687,14 @@ async def chat(body: dict):
         result.get("sound_effect", "none"),
         result["reply"],
     )
+    return result
+
+
+@app.post("/idle")
+async def idle():
+    """Spontaneous in-character remark (the board calls this after a while idle)."""
+    result = await ask_ollama(IDLE_USER_PROMPT)
+    log.info("idle remark [%s]: %s", result["emotion"], result["reply"])
     return result
 
 
