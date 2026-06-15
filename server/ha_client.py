@@ -81,6 +81,25 @@ def valid_entity_ids() -> set[str]:
     return {d["entity_id"] for d in controllable_devices()}
 
 
+def presence_context() -> str:
+    """Who is home + day/night, for situational awareness in the prompt."""
+    if not ha_enabled():
+        return ""
+    states = get_states()
+    parts = []
+    home = [
+        s.get("attributes", {}).get("friendly_name", s["entity_id"])
+        for s in states
+        if s.get("entity_id", "").startswith("person.") and s.get("state") == "home"
+    ]
+    if home:
+        parts.append("En casa ahora: " + ", ".join(home) + ".")
+    sun = next((s for s in states if s.get("entity_id") == "sun.sun"), None)
+    if sun:
+        parts.append("Afuera es de " + ("día" if sun.get("state") == "above_horizon" else "noche") + ".")
+    return " ".join(parts)
+
+
 def execute_actions(actions) -> list[dict]:
     """actions: [{entity_id, command}] with command in on/off/toggle. Calls HA."""
     if not ha_enabled() or not actions:

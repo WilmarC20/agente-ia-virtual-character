@@ -52,6 +52,7 @@ _enable_cuda_dlls()
 
 from tts_engine import shutdown_piper_daemon, synthesize_wav_16k, warm_piper_daemon
 import ha_client as ha
+import agent_state
 
 SERVER_DIR = Path(__file__).resolve().parent
 CAPTURE_DIR = SERVER_DIR / "debug_audio"
@@ -129,6 +130,28 @@ Reglas:
 
 Dispositivos disponibles (nombre (entity_id) = estado):
 {devices}
+"""
+
+
+def time_context() -> str:
+    import datetime
+
+    now = datetime.datetime.now()
+    h = now.hour
+    part = "madrugada" if h < 6 else "mañana" if h < 12 else "tarde" if h < 20 else "noche"
+    dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+    return f"Son las {now:%H:%M} del {dias[now.weekday()]}, es de {part}."
+
+
+# Appended to the system prompt with live context (time, who's home) + memory, and
+# lets the model persist what it learns about the human.
+CONTEXT_PROMPT = """
+
+CONTEXTO ACTUAL (úsalo para sonar consciente del momento, sin repetirlo textual): {context}
+Podés agregar al JSON, SOLO si corresponde, estos campos opcionales:
+- "name": el nombre del humano, si te lo dice o lo deducís.
+- "remember": un dato corto que valga la pena recordar de él (un gusto, un hecho).
+- "mood": tu humor de fondo en una palabra (ej. contento, juguetón, nostálgico).
 """
 
 # PC-side wake phrase (Whisper-based, via /wake-check). Spanish "Hola asistente"
@@ -531,6 +554,18 @@ async def ask_ollama(user_text: str, *, use_history: bool = False) -> dict:
         devices = await asyncio.to_thread(ha.devices_prompt)
         if devices:
             system_content += HOME_PROMPT.format(devices=devices)
+
+    # Situational awareness + memory: time, who's home, what we remember of the human.
+    ctx_parts = [time_context()]
+    if ha.ha_enabled():
+        presence = await asyncio.to_thread(ha.presence_context)
+        if presence:
+            ctx_parts.append(presence)
+    mem = agent_state.context()
+    if mem:
+        ctx_parts.append(mem)
+    system_content += CONTEXT_PROMPT.format(context=" ".join(p for p in ctx_parts if p))
+
     messages = [{"role": "system", "content": system_content}]
     if use_history:
         messages.extend(_conversation_history)
@@ -591,6 +626,15 @@ async def ask_ollama(user_text: str, *, use_history: bool = False) -> dict:
     if isinstance(actions, list) and actions and ha.ha_enabled() and not wants_face_only(user_text):
         result["ha_actions"] = await asyncio.to_thread(ha.execute_actions, actions)
         log.info("HA actions -> %s", result["ha_actions"])
+
+    # Persist anything the character learned about the human (name, facts, mood).
+    if data.get("name") or data.get("remember") or data.get("mood"):
+        await asyncio.to_thread(
+            agent_state.update,
+            name=data.get("name"),
+            remember=data.get("remember"),
+            mood=data.get("mood"),
+        )
 
     if use_history:
         _conversation_history.append({"role": "user", "content": user_text})
