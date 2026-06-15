@@ -124,6 +124,29 @@ public:
 
   static constexpr uint32_t VAD_THRESHOLD = 120;
 
+  // Cheap energy gate for the PC-wake listener: read a short window and return the
+  // raw mic peak. Does NOT drain or allocate, so silence costs only ~ms and keeps
+  // the main loop (touch) responsive. record() is only called once this crosses.
+  uint32_t quickPeak(I2SClass &i2s, uint32_t ms) {
+    const size_t chunk = 256;
+    int16_t raw[chunk * 2];
+    int32_t peak = 0;
+    uint32_t deadline = millis() + ms;
+    i2s.setTimeout(40);
+    while ((int32_t)(deadline - millis()) > 0) {
+      size_t want = kCaptureStereo ? chunk * 4 : chunk * 2;
+      size_t n = readI2sRx(i2s, reinterpret_cast<char *>(raw), want, 40);
+      size_t cnt = n / 2;
+      if (cnt == 0) break;
+      for (size_t i = 0; i < cnt; i++) {
+        int32_t a = abs(raw[i]);
+        if (a > peak) peak = a;
+      }
+    }
+    i2s.setTimeout(1000);
+    return (uint32_t)peak;
+  }
+
 private:
   void writeWavHeader(uint8_t *h, uint32_t pcmBytes) {
     uint32_t sr = AUDIO_SAMPLE_RATE;
