@@ -291,6 +291,11 @@ void loop() {
           Serial.printf("wake-listen ambient peak=%u (umbral %u)\n", peak, WAKE_LISTEN_PEAK);
           lastPeakLog = millis();
         }
+        if (peak >= STARTLE_PEAK && millis() > emotionHoldUntil) {
+          face.setEmotion(Emotion::Surprised);  // glance at a sudden loud sound
+          face.update();
+          emotionHoldUntil = millis() + 900;
+        }
         if (peak >= WAKE_LISTEN_PEAK) {
           Serial.printf("wake-listen: peak=%u -> probing\n", peak);
           Recording probe = recorder.record(i2s, nullptr, 500, true);

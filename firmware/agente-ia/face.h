@@ -58,24 +58,19 @@ public:
     if (_talking) _dirty = true;
   }
 
-  // Call frequently from loop(); handles blinking, talking mouth, redraws.
+  // Call frequently from loop(); drives blinking, wandering gaze, breathing, mouth.
   void update() {
     uint32_t now = millis();
-    if (_talking) _dirty = true;
+    updateGaze(now);
     if (now >= _nextBlinkAt && !_talking) {
       _blinking = true;
       _blinkUntil = now + 120;
       _nextBlinkAt = now + 2500 + random(2500);
-      _dirty = true;
     }
-    if (_blinking && now >= _blinkUntil) {
-      _blinking = false;
-      _dirty = true;
-    }
-    if (_dirty) {
-      draw();
-      _dirty = false;
-    }
+    if (_blinking && now >= _blinkUntil) _blinking = false;
+    // Always redraw: the breathing bob + wandering gaze keep the face alive.
+    draw();
+    _dirty = false;
   }
 
   // VU meter: thin bar along the bottom edge showing mic input level.
@@ -116,6 +111,11 @@ private:
   uint32_t _blinkUntil = 0;
   uint32_t _nextBlinkAt = 3000;
   uint16_t _color = TFT_CYAN;  // active emotion colour, set each draw()
+  // Idle life: eyes wander (gaze) and the whole face "breathes".
+  int _gx = 0, _gy = 0;        // eased gaze offset
+  int _gtx = 0, _gty = 0;      // gaze target
+  uint32_t _nextGazeAt = 1500;
+  int _offX = 0, _offY = 0;    // per-frame face offset (gaze + breathing)
 
   // RGB565 palette for soft tones the TFT_* macros don't cover.
   static constexpr uint16_t COL_SADBLUE = 0x5CFF;
@@ -140,6 +140,21 @@ private:
     }
   }
 
+  // Eyes wander: pick a new gaze target now and then, ease toward it each frame.
+  void updateGaze(uint32_t now) {
+    if (now >= _nextGazeAt) {
+      if (random(100) < 38) {           // often recenter
+        _gtx = 0; _gty = 0;
+      } else {                          // glance somewhere
+        _gtx = random(-9, 10);
+        _gty = random(-5, 6);
+      }
+      _nextGazeAt = now + 700 + random(1800);
+    }
+    if (_gx < _gtx) _gx++; else if (_gx > _gtx) _gx--;
+    if (_gy < _gty) _gy++; else if (_gy > _gty) _gy--;
+  }
+
   int mouthCenterY() const {
     switch (_emotion) {
       case Emotion::Happy:     return 138;
@@ -157,101 +172,101 @@ private:
     int cx = _canvas.width() / 2;
     int eyeY = 80;
     int eyeDX = 60;
+    // Breathing bob (whole face) + wandering gaze (eyes only).
+    int bob = (int)(2.5f * sinf(millis() / 1100.0f));
+    _offX = _gx;          // applied to eyes inside drawEyes()/eye helpers
+    _offY = _gy + bob;
+    int ey = eyeY + bob;  // eye baseline rides the breath; gaze added per-helper
 
     switch (_emotion) {
       case Emotion::Neutral:
         drawEyes(cx, eyeY, eyeDX, 24, 30);
-        if (!_talking) _canvas.fillRoundRect(cx - 30, 145, 60, 8, 4, _color);
+        if (!_talking) _canvas.fillRoundRect(cx - 30, 145 + bob, 60, 8, 4, _color);
         break;
       case Emotion::Happy:
         drawEyes(cx, eyeY, eyeDX, 24, 30);
-        if (!_talking) smileArc(cx, 130, 45, false);
+        if (!_talking) smileArc(cx, 130 + bob, 45, false);
         break;
       case Emotion::Sad:
         drawEyes(cx, eyeY + 8, eyeDX, 22, 24);
-        if (!_talking) smileArc(cx, 175, 40, true);
-        drawTear(cx - eyeDX - 14, eyeY + 18);
-        _dirty = true;
+        if (!_talking) smileArc(cx, 175 + bob, 40, true);
+        drawTear(cx - eyeDX - 14 + _offX, ey + 18);
         break;
       case Emotion::Angry:
         drawEyes(cx, eyeY + 5, eyeDX, 24, 22);
-        drawBrow(cx - eyeDX, eyeY - 30, true);
-        drawBrow(cx + eyeDX, eyeY - 30, false);
-        if (!_talking) _canvas.fillRoundRect(cx - 30, 150, 60, 8, 4, _color);
+        drawBrow(cx - eyeDX + _offX, ey - 30, true);
+        drawBrow(cx + eyeDX + _offX, ey - 30, false);
+        if (!_talking) _canvas.fillRoundRect(cx - 30, 150 + bob, 60, 8, 4, _color);
         break;
       case Emotion::Surprised:
         drawEyes(cx, eyeY, eyeDX, 28, 36);
         if (!_talking) {
-          _canvas.fillEllipse(cx, 145, 18, 24, _color);
-          _canvas.fillEllipse(cx, 145, 12, 17, TFT_BLACK);
+          _canvas.fillEllipse(cx, 145 + bob, 18, 24, _color);
+          _canvas.fillEllipse(cx, 145 + bob, 12, 17, TFT_BLACK);
         }
         break;
       case Emotion::Thinking: {
         drawEyes(cx, eyeY, eyeDX, 22, 26);
-        if (!_talking) _canvas.fillRoundRect(cx - 25, 148, 42, 7, 3, _color);
+        if (!_talking) _canvas.fillRoundRect(cx - 25, 148 + bob, 42, 7, 3, _color);
         int phase = (millis() / 350) % 3;
         for (int i = 0; i <= phase; i++)
           _canvas.fillCircle(cx + 65 + i * 16, 40 - i * 10, 5, _color);
-        _dirty = true;
         break;
       }
       case Emotion::Sleepy:
-        _canvas.fillRoundRect(cx - eyeDX - 22, eyeY, 44, 7, 3, _color);
-        _canvas.fillRoundRect(cx + eyeDX - 22, eyeY, 44, 7, 3, _color);
+        _canvas.fillRoundRect(cx - eyeDX - 22 + _offX, ey, 44, 7, 3, _color);
+        _canvas.fillRoundRect(cx + eyeDX - 22 + _offX, ey, 44, 7, 3, _color);
         _canvas.setTextColor(_color);
         _canvas.setFont(&fonts::DejaVu24);
-        _canvas.setCursor(cx + 85, 30);
+        _canvas.setCursor(cx + 85, 30 + bob);
         _canvas.print("z");
-        _canvas.setCursor(cx + 100, 12);
+        _canvas.setCursor(cx + 100, 12 + bob);
         _canvas.print("Z");
-        if (!_talking) _canvas.fillRoundRect(cx - 22, 150, 44, 7, 3, _color);
+        if (!_talking) _canvas.fillRoundRect(cx - 22, 150 + bob, 44, 7, 3, _color);
         break;
       case Emotion::Love:
-        drawHeart(cx - eyeDX, eyeY, 16, _color);
-        drawHeart(cx + eyeDX, eyeY, 16, _color);
-        if (!_talking) smileArc(cx, 128, 45, false);
+        drawHeart(cx - eyeDX + _offX, ey, 16, _color);
+        drawHeart(cx + eyeDX + _offX, ey, 16, _color);
+        if (!_talking) smileArc(cx, 128 + bob, 45, false);
         drawFloatingHearts(cx);
-        _dirty = true;
         break;
       case Emotion::Excited:
-        drawStar(cx - eyeDX, eyeY, 24, _color);
-        drawStar(cx + eyeDX, eyeY, 24, _color);
-        if (!_talking) _canvas.fillArc(cx, 128, 48, 30, 20, 160, _color);  // big grin
+        drawStar(cx - eyeDX + _offX, ey, 24, _color);
+        drawStar(cx + eyeDX + _offX, ey, 24, _color);
+        if (!_talking) _canvas.fillArc(cx, 128 + bob, 48, 30, 20, 160, _color);  // big grin
         drawSparkles(cx);
-        _dirty = true;
         break;
       case Emotion::Cool:
-        drawSunglasses(cx, eyeY, eyeDX);
-        if (!_talking) {  // smirk
-          _canvas.fillArc(cx + 6, 150, 34, 27, 10, 95, _color);
-        }
+        drawSunglasses(cx + _offX, ey, eyeDX);
+        if (!_talking) _canvas.fillArc(cx + 6, 150 + bob, 34, 27, 10, 95, _color);  // smirk
         break;
       case Emotion::Confused:
-        _canvas.fillEllipse(cx - eyeDX, eyeY + 4, 22, 26, _color);   // normal eye
-        _canvas.fillRoundRect(cx + eyeDX - 22, eyeY - 2, 44, 8, 4, _color);  // squint eye
-        drawBrow(cx + eyeDX, eyeY - 34, false);                      // one raised brow
-        if (!_talking) drawSquiggle(cx - 22, 152, 44);               // puzzled mouth
+        _canvas.fillEllipse(cx - eyeDX + _offX, ey + 4, 22, 26, _color);              // normal eye
+        _canvas.fillRoundRect(cx + eyeDX - 22 + _offX, ey - 2, 44, 8, 4, _color);     // squint eye
+        drawBrow(cx + eyeDX + _offX, ey - 34, false);                                 // raised brow
+        if (!_talking) drawSquiggle(cx - 22, 152 + bob, 44);                          // puzzled mouth
         drawQuestion(cx + 70, 30);
-        _dirty = true;
         break;
       case Emotion::Dizzy: {
-        int wob = (int)(4 * sinf(millis() / 120.0f));               // whole face wobble
-        drawXEye(cx - eyeDX + wob, eyeY, 18);
-        drawXEye(cx + eyeDX + wob, eyeY, 18);
-        if (!_talking) drawSquiggle(cx - 24 + wob, 152, 48);
-        _dirty = true;
+        int wob = (int)(4 * sinf(millis() / 120.0f));
+        drawXEye(cx - eyeDX + wob, ey, 18);
+        drawXEye(cx + eyeDX + wob, ey, 18);
+        if (!_talking) drawSquiggle(cx - 24 + wob, 152 + bob, 48);
         break;
       }
     }
 
     if (_talking) {
-      drawAnimatedMouth(cx, mouthCenterY());
+      drawAnimatedMouth(cx, mouthCenterY() + bob);
     }
 
     _canvas.pushSprite(0, 0);
   }
 
+  // Eyes carry the gaze (_offX/_offY) so they wander while the face breathes.
   void drawEyes(int cx, int y, int dx, int rx, int ry) {
+    cx += _offX;
+    y += _offY;
     if (_blinking) {
       _canvas.fillRoundRect(cx - dx - rx, y - 3, rx * 2, 7, 3, _color);
       _canvas.fillRoundRect(cx + dx - rx, y - 3, rx * 2, 7, 3, _color);

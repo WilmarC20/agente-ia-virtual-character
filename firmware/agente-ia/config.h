@@ -55,6 +55,9 @@
 // the blocking record+HTTP only runs when there's actually sound. Tune from the
 // "wake-listen ambient peak" serial log (set it ~2-3x the idle ambient peak).
 #define WAKE_LISTEN_PEAK    1500
+// A sudden sound at least this loud makes the character glance (surprised) even if
+// it's not the wake phrase — cheap ambient reactivity. Tune above WAKE_LISTEN_PEAK.
+#define STARTLE_PEAK        4500
 // ES8311 places the mono mic on ONE stereo slot (L or R). WakeNet's input_format
 // must point at that slot or it hears silence. Auto-detected at boot by energy.
 // Fallback if probe is inconclusive; "MN" = mic LEFT, "NM" = mic RIGHT.
