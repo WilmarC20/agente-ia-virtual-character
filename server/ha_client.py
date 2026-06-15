@@ -28,7 +28,9 @@ CONTROLLABLE = (
 _COMMAND_SERVICE = {"on": "turn_on", "off": "turn_off", "toggle": "toggle"}
 
 _cache: dict = {"ts": 0.0, "data": None}
-_CACHE_TTL = 5.0
+# Long TTL + a background warmer (in main.py) keep this hot, so /converse never waits
+# on the slow ~4s HA /api/states fetch. Stale-by-a-few-seconds device states are fine.
+_CACHE_TTL = 30.0
 
 
 def ha_enabled() -> bool:
