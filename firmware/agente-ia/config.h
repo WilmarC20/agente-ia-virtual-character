@@ -29,6 +29,7 @@
 // --- Misc ---
 #define PIN_RGB_LED  42  // WS2812, 1 LED
 #define PIN_BAT_ADC  9
+#define ENABLE_RGB_LED 1 // ambient glow on the WS2812 that matches the emotion + breathes
 
 // --- Audio capture ---
 // ES8311: captura I2S estéreo y usa el canal con más señal (L/R).

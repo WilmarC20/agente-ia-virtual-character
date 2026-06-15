@@ -3,8 +3,10 @@
 // Full-color: each emotion has its own colour; some add animated flourishes.
 #pragma once
 
+#include <Arduino.h>
 #include <math.h>
 #include <LovyanGFX.hpp>
+#include "config.h"
 
 enum class Emotion {
   Neutral, Happy, Sad, Angry, Surprised, Thinking, Sleepy,
@@ -71,6 +73,7 @@ public:
     // Always redraw: the breathing bob + wandering gaze keep the face alive.
     draw();
     _dirty = false;
+    updateLed();
   }
 
   // VU meter: thin bar along the bottom edge showing mic input level.
@@ -153,6 +156,25 @@ private:
     }
     if (_gx < _gtx) _gx++; else if (_gx > _gtx) _gx--;
     if (_gy < _gty) _gy++; else if (_gy > _gty) _gy--;
+  }
+
+  // Ambient WS2812 glow: the emotion's colour, pulsing — a gentle breath when idle,
+  // tracking the voice while talking. Uses the core's built-in neopixelWrite (no lib).
+  void updateLed() {
+#if ENABLE_RGB_LED
+    uint16_t c = colorFor(_emotion);
+    uint8_t r = ((c >> 11) & 0x1F) * 255 / 31;
+    uint8_t g = ((c >> 5) & 0x3F) * 255 / 63;
+    uint8_t b = (c & 0x1F) * 255 / 31;
+    float bf;
+    if (_talking) {
+      bf = 0.25f + 0.55f * (_mouthAmp / 100.0f);    // pulses with speech
+    } else {
+      bf = 0.22f + 0.15f * sinf(millis() / 1100.0f); // gentle breathing glow
+    }
+    if (bf < 0.05f) bf = 0.05f;
+    neopixelWrite(PIN_RGB_LED, (uint8_t)(r * bf), (uint8_t)(g * bf), (uint8_t)(b * bf));
+#endif
   }
 
   int mouthCenterY() const {
