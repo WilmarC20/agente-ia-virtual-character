@@ -607,7 +607,15 @@ async def health():
         async with httpx.AsyncClient(timeout=5) as client:
             r = await client.get(f"{OLLAMA_URL}/api/tags")
             r.raise_for_status()
-        return {"status": "ok", "ollama": "ok", "model": OLLAMA_MODEL, "whisper": WHISPER_MODEL}
+        ha_devices = await asyncio.to_thread(ha.controllable_devices) if ha.ha_enabled() else []
+        return {
+            "status": "ok",
+            "ollama": "ok",
+            "model": OLLAMA_MODEL,
+            "whisper": WHISPER_MODEL,
+            "home_assistant": "enabled" if ha.ha_enabled() else "disabled",
+            "ha_devices": len(ha_devices),
+        }
     except Exception as e:
         return JSONResponse(status_code=503, content={"status": "degraded", "ollama": str(e)})
 
