@@ -58,6 +58,9 @@
 // A sudden sound at least this loud makes the character glance (surprised) even if
 // it's not the wake phrase — cheap ambient reactivity. Tune above WAKE_LISTEN_PEAK.
 #define STARTLE_PEAK        4500
+// Proactive idle: after this long in Sleeping with no interaction, the character
+// says something on its own (POST /idle). Re-armed with a random extra each time.
+#define IDLE_REMARK_MS      120000
 // ES8311 places the mono mic on ONE stereo slot (L or R). WakeNet's input_format
 // must point at that slot or it hears silence. Auto-detected at boot by energy.
 // Fallback if probe is inconclusive; "MN" = mic LEFT, "NM" = mic RIGHT.

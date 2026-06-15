@@ -36,6 +36,7 @@ volatile bool wakeDetected = false;
 State state = State::Sleeping;
 uint32_t emotionHoldUntil = 0;
 uint32_t wakeIgnoreUntil = 0;
+uint32_t lastActivityMs = 0;    // last interaction; drives proactive idle remarks
 bool g_wakeNetRunning = false;  // true only while on-device WakeNet is actively feeding
 
 #if WAKE_MODE_PC
@@ -189,6 +190,7 @@ bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,
               bool &sing, bool &doSpeak, String &soundEffect);
 void speak(const String &text, bool sing);
 bool checkWakePhrase(const uint8_t *wav, size_t size);
+void proactiveIdleRemark();
 
 void setup() {
   Serial.begin(115200);
@@ -262,6 +264,7 @@ void setup() {
 #else
   Serial.println("Ready - WakeNet + touch");
 #endif
+  lastActivityMs = millis();
 }
 
 void loop() {
@@ -322,6 +325,12 @@ void loop() {
         state = State::Listening;
       }
 #endif
+
+      // Proactive: after a while idle, say something on its own.
+      if (millis() - lastActivityMs > IDLE_REMARK_MS && millis() >= wakeIgnoreUntil) {
+        proactiveIdleRemark();
+        lastActivityMs = millis() + random(0, 60000);  // vary the next one
+      }
       break;
     }
 
@@ -338,6 +347,7 @@ void loop() {
         face.showText("No escuche nada. " WAKE_HINT);
         face.setEmotion(Emotion::Neutral);
         resumeWakeListener();
+        lastActivityMs = millis();
         state = State::Sleeping;
         break;
       }
@@ -377,6 +387,7 @@ void loop() {
       }
       resumeWakeListener();
       emotionHoldUntil = millis() + 8000;
+      lastActivityMs = millis();
       state = State::Sleeping;
       break;
     }
@@ -565,4 +576,35 @@ bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,
                 doc["heard"].as<const char *>(), emotion.c_str(), doSpeak, sing,
                 soundEffect.c_str(), reply.c_str());
   return true;
+}
+
+// Spontaneous remark: ask the server for an in-character line and say it unprompted.
+void proactiveIdleRemark() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  HTTPClient http;
+  http.setTimeout(60000);
+  if (!http.begin(String(BRAIN_SERVER_URL) + "/idle")) return;
+  http.addHeader("Content-Type", "application/json");
+  int code = http.POST("{}");
+  if (code != 200) {
+    http.end();
+    return;
+  }
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, http.getString());
+  http.end();
+  if (err) return;
+
+  String emotion = doc["emotion"].as<String>();
+  String reply = doc["reply"].as<String>();
+  bool sing = doc["sing"] | false;
+  bool doSpeak = doc["speak"] | true;
+  if (reply.length() == 0) return;
+
+  Serial.printf("idle remark [%s]: %s\n", emotion.c_str(), reply.c_str());
+  face.setEmotion(emotionFromString(emotion));
+  face.showText(reply);
+  face.update();
+  if (doSpeak) speak(reply, sing);
+  emotionHoldUntil = millis() + 8000;
 }
