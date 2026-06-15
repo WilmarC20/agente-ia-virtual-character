@@ -48,9 +48,13 @@
 #define ENABLE_WAKEWORD     1
 // Wake path selector: 1 = PC-side "Hola asistente" (records a clip, server
 // /wake-check transcribes it with Whisper). 0 = on-device WakeNet "Hi ESP".
-// Touch-to-wake works in BOTH modes. The probe reuses record()'s tuned VAD to
-// gate out silence, so no extra threshold is needed here.
+// Touch-to-wake works in BOTH modes.
 #define WAKE_MODE_PC        1
+// PC-wake energy gate: only record+POST a /wake-check clip when the raw mic peak
+// crosses this. Silence stays cheap (~80 ms) so the touch poll stays responsive —
+// the blocking record+HTTP only runs when there's actually sound. Tune from the
+// "wake-listen ambient peak" serial log (set it ~2-3x the idle ambient peak).
+#define WAKE_LISTEN_PEAK    1500
 // ES8311 places the mono mic on ONE stereo slot (L or R). WakeNet's input_format
 // must point at that slot or it hears silence. Auto-detected at boot by energy.
 // Fallback if probe is inconclusive; "MN" = mic LEFT, "NM" = mic RIGHT.

@@ -281,19 +281,28 @@ void loop() {
       }
 
 #if WAKE_MODE_PC
-      // PC-side wake: skip during the post-TTS echo cooldown. record() (quiet, short
-      // no-voice timeout) returns null fast when idle; on speech, ask the server if it
-      // was the wake phrase ("Hola asistente").
+      // PC-side wake WITHOUT blocking touch: a cheap ~80 ms energy check runs each
+      // loop; only when the mic peak crosses WAKE_LISTEN_PEAK do we do the expensive
+      // record + /wake-check. So while it's quiet the loop stays free for touch.
       if (millis() >= wakeIgnoreUntil) {
-        Recording probe = recorder.record(i2s, nullptr, 700, true);
-        if (probe.wav) {
-          bool wake = checkWakePhrase(probe.wav, probe.size);
-          free(probe.wav);
-          if (wake) {
-            Serial.println("PC wake detected (Hola asistente)");
-            face.clearMicLevel();
-            state = State::Listening;
-            break;
+        static uint32_t lastPeakLog = 0;
+        uint32_t peak = recorder.quickPeak(i2s, 80);
+        if (millis() - lastPeakLog > 2000) {
+          Serial.printf("wake-listen ambient peak=%u (umbral %u)\n", peak, WAKE_LISTEN_PEAK);
+          lastPeakLog = millis();
+        }
+        if (peak >= WAKE_LISTEN_PEAK) {
+          Serial.printf("wake-listen: peak=%u -> probing\n", peak);
+          Recording probe = recorder.record(i2s, nullptr, 500, true);
+          if (probe.wav) {
+            bool wake = checkWakePhrase(probe.wav, probe.size);
+            free(probe.wav);
+            if (wake) {
+              Serial.println("PC wake detected (Hola asistente)");
+              face.clearMicLevel();
+              state = State::Listening;
+              break;
+            }
           }
         }
       }
