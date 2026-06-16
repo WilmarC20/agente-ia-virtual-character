@@ -59,6 +59,12 @@
 // A sudden sound at least this loud makes the character glance (surprised) even if
 // it's not the wake phrase — cheap ambient reactivity. Tune above WAKE_LISTEN_PEAK.
 #define STARTLE_PEAK        4500
+// How often (ms) the PC-wake energy gate runs. Between probes the loop is free, so
+// touch stays responsive. The gate itself is ~60 ms; the rest of the interval idles.
+#define WAKE_PROBE_INTERVAL_MS  200
+// /wake-check HTTP cap. A short clip transcribes fast on GPU, so keep this low: a
+// server stall must never freeze the touch loop for long.
+#define WAKE_CHECK_TIMEOUT_MS   5000
 // Proactive idle: after this long in Sleeping with no interaction, the character
 // says something on its own (POST /idle). Re-armed with a random extra each time.
 #define IDLE_REMARK_MS      120000

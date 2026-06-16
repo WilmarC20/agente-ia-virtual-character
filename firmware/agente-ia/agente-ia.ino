@@ -38,6 +38,7 @@ uint32_t emotionHoldUntil = 0;
 uint32_t wakeIgnoreUntil = 0;
 uint32_t lastActivityMs = 0;    // last interaction; drives proactive idle remarks
 bool g_wakeNetRunning = false;  // true only while on-device WakeNet is actively feeding
+bool g_voiceWakeEnabled = true; // PC-side "Hola asistente" listener; toggled from Settings
 
 #if WAKE_MODE_PC
 #define WAKE_HINT "Di \"Hola asistente\" o toca"
@@ -284,12 +285,18 @@ void loop() {
       }
 
 #if WAKE_MODE_PC
-      // PC-side wake WITHOUT blocking touch: a cheap ~80 ms energy check runs each
-      // loop; only when the mic peak crosses WAKE_LISTEN_PEAK do we do the expensive
-      // record + /wake-check. So while it's quiet the loop stays free for touch.
-      if (millis() >= wakeIgnoreUntil) {
+      // PC-side wake WITHOUT starving touch. The energy gate runs only every
+      // WAKE_PROBE_INTERVAL_MS (the loop is otherwise free for the 50 ms touch poll),
+      // and the expensive record + /wake-check only fires when the mic peak crosses
+      // WAKE_LISTEN_PEAK. Touch beats the probe at every step: it aborts the record
+      // mid-chunk and is rechecked before the HTTP. Turning g_voiceWakeEnabled off
+      // (Settings) skips all of this, so touch is then instant.
+      static uint32_t lastWakeProbe = 0;
+      if (g_voiceWakeEnabled && millis() >= wakeIgnoreUntil &&
+          millis() - lastWakeProbe >= WAKE_PROBE_INTERVAL_MS) {
+        lastWakeProbe = millis();
         static uint32_t lastPeakLog = 0;
-        uint32_t peak = recorder.quickPeak(i2s, 80);
+        uint32_t peak = recorder.quickPeak(i2s, 60);
         if (millis() - lastPeakLog > 2000) {
           Serial.printf("wake-listen ambient peak=%u (umbral %u)\n", peak, WAKE_LISTEN_PEAK);
           lastPeakLog = millis();
@@ -299,9 +306,15 @@ void loop() {
           face.update();
           emotionHoldUntil = millis() + 900;
         }
-        if (peak >= WAKE_LISTEN_PEAK) {
+        if (peak >= WAKE_LISTEN_PEAK && !touchPressed()) {
           Serial.printf("wake-listen: peak=%u -> probing\n", peak);
-          Recording probe = recorder.record(i2s, nullptr, 500, true);
+          Recording probe = recorder.record(i2s, nullptr, 500, true, touchPressed);
+          if (touchPressed()) {           // touched during/after the probe -> wake by touch
+            if (probe.wav) free(probe.wav);
+            face.clearMicLevel();
+            state = State::Listening;
+            break;
+          }
           if (probe.wav) {
             bool wake = checkWakePhrase(probe.wav, probe.size);
             free(probe.wav);
@@ -530,7 +543,7 @@ void speak(const String &text, bool sing) {
 // and returns whether it contains the wake phrase ("Hola asistente").
 bool checkWakePhrase(const uint8_t *wav, size_t size) {
   HTTPClient http;
-  http.setTimeout(15000);
+  http.setTimeout(WAKE_CHECK_TIMEOUT_MS);
   if (!http.begin(String(BRAIN_SERVER_URL) + "/wake-check")) return false;
   http.addHeader("Content-Type", "audio/wav");
   int code = http.POST((uint8_t *)wav, size);
