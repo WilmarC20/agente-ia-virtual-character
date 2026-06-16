@@ -22,9 +22,12 @@ public:
 
   // noVoiceTimeoutMs: how long to wait for speech before giving up (short for the
   // PC-wake probe so the loop stays responsive). quiet: suppress serial logging
-  // (the wake probe runs repeatedly, so it shouldn't spam the log).
+  // (the wake probe runs repeatedly, so it shouldn't spam the log). abortCheck: polled
+  // each chunk — return true to bail immediately (e.g. the user touched the screen, so
+  // touch must win over a speculative wake probe).
   Recording record(I2SClass &i2s, MicLevelCallback onLevel = nullptr,
-                   uint32_t noVoiceTimeoutMs = RECORD_NO_VOICE_MS, bool quiet = false) {
+                   uint32_t noVoiceTimeoutMs = RECORD_NO_VOICE_MS, bool quiet = false,
+                   bool (*abortCheck)() = nullptr) {
     if (!quiet) Serial.println("record: start");
     prepareCapture(i2s);
 
@@ -47,6 +50,11 @@ public:
     i2s.setTimeout(100);
 
     while (total + chunkSamples <= maxSamples && (int32_t)(deadlineMs - millis()) > 0) {
+      if (abortCheck && abortCheck()) {   // touch wins over a speculative wake probe
+        i2s.setTimeout(1000);
+        free(buf);
+        return rec;                       // empty -> caller falls back to touch
+      }
       size_t rawBytes = kCaptureStereo ? chunkSamples * 4 : chunkSamples * 2;
       size_t nbytes = readI2sRx(i2s, reinterpret_cast<char *>(raw), rawBytes, 100);
       if (nbytes == 0) {
