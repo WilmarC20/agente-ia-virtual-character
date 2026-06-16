@@ -20,6 +20,8 @@
 #include "display_setup.h"
 #include "face.h"
 #include "es8311.h"
+#include "touch.h"
+#include "settings.h"
 #include "audio_recorder.h"
 #include "audio_output.h"
 #include "sound_fx.h"
@@ -30,6 +32,9 @@ Face face(gfx);
 ES8311 codec;
 I2SClass i2s;
 AudioRecorder recorder;
+AppSettings g_settings;
+SettingsScreen g_settingsScreen;
+uint8_t g_wakePhraseIdx = 0;    // index into WAKE_PRESET_LABELS, sent to /wake-check
 
 enum class State { Sleeping, Listening, Thinking };
 volatile bool wakeDetected = false;
@@ -192,6 +197,7 @@ bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,
 void speak(const String &text, bool sing);
 bool checkWakePhrase(const uint8_t *wav, size_t size);
 void proactiveIdleRemark();
+void openSettings();
 
 void setup() {
   Serial.begin(115200);
@@ -237,6 +243,15 @@ void setup() {
   }
   codec.configureClock(AUDIO_MCLK_HZ, AUDIO_SAMPLE_RATE);
 
+  // User preferences (volume / voice-wake / wake phrase) persisted in NVS.
+  loadSettings(g_settings);
+  codec.setPlaybackVolumePercent(g_settings.volume);
+  g_voiceWakeEnabled = g_settings.voiceWake;
+  g_wakePhraseIdx = g_settings.phraseIdx;
+  face.setShowGear(true);
+  Serial.printf("Settings: vol=%u%% voiceWake=%d phrase='%s'\n",
+                g_settings.volume, g_settings.voiceWake, WAKE_PRESET_LABELS[g_wakePhraseIdx]);
+
   if (initSoundFx()) {
     face.showText("Sonidos OK");
     delay(400);
@@ -277,9 +292,14 @@ void loop() {
 
       if (millis() - lastTouchPoll > 50) {
         lastTouchPoll = millis();
-        if (touchPressed()) {
-          face.clearMicLevel();
-          state = State::Listening;
+        int tx, ty;
+        if (touchReadPoint(gfx.width(), gfx.height(), tx, ty)) {
+          if (Face::gearHit(tx, ty)) {
+            openSettings();           // tap the gear -> modal settings menu
+          } else {
+            face.clearMicLevel();
+            state = State::Listening; // tap anywhere else -> wake and listen
+          }
           break;
         }
       }
@@ -546,6 +566,7 @@ bool checkWakePhrase(const uint8_t *wav, size_t size) {
   http.setTimeout(WAKE_CHECK_TIMEOUT_MS);
   if (!http.begin(String(BRAIN_SERVER_URL) + "/wake-check")) return false;
   http.addHeader("Content-Type", "audio/wav");
+  http.addHeader("X-Wake-Phrase", WAKE_PRESET_LABELS[g_wakePhraseIdx]);  // user's chosen phrase
   int code = http.POST((uint8_t *)wav, size);
   if (code != 200) {
     http.end();
@@ -620,4 +641,24 @@ void proactiveIdleRemark() {
   face.update();
   if (doSpeak) speak(reply, sing);
   emotionHoldUntil = millis() + 8000;
+}
+
+// Modal settings menu (opened from the gear). Blocks until the user taps "Guardar",
+// then applies and persists the choices and restores the idle screen.
+void openSettings() {
+  Serial.println("Settings opened");
+  g_settingsScreen.run(gfx, g_settings, codec);
+
+  g_voiceWakeEnabled = g_settings.voiceWake;
+  g_wakePhraseIdx = g_settings.phraseIdx;
+  codec.setPlaybackVolumePercent(g_settings.volume);
+  Serial.printf("Settings saved: vol=%u%% voiceWake=%d phrase='%s'\n",
+                g_settings.volume, g_settings.voiceWake, WAKE_PRESET_LABELS[g_wakePhraseIdx]);
+
+  gfx.fillScreen(TFT_BLACK);     // clear the menu before the face repaints
+  face.redraw();
+  face.update();
+  face.showText(WAKE_HINT);
+  lastActivityMs = millis();
+  wakeIgnoreUntil = millis() + 500;   // brief grace so we don't probe on the way out
 }
