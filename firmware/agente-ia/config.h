@@ -16,6 +16,13 @@
 #define PIN_I2C_SCL  15
 #define PIN_TOUCH_INT 17
 #define FT6336_I2C_ADDR 0x38
+// FT6336 -> screen mapping for rotation 1 (landscape 320x240). The panel is native
+// 240x320 portrait, so the raw point is swapped/inverted. If taps land in the wrong
+// place, flip these; set TOUCH_DEBUG 1 to print raw+mapped coords and calibrate.
+#define TOUCH_SWAP_XY   1
+#define TOUCH_INVERT_X  0
+#define TOUCH_INVERT_Y  1
+#define TOUCH_DEBUG     0
 
 // --- Audio (ES8311 codec: I2C control + I2S data) ---
 #define ES8311_I2C_ADDR 0x18

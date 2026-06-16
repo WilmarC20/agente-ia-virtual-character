@@ -175,6 +175,29 @@ WAKE_PHRASES = tuple(
     if p.strip()
 )
 
+# Per-preset matching for the device's CONFIGURABLE wake word. The firmware sends the
+# chosen label in the X-Wake-Phrase header; we match the transcription against that
+# preset's spellings + fuzzy cores. Keys MUST match WAKE_PRESET_LABELS in the firmware
+# (settings.h). Unknown/empty header falls back to the default WAKE_PHRASES behaviour.
+WAKE_PRESETS = {
+    "hola asistente": {
+        "spellings": ("hola asistente", "ola asistente", "hola asistent", "ola asistent"),
+        "cores": ("asistente", "asistent", "acistente", "sistente", "asustente"),
+    },
+    "che robot": {
+        "spellings": ("che robot", "che robó", "cherobot", "che robots"),
+        "cores": ("robot", "robó", "rrobot", "chrobot"),
+    },
+    "ey bender": {
+        "spellings": ("ey bender", "hey bender", "ei bender", "ey vender"),
+        "cores": ("bender", "vender", "bénder", "pender"),
+    },
+    "hola bender": {
+        "spellings": ("hola bender", "ola bender", "hola vender"),
+        "cores": ("bender", "vender", "bénder"),
+    },
+}
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("brain")
 
@@ -489,13 +512,25 @@ def fix_transcription(text: str) -> str:
     return text
 
 
-def is_wake_phrase(text: str) -> bool:
+def is_wake_phrase(text: str, phrase: str = "") -> bool:
     norm = normalize_heard(text)
     if not norm:
         return False
     compact = norm.replace(" ", "")
-    for phrase in WAKE_PHRASES:
-        if phrase.replace(" ", "") in compact or phrase in norm:
+
+    preset = WAKE_PRESETS.get(phrase.strip().lower())
+    if preset:
+        for sp in preset["spellings"]:
+            if sp.replace(" ", "") in compact or sp in norm:
+                return True
+        for core in preset["cores"]:
+            if core in compact:
+                return True
+        return False
+
+    # No/unknown preset -> default "Hola asistente" matching.
+    for p in WAKE_PHRASES:
+        if p.replace(" ", "") in compact or p in norm:
             return True
     # Fuzzy: any "asistente"-like transcription counts as the wake phrase.
     for core in ("asistente", "asistent", "acistente", "sistente", "asustente"):
@@ -723,14 +758,15 @@ async def wake_check(request: Request):
     wav_bytes = await request.body()
     if len(wav_bytes) < 400:
         return {"wake": False, "heard": ""}
+    phrase = request.headers.get("X-Wake-Phrase", "")
     text = await transcribe_wav(
         wav_bytes,
         language="es",
-        initial_prompt="Hola asistente.",
+        initial_prompt=(phrase.capitalize() + ".") if phrase else "Hola asistente.",
         beam_size=1,
     )
-    wake = is_wake_phrase(text)
-    log.info("wake-check heard='%s' wake=%s", text, wake)
+    wake = is_wake_phrase(text, phrase)
+    log.info("wake-check heard='%s' phrase='%s' wake=%s", text, phrase, wake)
     return {"wake": wake, "heard": text}
 
 

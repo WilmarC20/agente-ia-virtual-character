@@ -47,6 +47,13 @@ public:
 
   void setEmotion(Emotion e) { if (e != _emotion) { _emotion = e; _dirty = true; } }
 
+  // Show the settings gear in the top-right corner (tappable while idle).
+  void setShowGear(bool v) { if (v != _showGear) { _showGear = v; _dirty = true; } }
+  // Force a full repaint, e.g. after the settings menu painted over the screen.
+  void redraw() { _dirty = true; }
+  // Screen-space hit test for the gear (sprite is pushed at 0,0).
+  static bool gearHit(int sx, int sy) { return sx >= 282 && sy <= 40; }
+
   void setTalking(bool talking) {
     if (talking != _talking) {
       _talking = talking;
@@ -98,7 +105,7 @@ private:
   lgfx::LGFX_Device &_gfx;
   lgfx::LGFX_Sprite _canvas;
   Emotion _emotion = Emotion::Sleepy;
-  bool _dirty = true, _blinking = false, _talking = false;
+  bool _dirty = true, _blinking = false, _talking = false, _showGear = false;
   uint8_t _mouthAmp = 0;
   uint32_t _blinkUntil = 0, _nextBlinkAt = 3000;
 
@@ -108,6 +115,7 @@ private:
   // Colour accents — the face stays line-art, colour only marks an emotion at a glance.
   static constexpr uint16_t RED = 0xF800;  // love: heart eyes
   static constexpr uint16_t BLUE = 0x041F; // sad: tear
+  static constexpr uint16_t GEAR = 0x5C9F; // settings gear icon (blue, "tap me")
   static constexpr int CXC = 160;
 
   // Black capsule visor with concentric rim rings (white gaps = background).
@@ -291,6 +299,16 @@ private:
     _canvas.drawCircle(CXC, 152, 14, INK);
   }
 
+  // Settings gear in the top-right corner (8 teeth + hub + hole).
+  void drawGear() {
+    const int cx = 303, cy = 16, r = 9;
+    static const int8_t dx[8] = {11, 8, 0, -8, -11, -8, 0, 8};
+    static const int8_t dy[8] = {0, 8, 11, 8, 0, -8, -11, -8};
+    for (int i = 0; i < 8; i++) _canvas.fillRect(cx + dx[i] - 3, cy + dy[i] - 3, 6, 6, GEAR);
+    _canvas.fillCircle(cx, cy, r, GEAR);
+    _canvas.fillCircle(cx, cy, 4, BG);   // hub hole
+  }
+
   void draw() {
     _canvas.fillSprite(BG);
     drawCapsule(22, 22, 276, 92);          // SURPRISED now uses the same capsule visor
@@ -299,6 +317,7 @@ private:
     if (_emotion == Emotion::Surprised) drawOMouth();
     else drawTeethMouth();
     drawAccents();
+    if (_showGear) drawGear();
     _canvas.pushSprite(0, 0);
   }
 };
