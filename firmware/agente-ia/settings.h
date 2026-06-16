@@ -49,6 +49,7 @@ public:
   // Mutates s and applies volume live; persists on exit. Returns when closed.
   void run(lgfx::LGFX_Device &gfx, AppSettings &s, ES8311 &codec) {
     const int W = gfx.width(), H = gfx.height();
+    touchWaitRelease(W, H);   // if we got here via long-press, wait for that finger to lift
     bool dirty = true;
     uint32_t lastAct = 0;
 

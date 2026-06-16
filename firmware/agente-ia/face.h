@@ -45,7 +45,17 @@ public:
     _gfx.fillScreen(TFT_BLACK);   // text strip below the face
   }
 
-  void setEmotion(Emotion e) { if (e != _emotion) { _emotion = e; _dirty = true; } }
+  void setEmotion(Emotion e) {
+    if (e != _emotion) {
+      if (_emotion == Emotion::Thinking) { _gazeX = 0; _nextGazeAt = millis() + 1500; }
+      _emotion = e;
+      _dirty = true;
+    }
+  }
+
+  // Idle "bored" mood: half-mast lids and slower saccades. Driven by the .ino from the
+  // time since the last interaction — kept here so the .ino stays out of rendering.
+  void setBored(bool b) { if (b != _bored) { _bored = b; _dirty = true; } }
 
   // Show the settings gear in the top-right corner (tappable while idle).
   void setShowGear(bool v) { if (v != _showGear) { _showGear = v; _dirty = true; } }
@@ -57,7 +67,8 @@ public:
   void setTalking(bool talking) {
     if (talking != _talking) {
       _talking = talking;
-      if (!talking) _mouthAmp = 0;
+      if (talking) _gazeX = 0;                       // face forward while speaking
+      else { _mouthAmp = 0; _nextGazeAt = millis() + 1200; }
       _dirty = true;
     }
   }
@@ -68,15 +79,36 @@ public:
     if (_talking) _dirty = true;
   }
 
+  // Drives all idle micro-movement. No delay() — everything is millis()-gated and only
+  // flips _dirty when something actually changes, so a still idle face costs ~0 CPU and
+  // the I2S/codec audio loop is never blocked.
   void update() {
     uint32_t now = millis();
-    if (now >= _nextBlinkAt && !_talking) {
+
+    // Mechanical blink: independent, every 8-12 s, 120 ms, lids cover 100%. Not while talking.
+    if (!_talking && now >= _nextBlinkAt) {
       _blinking = true;
-      _blinkUntil = now + 110;
-      _nextBlinkAt = now + 3000 + random(3000);
+      _blinkUntil = now + 120;
+      _nextBlinkAt = now + 8000 + random(4000);
       _dirty = true;
     }
     if (_blinking && now >= _blinkUntil) { _blinking = false; _dirty = true; }
+
+    // Eye movement when not talking and not mid-blink.
+    if (!_talking && !_blinking) {
+      if (_emotion == Emotion::Thinking) {
+        // Concentrated "searching": dart left<->right quickly (see note: askBrain blocks).
+        int g = ((now / 320) % 2) ? GAZE_OFF : -GAZE_OFF;
+        if (g != _gazeX) { _gazeX = g; _dirty = true; }
+      } else if (now >= _nextGazeAt) {
+        // Random saccade: centre / left / right. Slower cadence when bored.
+        static const int8_t look[3] = {0, -GAZE_OFF, GAZE_OFF};
+        int g = look[random(3)];
+        if (g != _gazeX) { _gazeX = g; _dirty = true; }
+        _nextGazeAt = now + (_bored ? 5000 : 3000) + random(_bored ? 4000 : 3000);
+      }
+    }
+
     if (_talking) _dirty = true;
     if (_dirty) { draw(); _dirty = false; }
   }
@@ -105,9 +137,11 @@ private:
   lgfx::LGFX_Device &_gfx;
   lgfx::LGFX_Sprite _canvas;
   Emotion _emotion = Emotion::Sleepy;
-  bool _dirty = true, _blinking = false, _talking = false, _showGear = false;
+  bool _dirty = true, _blinking = false, _talking = false, _showGear = false, _bored = false;
   uint8_t _mouthAmp = 0;
-  uint32_t _blinkUntil = 0, _nextBlinkAt = 3000;
+  uint32_t _blinkUntil = 0, _nextBlinkAt = 5000;
+  int _gazeX = 0;                 // lateral eye offset (saccade), applied to eyes + pupils
+  uint32_t _nextGazeAt = 4000;    // when the next idle saccade fires
 
   static constexpr int FACE_H = 200;
   static constexpr uint16_t BG = 0xFFFF;   // white background
@@ -117,6 +151,7 @@ private:
   static constexpr uint16_t BLUE = 0x041F; // sad: tear
   static constexpr uint16_t GEAR = 0x5C9F; // settings gear icon (blue, "tap me")
   static constexpr int CXC = 160;
+  static constexpr int GAZE_OFF = 10;      // how far the eyes dart left/right (px)
 
   // Black capsule visor with concentric rim rings (white gaps = background).
   void drawCapsule(int x, int y, int w, int h) {
@@ -147,10 +182,14 @@ private:
   // visible white band so the black square never spills into the visor. Distinct shape
   // for each of the 12 emotions; colour only on love (heart) and is added in drawAccents.
   void drawEye(int cx, int cy, bool isLeft) {
+    cx += _gazeX;                        // lateral gaze (saccade): eyes AND pupils move
     const int ew = 110, eh = 68;
     const int x = cx - ew / 2, y = cy - eh / 2;
 
-    if (_blinking) { _canvas.fillRoundRect(x, cy - 5, ew, 10, 5, BG); return; }
+    if (_blinking) {                     // mechanical blink: lid covers 100% of the eye
+      _canvas.fillRect(x + 6, cy - 1, ew - 12, 3, 0x528A);  // thin closed-lid crease
+      return;
+    }
 
     if (_emotion == Emotion::Cool && !isLeft) {     // wink: shallow curved white line
       for (int i = -1; i <= 1; i++) {
@@ -206,14 +245,20 @@ private:
         pupilY = y + lid + (eh - lid) / 2;
         break;
       }
-      case Emotion::Thinking:              // glance up-and-away (pondering)
-        pupilY = cy - 9;
-        pupilX = cx + 12;
+      case Emotion::Thinking:              // concentrated: slight squint + eyes up a touch
+        _canvas.fillRect(x, y, ew, (int)(eh * 0.20f), INK);
+        pupilY = cy - 3;                   // (horizontal "searching" comes from the gaze dart)
         break;
       case Emotion::Dizzy:                 // X eyes, no square pupil
         drawXPupil(cx, cy);
         return;
       default: break;                      // Neutral, Surprised, Cool(open eye)
+    }
+
+    if (_bored) {                          // tired half-mast lids over the resting face
+      int lid = (int)(eh * 0.45f);
+      _canvas.fillRect(x, y, ew, lid, INK);
+      if (pupilY < y + lid + 8) pupilY = y + lid + 8;
     }
 
     if (_emotion == Emotion::Love)         drawHeartPupil(pupilX, pupilY);

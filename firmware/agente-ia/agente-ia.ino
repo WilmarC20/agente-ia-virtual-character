@@ -288,25 +288,44 @@ void loop() {
 
   switch (state) {
     case State::Sleeping: {
-      static uint32_t lastTouchPoll = 0;
+      // Bored mood after 20 s idle (half-lids + slower saccades). Signed cast guards
+      // against lastActivityMs being parked in the future by the idle-remark logic.
+      face.setBored((int32_t)(millis() - lastActivityMs) > 20000);
 
-      if (millis() - lastTouchPoll > 50) {
-        lastTouchPoll = millis();
-        int tx, ty;
-        if (touchReadPoint(gfx.width(), gfx.height(), tx, ty)) {
-          if (Face::gearHit(tx, ty)) {
-            openSettings();           // tap the gear -> modal settings menu
-          } else {
-            face.clearMicLevel();
-            state = State::Listening; // tap anywhere else -> wake and listen
+      // Touch: a SHORT tap on the gear opens Settings, a short tap anywhere else wakes.
+      // A LONG press (>700 ms) ANYWHERE also opens Settings — a mapping-independent
+      // fallback so config is reachable even before the touch X/Y is calibrated. The
+      // "tap screen=(x,y)" log lets us calibrate the gear hit-zone from the serial.
+      static bool pressing = false, longHandled = false;
+      static uint32_t pressStart = 0;
+      static int pressX = 0, pressY = 0;
+      int tx, ty;
+      bool down = touchReadPoint(gfx.width(), gfx.height(), tx, ty);
+      if (down || pressing) {
+        if (down && !pressing) {
+          pressing = true; longHandled = false; pressStart = millis();
+          pressX = tx; pressY = ty;
+          Serial.printf("tap screen=(%d,%d) gearHit=%d\n", tx, ty, Face::gearHit(tx, ty));
+        } else if (down && !longHandled && millis() - pressStart > 700) {
+          longHandled = true;
+          openSettings();                  // long-press anywhere -> settings
+        } else if (!down) {                // finger released
+          pressing = false;
+          if (!longHandled) {              // short tap
+            if (Face::gearHit(pressX, pressY)) {
+              openSettings();
+            } else {
+              face.clearMicLevel();
+              state = State::Listening;
+            }
           }
-          break;
         }
+        break;   // a finger is interacting: skip the voice wake gate this iteration
       }
 
 #if WAKE_MODE_PC
       // PC-side wake WITHOUT starving touch. The energy gate runs only every
-      // WAKE_PROBE_INTERVAL_MS (the loop is otherwise free for the 50 ms touch poll),
+      // WAKE_PROBE_INTERVAL_MS (the loop is otherwise free for the per-loop touch poll),
       // and the expensive record + /wake-check only fires when the mic peak crosses
       // WAKE_LISTEN_PEAK. Touch beats the probe at every step: it aborts the record
       // mid-chunk and is rechecked before the HTTP. Turning g_voiceWakeEnabled off
