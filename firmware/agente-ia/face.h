@@ -107,8 +107,6 @@ private:
   static constexpr uint16_t INK = 0x0000;  // black line-art (visor body, pupils, grid)
   static constexpr int CXC = 160;
 
-  bool roundLayout() const { return _emotion == Emotion::Surprised || _emotion == Emotion::Dizzy; }
-
   // Black capsule visor with concentric rim rings (white gaps = background).
   void drawCapsule(int x, int y, int w, int h) {
     int r = h / 2;
@@ -205,26 +203,19 @@ private:
     }
   }
 
+  // Small open "O" mouth (line-art) — the surprised cue, same style as the rest.
+  void drawOMouth() {
+    _canvas.drawCircle(CXC, 152, 15, INK);
+    _canvas.drawCircle(CXC, 152, 14, INK);
+  }
+
   void draw() {
     _canvas.fillSprite(BG);
-
-    if (roundLayout()) {                   // SURPRISED: round visor + round eyes + "O"
-      _canvas.fillCircle(CXC, 70, 56, INK);
-      _canvas.drawCircle(CXC, 70, 62, INK);
-      _canvas.fillCircle(CXC - 30, 66, 26, BG);
-      _canvas.fillCircle(CXC + 30, 66, 26, BG);
-      _canvas.fillRect(CXC - 30 - 8, 66 - 8, 16, 16, INK);
-      _canvas.fillRect(CXC + 30 - 8, 66 - 8, 16, 16, INK);
-      _canvas.drawCircle(CXC, 150, 15, INK);
-      _canvas.drawCircle(CXC, 150, 14, INK);
-      _canvas.pushSprite(0, 0);
-      return;
-    }
-
-    drawCapsule(22, 22, 276, 92);
+    drawCapsule(22, 22, 276, 92);          // SURPRISED now uses the same capsule visor
     drawEye(CXC - 62, 66, true);
     drawEye(CXC + 62, 66, false);
-    drawTeethMouth();
+    if (_emotion == Emotion::Surprised) drawOMouth();
+    else drawTeethMouth();
     _canvas.pushSprite(0, 0);
   }
 };
