@@ -3,7 +3,7 @@
 // concentric black rim rings; the eyes are WHITE holes (the background showing
 // through) with black square pupils, reshaped per emotion. The mouth is a black
 // outlined teeth grid (white teeth = background) that bows/pinches per emotion
-// and ripples with a sine wave while speaking. SURPRISED uses a round visor + "O".
+// and ripples with a sine wave while speaking. SURPRISED keeps the capsule visor + "O".
 //
 // Double-buffered in a PSRAM sprite (no flicker), repainted only on change.
 // Landscape (rotation 1) chosen on purpose: the wide visor needs the width.
@@ -132,32 +132,45 @@ private:
     }
 
     _canvas.fillRoundRect(x, y, ew, eh, 16, BG);
-    _canvas.fillRect(cx - 9, cy - 9, 18, 18, INK);  // fixed pupil, geometric centre
+
+    // The lid carve reshapes the white; the pupil then follows the visible white
+    // band so the black square always sits INSIDE the eye and never spills.
+    const int cut = (int)(eh * 0.42f);   // how deep the angled lid bites in
+    int pupilY = cy;
 
     switch (_emotion) {
-      case Emotion::Angry:                 // top slopes DOWN toward the centre
+      case Emotion::Angry:                 // inner-top lid angled down (brow furrow)
       case Emotion::Confused: {
-        int ay = y + (int)(eh * 0.5f);
-        if (isLeft) _canvas.fillTriangle(x - 2, y - 2, x + ew + 2, y - 2, x + ew + 2, ay, INK);
-        else        _canvas.fillTriangle(x + ew + 2, y - 2, x - 2, y - 2, x - 2, ay, INK);
+        int inY = y + cut;                 // inner-top corner sits low; outer stays high
+        if (isLeft) _canvas.fillTriangle(x, y - 2, x + ew + 2, y - 2, x + ew + 2, inY, INK);
+        else        _canvas.fillTriangle(x + ew, y - 2, x - 2, y - 2, x - 2, inY, INK);
+        pupilY = cy + cut / 4;             // drop below the slope, stay on white
         break;
       }
-      case Emotion::Sad: {                 // bottom slopes UP toward the centre (droop)
-        int sy = y + (int)(eh * 0.5f);
-        if (isLeft) _canvas.fillTriangle(x + ew + 2, y + eh + 2, x - 2, y + eh + 2, x + ew + 2, sy, INK);
-        else        _canvas.fillTriangle(x - 2, y + eh + 2, x + ew + 2, y + eh + 2, x - 2, sy, INK);
+      case Emotion::Sad: {                 // inner-bottom lid angled up (droop)
+        int inY = y + eh - cut;            // inner-bottom raised; outer stays low
+        if (isLeft) _canvas.fillTriangle(x, y + eh + 2, x + ew + 2, y + eh + 2, x + ew + 2, inY, INK);
+        else        _canvas.fillTriangle(x + ew, y + eh + 2, x - 2, y + eh + 2, x - 2, inY, INK);
+        pupilY = cy - cut / 4;
         break;
       }
-      case Emotion::Happy:                 // cheerful: lower lid up
+      case Emotion::Happy:                 // cheerful: lower lid up a touch
       case Emotion::Excited:
-      case Emotion::Love:
-        _canvas.fillRect(x, y + eh - (int)(eh * 0.30f), ew, (int)(eh * 0.30f) + 1, INK);
+      case Emotion::Love: {
+        int lid = (int)(eh * 0.26f);
+        _canvas.fillRect(x, y + eh - lid, ew, lid + 1, INK);
+        pupilY = cy - lid / 2;             // ride above the lid
         break;
-      case Emotion::Sleepy:                // heavy upper lid, thin slit
-        _canvas.fillRect(x, y, ew, (int)(eh * 0.62f), INK);
+      }
+      case Emotion::Sleepy: {              // heavy upper lid, eyes half closed
+        int lid = (int)(eh * 0.50f);
+        _canvas.fillRect(x, y, ew, lid, INK);
+        pupilY = y + lid + (eh - lid) / 2; // centre of the open slit
         break;
-      default: break;                      // Neutral, Thinking, Cool(open eye)
+      }
+      default: break;                      // Neutral, Thinking, Cool(open eye), Dizzy
     }
+    _canvas.fillRect(cx - 9, pupilY - 9, 18, 18, INK);  // pupil last, always on white
   }
 
   // Black outlined teeth grid on the white background; bows/pinches per emotion,
