@@ -1,13 +1,12 @@
-// Bender face renderer (LovyanGFX) — black & white line-art, matching the reference sheet.
+// Bender face renderer (LovyanGFX) — faithful to the reference sheet:
+// WHITE background, BLACK line-art. The visor is a black-filled capsule with
+// concentric black rim rings; the eyes are WHITE holes (the background showing
+// through) with black square pupils, reshaped per emotion. The mouth is a black
+// outlined teeth grid (white teeth = background) that bows/pinches per emotion
+// and ripples with a sine wave while speaking. SURPRISED uses a round visor + "O".
 //
-// Style: black background. Capsule visor = concentric white rims with a BLACK interior;
-// the eyes are WHITE shapes with fixed black square pupils, and their SHAPE changes per
-// emotion (angled tops = angry, drooped = sad, slit = sleepy, dash = wink...). The mouth
-// is a white teeth grid (capsule) that bows/pinches per emotion and ripples with a sine
-// wave while speaking (lip-sync). SURPRISED switches to a round visor + round eyes + "O".
-//
-// Double-buffered in a PSRAM sprite (no flicker). Repaints only on change (_dirty), so
-// idle = no SPI traffic; talking ~25 FPS while each I2S chunk (~64ms) outlasts a push.
+// Double-buffered in a PSRAM sprite (no flicker), repainted only on change.
+// Landscape (rotation 1) chosen on purpose: the wide visor needs the width.
 #pragma once
 
 #include <Arduino.h>
@@ -43,7 +42,7 @@ public:
     _canvas.setPsram(true);
     _canvas.setColorDepth(16);
     _canvas.createSprite(_gfx.width(), FACE_H);
-    _gfx.fillScreen(TFT_BLACK);
+    _gfx.fillScreen(TFT_BLACK);   // text strip below the face
   }
 
   void setEmotion(Emotion e) { if (e != _emotion) { _emotion = e; _dirty = true; } }
@@ -75,6 +74,7 @@ public:
     if (_dirty) { draw(); _dirty = false; }
   }
 
+  // Status text lives in a dark strip below the white face (keeps colour cues readable).
   void showText(const String &text, uint16_t color = TFT_WHITE) {
     int y = FACE_H + 4;
     _gfx.fillRect(0, y, _gfx.width(), _gfx.height() - y, TFT_BLACK);
@@ -103,59 +103,70 @@ private:
   uint32_t _blinkUntil = 0, _nextBlinkAt = 3000;
 
   static constexpr int FACE_H = 200;
-  static constexpr uint16_t W = 0xFFFF;   // white line-art
-  static constexpr uint16_t K = 0x0000;   // black (visor interior, pupils, grid)
-  static constexpr int CXC = 160;         // face centre x
+  static constexpr uint16_t BG = 0xFFFF;   // white background
+  static constexpr uint16_t INK = 0x0000;  // black line-art (visor body, pupils, grid)
+  static constexpr int CXC = 160;
 
   bool roundLayout() const { return _emotion == Emotion::Surprised || _emotion == Emotion::Dizzy; }
 
-  // --- WHITE eye shape with fixed black square pupil; black carves change the shape ---
+  // Black capsule visor with concentric rim rings (white gaps = background).
+  void drawCapsule(int x, int y, int w, int h) {
+    int r = h / 2;
+    _canvas.fillRoundRect(x + 9, y + 9, w - 18, h - 18, r - 9, INK);  // black interior
+    _canvas.drawRoundRect(x + 5, y + 5, w - 10, h - 10, r - 5, INK);  // inner ring
+    _canvas.drawRoundRect(x, y, w, h, r, INK);                        // outer ring
+  }
+
+  // WHITE eye hole (background colour) inside the black visor; black square pupil;
+  // black carves reshape it per emotion (the carve blends into the black interior).
   void drawEye(int cx, int cy, bool isLeft) {
-    const int ew = 108, eh = 72;
+    const int ew = 110, eh = 68;
     const int x = cx - ew / 2, y = cy - eh / 2;
 
-    if (_blinking) {                      // blink: thin white slit
-      _canvas.fillRoundRect(x, cy - 6, ew, 12, 6, W);
-      return;
-    }
-    if (_emotion == Emotion::Cool && !isLeft) {   // wink: right eye is a dash
-      _canvas.fillRoundRect(x + 10, cy - 4, ew - 20, 9, 4, W);
+    if (_blinking) { _canvas.fillRoundRect(x, cy - 5, ew, 10, 5, BG); return; }
+
+    if (_emotion == Emotion::Cool && !isLeft) {     // wink: shallow curved white line
+      for (int i = -1; i <= 1; i++) {
+        _canvas.drawLine(x + 14, cy + 2 + i, cx, cy + 7 + i, BG);
+        _canvas.drawLine(cx, cy + 7 + i, x + ew - 14, cy + 2 + i, BG);
+      }
       return;
     }
 
-    _canvas.fillRoundRect(x, y, ew, eh, 16, W);
-    _canvas.fillRect(cx - 9, cy - 9, 18, 18, K);  // fixed pupil at geometric centre
+    _canvas.fillRoundRect(x, y, ew, eh, 16, BG);
+    _canvas.fillRect(cx - 9, cy - 9, 18, 18, INK);  // fixed pupil, geometric centre
 
     switch (_emotion) {
       case Emotion::Angry:                 // top slopes DOWN toward the centre
       case Emotion::Confused: {
-        int ay = y + (int)(eh * 0.6f);
-        if (isLeft) _canvas.fillTriangle(x, y - 2, x + ew, y - 2, x + ew, ay, K);
-        else        _canvas.fillTriangle(x + ew, y - 2, x, y - 2, x, ay, K);
+        int ay = y + (int)(eh * 0.5f);
+        if (isLeft) _canvas.fillTriangle(x - 2, y - 2, x + ew + 2, y - 2, x + ew + 2, ay, INK);
+        else        _canvas.fillTriangle(x + ew + 2, y - 2, x - 2, y - 2, x - 2, ay, INK);
         break;
       }
       case Emotion::Sad: {                 // bottom slopes UP toward the centre (droop)
-        int sy = y + (int)(eh * 0.45f);
-        if (isLeft) _canvas.fillTriangle(x + ew, y + eh + 2, x, y + eh + 2, x + ew, sy, K);
-        else        _canvas.fillTriangle(x, y + eh + 2, x + ew, y + eh + 2, x, sy, K);
+        int sy = y + (int)(eh * 0.5f);
+        if (isLeft) _canvas.fillTriangle(x + ew + 2, y + eh + 2, x - 2, y + eh + 2, x + ew + 2, sy, INK);
+        else        _canvas.fillTriangle(x - 2, y + eh + 2, x + ew + 2, y + eh + 2, x - 2, sy, INK);
         break;
       }
-      case Emotion::Happy:                 // lower lid up a touch (cheerful squint)
+      case Emotion::Happy:                 // cheerful: lower lid up
       case Emotion::Excited:
       case Emotion::Love:
-        _canvas.fillRect(x, y + eh - (int)(eh * 0.28f), ew, (int)(eh * 0.28f) + 1, K);
+        _canvas.fillRect(x, y + eh - (int)(eh * 0.30f), ew, (int)(eh * 0.30f) + 1, INK);
         break;
-      case Emotion::Sleepy:                // heavy lid: thin slit at the bottom
-        _canvas.fillRect(x, y, ew, (int)(eh * 0.62f), K);
+      case Emotion::Sleepy:                // heavy upper lid, thin slit
+        _canvas.fillRect(x, y, ew, (int)(eh * 0.62f), INK);
         break;
-      default: break;                      // Neutral, Thinking, Cool(left eye)
+      default: break;                      // Neutral, Thinking, Cool(open eye)
     }
   }
 
-  // --- White teeth grid that bows/pinches per emotion and ripples with audio ---
+  // Black outlined teeth grid on the white background; bows/pinches per emotion,
+  // ripples with audio. White "teeth" = background between the black lines.
   void drawTeethMouth() {
     const int mx0 = 100, mx1 = 220, WD = mx1 - mx0;
-    const int myc = 158, gap = 16, teeth = 6;
+    const int myc = 158, gap = 17, teeth = 6;
 
     float phase = millis() / 80.0f;
     float wave = _talking ? (_mouthAmp / 100.0f) * 8.0f : 0.0f;
@@ -163,60 +174,54 @@ private:
     if (!_talking) {
       if (_emotion == Emotion::Happy || _emotion == Emotion::Excited || _emotion == Emotion::Love) bow = -7.0f;
       else if (_emotion == Emotion::Sad || _emotion == Emotion::Sleepy) bow = 7.0f;
-      else if (_emotion == Emotion::Angry || _emotion == Emotion::Confused) pinch = 0.45f;  // gritted
+      else if (_emotion == Emotion::Angry || _emotion == Emotion::Confused) pinch = 0.5f;
     }
 
-    // Column-fill the white band (rounded ends via elliptical taper).
+    int pT = 0, pB = 0, pM = 0;
     for (int x = mx0; x <= mx1; x++) {
       float t = (float)(x - mx0) / WD;
-      float c = 1.0f - (2 * t - 1) * (2 * t - 1);     // 1 centre .. 0 ends
+      float c = 1.0f - (2 * t - 1) * (2 * t - 1);
       float edge = sqrtf(c < 0 ? 0 : c);
-      float half = gap * (0.42f + 0.58f * edge) * (1.0f - pinch * c);
+      float half = gap * (0.5f + 0.5f * edge) * (1.0f - pinch * c);
       int dy = (int)(bow * c + wave * sinf(x * 0.20f + phase));
-      _canvas.drawFastVLine(x, myc - (int)half + dy, (int)(half * 2), W);
+      int topY = myc - (int)half + dy, botY = myc + (int)half + dy, midY = myc + dy;
+      if (x == mx0 || x == mx1) {
+        _canvas.drawLine(x, topY, x, botY, INK);          // rounded end caps
+      } else {
+        _canvas.drawLine(x - 1, pT, x, topY, INK);
+        _canvas.drawLine(x - 1, pT + 1, x, topY + 1, INK);
+        _canvas.drawLine(x - 1, pB, x, botY, INK);
+        _canvas.drawLine(x - 1, pB - 1, x, botY - 1, INK);
+        _canvas.drawLine(x - 1, pM, x, midY, INK);        // horizontal mid grid line
+      }
+      pT = topY; pB = botY; pM = midY;
     }
-    // Black grid: vertical tooth dividers + a horizontal mid-row, both riding the band.
-    for (int i = 1; i < teeth; i++) {
+    for (int i = 1; i < teeth; i++) {     // vertical tooth dividers (ride the wave)
       int x = mx0 + (WD * i) / teeth;
       float t = (float)(x - mx0) / WD, c = 1.0f - (2 * t - 1) * (2 * t - 1);
-      float half = gap * (0.42f + 0.58f * sqrtf(c < 0 ? 0 : c)) * (1.0f - pinch * c);
+      float half = gap * (0.5f + 0.5f * sqrtf(c < 0 ? 0 : c)) * (1.0f - pinch * c);
       int dy = (int)(bow * c + wave * sinf(x * 0.20f + phase));
-      _canvas.drawFastVLine(x, myc - (int)half + dy, (int)(half * 2), K);
+      _canvas.drawLine(x, myc - (int)half + dy, x, myc + (int)half + dy, INK);
     }
-    int pT = 0;
-    for (int x = mx0; x <= mx1; x++) {
-      int dy = (int)(bow * (1.0f - (2 * ((float)(x - mx0) / WD) - 1) * (2 * ((float)(x - mx0) / WD) - 1))
-                     + wave * sinf(x * 0.20f + phase));
-      if (x > mx0) _canvas.drawLine(x - 1, pT, x, myc + dy, K);
-      pT = myc + dy;
-    }
-  }
-
-  void drawCapsule(int x, int y, int w, int h) {     // concentric white rims, black interior
-    int r = h / 2;
-    _canvas.fillRoundRect(x, y, w, h, r, W);
-    _canvas.fillRoundRect(x + 4, y + 4, w - 8, h - 8, r - 4, K);
-    _canvas.drawRoundRect(x + 7, y + 7, w - 14, h - 14, r - 7, W);
   }
 
   void draw() {
-    _canvas.fillSprite(K);
+    _canvas.fillSprite(BG);
 
-    if (roundLayout()) {
-      // SURPRISED: round visor + round white eyes + small "O" mouth.
-      _canvas.fillCircle(CXC, 70, 64, W);
-      _canvas.fillCircle(CXC, 70, 58, K);
-      _canvas.fillCircle(CXC - 30, 66, 26, W);
-      _canvas.fillCircle(CXC + 30, 66, 26, W);
-      _canvas.fillRect(CXC - 30 - 8, 66 - 8, 16, 16, K);
-      _canvas.fillRect(CXC + 30 - 8, 66 - 8, 16, 16, K);
-      _canvas.drawCircle(CXC, 150, 16, W);
-      _canvas.drawCircle(CXC, 150, 15, W);
+    if (roundLayout()) {                   // SURPRISED: round visor + round eyes + "O"
+      _canvas.fillCircle(CXC, 70, 56, INK);
+      _canvas.drawCircle(CXC, 70, 62, INK);
+      _canvas.fillCircle(CXC - 30, 66, 26, BG);
+      _canvas.fillCircle(CXC + 30, 66, 26, BG);
+      _canvas.fillRect(CXC - 30 - 8, 66 - 8, 16, 16, INK);
+      _canvas.fillRect(CXC + 30 - 8, 66 - 8, 16, 16, INK);
+      _canvas.drawCircle(CXC, 150, 15, INK);
+      _canvas.drawCircle(CXC, 150, 14, INK);
       _canvas.pushSprite(0, 0);
       return;
     }
 
-    drawCapsule(22, 22, 276, 92);          // visor
+    drawCapsule(22, 22, 276, 92);
     drawEye(CXC - 62, 66, true);
     drawEye(CXC + 62, 66, false);
     drawTeethMouth();
