@@ -1,4 +1,4 @@
-﻿"""Brain server for the virtual character.
+"""Brain server for the virtual character.
 
 Run with: .\\start.ps1  (usa el venv, NO Python global)
 """
@@ -55,7 +55,7 @@ from tts_engine import shutdown_piper_daemon, synthesize_wav_16k, sanitize_speec
 import singing_pipeline as sing
 
 SINGING_ENABLED = os.environ.get("ENABLE_SINGING", "0") == "1"
-TTS_RVC_ENABLED = os.environ.get("ENABLE_TTS_RVC", "0") == "1"
+TTS_RVC_ENABLED = os.environ.get("ENABLE_TTS_RVC", "1") == "1"  # default ON cuando bender_server disponible
 import ha_client as ha
 import agent_state
 import server_config as srv_cfg
@@ -1356,7 +1356,9 @@ async def tts(body: dict):
             if sing.tts_rvc_runtime_available():
                 try:
                     trvc = time.monotonic()
-                    await asyncio.to_thread(release_ollama_vram)
+                    # bender_http corre en proceso separado; no necesita liberar VRAM de Ollama
+                    if sing.TTS_RVC_ENGINE != "bender_http":
+                        await asyncio.to_thread(release_ollama_vram)
                     wav = await asyncio.wait_for(
                         sing.render_tts_with_rvc(wav, timeout=rvc_timeout),
                         timeout=rvc_timeout + 10,
