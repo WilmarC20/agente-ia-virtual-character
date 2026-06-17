@@ -690,9 +690,9 @@ def _ollama_http_timeout() -> httpx.Timeout:
     return httpx.Timeout(connect=5.0, read=OLLAMA_TIMEOUT_S, write=15.0, pool=5.0)
 
 
-def _ollama_chat_payload(messages: list[dict], *, json_format: bool = True) -> dict[str, Any]:
+def _ollama_chat_payload(messages: list[dict], *, json_format: bool = True, model_override: str | None = None) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "model": srv_cfg.get_ollama_model(OLLAMA_MODEL),
+        "model": model_override if model_override else srv_cfg.get_ollama_model(OLLAMA_MODEL),
         "stream": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
         "messages": messages,
@@ -744,8 +744,10 @@ def release_ollama_vram() -> None:
         log.debug("Ollama release VRAM: %s", e)
 
 
-async def ask_ollama(user_text: str, *, use_history: bool = False) -> dict:
-    system_content = build_system_prompt()
+async def ask_ollama(user_text: str, *, use_history: bool = False,
+                     model_override: str | None = None,
+                     system_prompt_override: str | None = None) -> dict:
+    system_content = system_prompt_override if system_prompt_override else build_system_prompt()
     if ha.ha_enabled():
         devices = await asyncio.to_thread(ha.devices_prompt, OLLAMA_HA_MAX_DEVICES)
         if devices:
@@ -767,7 +769,7 @@ async def ask_ollama(user_text: str, *, use_history: bool = False) -> dict:
         messages.extend(_conversation_history)
     messages.append({"role": "user", "content": user_text})
 
-    payload = _ollama_chat_payload(messages)
+    payload = _ollama_chat_payload(messages, model_override=model_override)
     try:
         t0 = time.monotonic()
         async with httpx.AsyncClient(timeout=_ollama_http_timeout()) as client:
@@ -893,8 +895,10 @@ async def chat(body: dict):
     text = body.get("text", "").strip()
     if not text:
         return JSONResponse(status_code=400, content={"error": "missing 'text'"})
-    log.info("chat: %s", text)
-    result = await ask_ollama(text)
+    model_ov = (body.get("model") or "").strip() or None
+    sysprompt_ov = (body.get("system_prompt") or "").strip() or None
+    log.info("chat: model_ov=%s text=%s", model_ov, text)
+    result = await ask_ollama(text, model_override=model_ov, system_prompt_override=sysprompt_ov)
     log.info(
         "reply [%s] speak=%s sing=%s sfx=%s: %s",
         result["emotion"],
