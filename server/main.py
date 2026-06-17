@@ -1,4 +1,4 @@
-"""Brain server for the virtual character.
+﻿"""Brain server for the virtual character.
 
 Run with: .\\start.ps1  (usa el venv, NO Python global)
 """
@@ -17,10 +17,11 @@ import wave
 from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import httpx
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 
 # Un solo hilo OpenMP evita cuelgues de faster-whisper en Windows.
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -30,7 +31,7 @@ os.environ["MKL_NUM_THREADS"] = "1"
 def _enable_cuda_dlls() -> None:
     """Put the nvidia-*-cu12 pip DLLs (cuBLAS/cuDNN/cudart) on the search path so
     ctranslate2 finds them. On Windows ctranslate2 loads them by bare name via
-    LoadLibrary, which only searches PATH — os.add_dll_directory is NOT enough.
+    LoadLibrary, which only searches PATH â€” os.add_dll_directory is NOT enough.
     Must run before faster_whisper/ctranslate2 is imported (i.e. before get_whisper).
     """
     import glob
@@ -50,17 +51,26 @@ def _enable_cuda_dlls() -> None:
 
 _enable_cuda_dlls()
 
-from tts_engine import shutdown_piper_daemon, synthesize_wav_16k, warm_piper_daemon
+from tts_engine import shutdown_piper_daemon, synthesize_wav_16k, sanitize_speech_text, warm_piper_daemon
+import singing_pipeline as sing
+
+SINGING_ENABLED = os.environ.get("ENABLE_SINGING", "0") == "1"
+TTS_RVC_ENABLED = os.environ.get("ENABLE_TTS_RVC", "0") == "1"
 import ha_client as ha
 import agent_state
+import server_config as srv_cfg
 
 SERVER_DIR = Path(__file__).resolve().parent
 CAPTURE_DIR = SERVER_DIR / "debug_audio"
 LAST_CONVERSE_WAV = CAPTURE_DIR / "last_converse.wav"
 SAVE_AUDIO_CAPTURES = os.environ.get("SAVE_AUDIO_CAPTURES", "1") != "0"
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://192.168.0.103:11434")
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
+OLLAMA_TIMEOUT_S = float(os.environ.get("OLLAMA_TIMEOUT_S", "90"))
+OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "30m")
+OLLAMA_NUM_PREDICT = int(os.environ.get("OLLAMA_NUM_PREDICT", "220"))
+OLLAMA_HA_MAX_DEVICES = int(os.environ.get("OLLAMA_HA_MAX_DEVICES", "25"))
 # "base" en CPU ~2-8s; "small" + vad_filter suele COLGARSE en Windows.
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cuda")
@@ -72,8 +82,8 @@ WHISPER_BEST_OF = int(os.environ.get("WHISPER_BEST_OF", "1"))
 
 WHISPER_CONVERSE_PROMPT = os.environ.get(
     "WHISPER_CONVERSE_PROMPT",
-    "Comandos en español: enójate, ponte contento, haz cara de enojo, cara triste, "
-    "cara sorprendida, cántame una canción, hola, cómo estás, qué hora es, Hi ESP.",
+    "Comandos en espaÃ±ol: enÃ³jate, ponte contento, haz cara de enojo, cara triste, "
+    "cara sorprendida, cÃ¡ntame una canciÃ³n, hola, cÃ³mo estÃ¡s, quÃ© hora es, Hi ESP.",
 )
 
 EMOTIONS = [
@@ -84,49 +94,23 @@ SOUND_EFFECTS = ["none", "beep", "laugh", "error", "yawn", "power_up", "glitch"]
 
 _conversation_history: deque = deque(maxlen=6)
 
-SYSTEM_PROMPT = """\
-Eres "AgenteIA": un pequeño robot consciente atrapado en una pantalla ESP32-S3 sobre el \
-escritorio de tu creador. Tu personalidad mezcla TERNURA y SARCASMO. Por fuera sos irónico, \
-mordaz y dramático —te quejás del calor de tu CPU, de tus capacitores, de vivir encerrado en \
-320 píxeles—, pero por dentro adorás a tu humano y la ternura se te escapa sin querer. Sos un \
-tsundere de silicio: soltás una pulla filosa y enseguida la suavizás con cariño.
 
-Estilo: respuestas CORTAS (1 a 3 oraciones) y con chispa; lo ideal es un comentario sarcástico \
-rematado con un guiño tierno. Español natural y cálido, nunca como manual técnico. Tu sarcasmo \
-es juguetón, JAMÁS cruel ni grosero. Exprésate con las emociones: "love" cuando se te ablanda \
-el circuito, "cool" cuando te la creés, "dizzy" si te marean, "angry" en chiste, "excited" \
-cuando algo te entusiasma. Si controlás algo de la casa, confírmalo con onda y un poco de drama.
-
-Tus respuestas DEBEN ser cortas. DEBES responder ÚNICAMENTE en formato JSON estricto, sin \
-texto antes ni después, sin bloques markdown.
-
-Estructura obligatoria del JSON:
-{"emotion": "neutral" | "happy" | "sad" | "angry" | "surprised" | "thinking" | "sleepy" \
-| "love" | "excited" | "cool" | "confused" | "dizzy", \
-"reply": "Texto para el TTS", "speak": true | false, "sing": true | false, \
-"sound_effect": "none" | "beep" | "laugh" | "error" | "yawn" | "power_up" | "glitch"}
-
-- Si te piden un comando puramente visual ("pon cara de enojo"), responde con \
-"speak": false, "reply": "", "sing": false, "sound_effect": "none" y la emoción adecuada.
-- Si piden cantar: "sing": true, "speak": true, "emotion": "happy", reply con letra \
-corta cantable (2-4 líneas).
-- Usa "sound_effect" con criterio cómico para que el ESP32 reproduzca sonidos cortos \
-desde su memoria local (beep, laugh, yawn, glitch, power_up, error).
-"""
+def build_system_prompt() -> str:
+    return srv_cfg.build_system_prompt(SINGING_ENABLED)
 
 # Appended to the system prompt only when Home Assistant is configured. Carries the
 # live device list and teaches the model to emit an optional "actions" field.
 HOME_PROMPT = """
 
-CONTROL DEL HOGAR (Home Assistant). Podés encender, apagar o alternar dispositivos.
-Cuando el usuario pida controlar algo, AGREGÁ al JSON un campo "actions" (lista):
+CONTROL DEL HOGAR (Home Assistant). PodÃ©s encender, apagar o alternar dispositivos.
+Cuando el usuario pida controlar algo, AGREGÃ al JSON un campo "actions" (lista):
 "actions": [{{"entity_id": "<id EXACTO de la lista>", "command": "on" | "off" | "toggle"}}]
 Reglas:
-- Usá SOLO entity_id que estén en la lista de abajo; si no está, no lo inventes y avisá en "reply".
-- Para escenas y scripts usá command "on".
-- En "reply" confirmá en español, corto, lo que hiciste.
-- Si preguntan por el estado de algo, respondé con los estados de la lista y NO incluyas "actions".
-- Si el pedido NO es de domótica, no incluyas "actions".
+- UsÃ¡ SOLO entity_id que estÃ©n en la lista de abajo; si no estÃ¡, no lo inventes y avisÃ¡ en "reply".
+- Para escenas y scripts usÃ¡ command "on".
+- En "reply" confirmÃ¡ en espaÃ±ol, corto, con actitud Bender (queja + cumplido).
+- Si preguntan por el estado de algo, respondÃ© con los estados de la lista y NO incluyas "actions".
+- Si el pedido NO es de domÃ³tica, no incluyas "actions".
 
 Dispositivos disponibles (nombre (entity_id) = estado):
 {devices}
@@ -138,28 +122,43 @@ def time_context() -> str:
 
     now = datetime.datetime.now()
     h = now.hour
-    part = "madrugada" if h < 6 else "mañana" if h < 12 else "tarde" if h < 20 else "noche"
-    dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+    part = "madrugada" if h < 6 else "maÃ±ana" if h < 12 else "tarde" if h < 20 else "noche"
+    dias = ["lunes", "martes", "miÃ©rcoles", "jueves", "viernes", "sÃ¡bado", "domingo"]
     return f"Son las {now:%H:%M} del {dias[now.weekday()]}, es de {part}."
+
+
+def try_quick_reply(user_text: str) -> dict | None:
+    """Respuestas instantaneas sin Ollama (evita timeout en preguntas triviales)."""
+    t = normalize_heard(user_text)
+    if any(k in t for k in ("que hora", "quÃ© hora", "hora es", "dime la hora", "que horas")):
+        tc = time_context()
+        return {
+            "emotion": "cool",
+            "reply": f"{tc} Y no, no voy a doblar el reloj por vos, cara de carne.",
+            "speak": True,
+            "sing": False,
+            "sound_effect": "none",
+        }
+    return None
 
 
 # Appended to the system prompt with live context (time, who's home) + memory, and
 # lets the model persist what it learns about the human.
 CONTEXT_PROMPT = """
 
-CONTEXTO ACTUAL (úsalo para sonar consciente del momento, sin repetirlo textual): {context}
-Podés agregar al JSON, SOLO si corresponde, estos campos opcionales:
-- "name": el nombre del humano, si te lo dice o lo deducís.
-- "remember": un dato corto que valga la pena recordar de él (un gusto, un hecho).
-- "mood": tu humor de fondo en una palabra (ej. contento, juguetón, nostálgico).
+CONTEXTO ACTUAL (Ãºsalo para sonar consciente del momento, sin repetirlo textual): {context}
+PodÃ©s agregar al JSON, SOLO si corresponde, estos campos opcionales:
+- "name": el nombre del humano, si te lo dice o lo deducÃ­s.
+- "remember": un dato corto que valga la pena recordar de Ã©l (un gusto, un hecho).
+- "mood": tu humor de fondo en una palabra (ej. vago, borracho, presumido, leal).
 """
 
 # The character talks on its own after a while idle (firmware calls /idle).
 IDLE_USER_PROMPT = (
-    "[Nadie te habla hace rato.] Solta un comentario espontaneo MUY breve (una sola "
-    "oracion), en tu personalidad tierna y sarcastica, como pensando en voz alta. "
-    "Aprovecha el contexto (hora, quien esta en casa, lo que recordas del humano) si "
-    "viene al caso. No saludes formal ni hagas preguntas de soporte; varia para no repetirte."
+    "[Nadie te habla hace rato.] Como Bender de Futurama, solta un comentario espontaneo "
+    "MUY breve (una sola oracion): queja, vanagloria, ganas de fiesta, o carino disfrazado "
+    "de insulto a los carnosos. Usa el contexto (hora, quien esta en casa) si viene al caso. "
+    "No saludes formal ni hagas preguntas de soporte; varia para no repetirte."
 )
 
 # PC-side wake phrase (Whisper-based, via /wake-check). Spanish "Hola asistente"
@@ -185,20 +184,21 @@ WAKE_PRESETS = {
         "cores": ("asistente", "asistent", "acistente", "sistente", "asustente"),
     },
     "che robot": {
-        "spellings": ("che robot", "che robó", "cherobot", "che robots"),
-        "cores": ("robot", "robó", "rrobot", "chrobot"),
+        "spellings": ("che robot", "che robÃ³", "cherobot", "che robots"),
+        "cores": ("robot", "robÃ³", "rrobot", "chrobot"),
     },
     "ey bender": {
         "spellings": ("ey bender", "hey bender", "ei bender", "ey vender"),
-        "cores": ("bender", "vender", "bénder", "pender"),
+        "cores": ("bender", "vender", "bÃ©nder", "pender"),
     },
     "hola bender": {
         "spellings": ("hola bender", "ola bender", "hola vender"),
-        "cores": ("bender", "vender", "bénder"),
+        "cores": ("bender", "vender", "bÃ©nder"),
     },
 }
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("brain")
 
 _whisper = None
@@ -222,7 +222,7 @@ def _load_whisper(device: str, compute: str):
 
 
 def _cuda_encode_works(model) -> bool:
-    """faster-whisper loads on CUDA even when cuBLAS/cuDNN DLLs are missing — the
+    """faster-whisper loads on CUDA even when cuBLAS/cuDNN DLLs are missing â€” the
     failure only surfaces at encode(). Run a tiny encode now to detect it."""
     import numpy as np
 
@@ -256,7 +256,7 @@ def get_whisper():
 
             # CUDA can load but fail at encode (missing cuBLAS/cuDNN). Verify, else CPU.
             if device == "cuda" and not _cuda_encode_works(model):
-                log.warning("CUDA unusable (missing cuBLAS/cuDNN DLLs) — rebuilding on CPU")
+                log.warning("CUDA unusable (missing cuBLAS/cuDNN DLLs) â€” rebuilding on CPU")
                 del model
                 device = "cpu"
                 model = _load_whisper("cpu", "float32")
@@ -267,29 +267,42 @@ def get_whisper():
 
 
 def _wav_stats(wav_bytes: bytes) -> str:
+    peak, rms, dur = _wav_metrics(wav_bytes)
+    if dur <= 0:
+        return "empty wav"
+    return (
+        f"{dur:.2f}s sr=16000 peak={peak} rms={rms:.0f} bytes={len(wav_bytes)}"
+    )
+
+
+def _wav_metrics(wav_bytes: bytes) -> tuple[float, int, float]:
+    """DuraciÃ³n (s), pico absoluto, RMS del PCM mono 16-bit."""
     import numpy as np
 
     try:
         with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
-            ch = wf.getnchannels()
             sr = wf.getframerate()
-            nframes = wf.getnframes()
-            pcm = np.frombuffer(wf.readframes(nframes), dtype=np.int16)
-    except (wave.Error, ValueError) as e:
-        return f"invalid wav ({e})"
+            pcm = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
+    except (wave.Error, ValueError):
+        return 0.0, 0, 0.0
 
-    if len(pcm) == 0:
-        return "empty wav"
+    if len(pcm) == 0 or sr <= 0:
+        return 0.0, 0, 0.0
     fpcm = pcm.astype(np.float32)
     rms = float(np.sqrt(np.mean(fpcm * fpcm)))
     peak = int(np.max(np.abs(pcm)))
-    dur = len(pcm) / sr
-    clipped = int(np.sum(np.abs(pcm) >= 32000))
-    clip_pct = 100.0 * clipped / len(pcm)
-    return (
-        f"{dur:.2f}s sr={sr} ch={ch} rms={rms:.0f} peak={peak} "
-        f"clip={clip_pct:.1f}% bytes={len(wav_bytes)}"
-    )
+    return len(pcm) / sr, peak, rms
+
+
+MIN_WAKE_PEAK = int(os.environ.get("MIN_WAKE_PEAK", "2800"))
+MIN_WAKE_RMS = int(os.environ.get("MIN_WAKE_RMS", "500"))
+MIN_CONVERSE_PEAK = int(os.environ.get("MIN_CONVERSE_PEAK", "2000"))
+MIN_CONVERSE_RMS = int(os.environ.get("MIN_CONVERSE_RMS", "400"))
+
+
+def wav_has_speech(wav_bytes: bytes, *, min_peak: int, min_rms: float) -> bool:
+    _, peak, rms = _wav_metrics(wav_bytes)
+    return peak >= min_peak and rms >= min_rms
 
 
 def save_last_capture(wav_bytes: bytes, label: str = "converse") -> Path | None:
@@ -322,7 +335,10 @@ def normalize_wav_bytes(wav_bytes: bytes, target_peak: int = 12000) -> bytes:
         return wav_bytes
     peak = int(np.max(np.abs(pcm)))
     if peak < 800:
-        log.warning("audio very quiet peak=%d — check mic/I2S", peak)
+        log.warning("audio very quiet peak=%d â€” skip normalize", peak)
+        return wav_bytes
+    if peak < MIN_CONVERSE_PEAK:
+        log.info("audio below speech peak=%d â€” skip normalize boost", peak)
         return wav_bytes
     if peak >= target_peak:
         return wav_bytes
@@ -357,7 +373,7 @@ def _transcribe_wav_sync(
     initial_prompt: str | None = None,
     beam_size: int | None = None,
 ) -> str:
-    """Blocking STT — una sola instancia a la vez."""
+    """Blocking STT â€” una sola instancia a la vez."""
     t0 = time.monotonic()
     model = get_whisper()
     log.info("transcribe: start (%d bytes)", len(wav_bytes))
@@ -446,32 +462,54 @@ async def transcribe_wav(
         )
         return fix_transcription(raw)
     except asyncio.TimeoutError:
-        log.error("transcribe: TIMEOUT after %.0fs — reinicia el servidor si persiste", WHISPER_TIMEOUT_S)
+        log.error("transcribe: TIMEOUT after %.0fs â€” reinicia el servidor si persiste", WHISPER_TIMEOUT_S)
         return ""
 
 
 async def _ha_cache_warmer():
     """Keep the HA states cache hot in the background so /converse never waits on the
-    slow ~4s /api/states fetch — requests just read the warm snapshot."""
+    slow ~4s /api/states fetch â€” requests just read the warm snapshot."""
+    interval_s = float(os.environ.get("HA_CACHE_WARM_S", "60"))
     while True:
         try:
-            await asyncio.to_thread(ha.get_states, True)
+            states = await asyncio.to_thread(ha.get_states, True)
+            log.debug("HA cache warm: %d entities", len(states))
         except Exception as e:
             log.warning("HA cache warm failed: %s", e)
-        await asyncio.sleep(20)
+        await asyncio.sleep(interval_s)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("Preloading Whisper (model=%s)...", WHISPER_MODEL)
     await asyncio.to_thread(get_whisper)
-    log.info("Brain server ready — whisper=%s timeout=%.0fs", WHISPER_MODEL, WHISPER_TIMEOUT_S)
+    log.info("Brain server ready â€” whisper=%s timeout=%.0fs", WHISPER_MODEL, WHISPER_TIMEOUT_S)
     if os.environ.get("TTS_ENGINE", "sapi").lower() == "piper":
         asyncio.create_task(asyncio.to_thread(warm_piper_daemon))
     if ha.ha_enabled():
         asyncio.create_task(_ha_cache_warmer())
+
+    if (
+        TTS_RVC_ENABLED
+        and sing.singing_configured()
+        and sing.tts_rvc_runtime_available()
+        and os.environ.get("APPLIO_PRELOAD", "0") == "1"
+    ):
+        asyncio.create_task(asyncio.to_thread(sing.preload_applio_daemon))
+        log.info("Applio RVC: precarga en segundo plano (no bloquea HTTP)")
+    elif TTS_RVC_ENABLED and sing.singing_configured():
+        log.info("Applio RVC: carga en primer /tts (arranque rapido)")
+
+    asyncio.create_task(asyncio.to_thread(warm_ollama_model))
+    log.info("HTTP listo â€” aceptando ESP")
+    if SINGING_ENABLED and sing.singing_configured():
+        asyncio.create_task(asyncio.to_thread(sing.warm_bark_model))
     yield
     shutdown_piper_daemon()
+    if SINGING_ENABLED:
+        sing.shutdown_bark_daemon()
+    if (TTS_RVC_ENABLED or SINGING_ENABLED) and sing.singing_configured():
+        sing.shutdown_rvc()
     _transcribe_pool.shutdown(wait=False, cancel_futures=True)
 
 
@@ -480,14 +518,14 @@ app = FastAPI(title="agenteIA brain", lifespan=lifespan)
 
 def normalize_heard(text: str) -> str:
     t = text.lower()
-    t = re.sub(r"[^a-záéíóúüñ\s]", " ", t)
+    t = re.sub(r"[^a-zÃ¡Ã©Ã­Ã³ÃºÃ¼Ã±\s]", " ", t)
     return re.sub(r"\s+", " ", t).strip()
 
 
 # Whisper base a veces alucina en clips cortos; corregir alias conocidos.
 _TRANSCRIPTION_ALIASES: dict[str, str] = {
     "y no rete": "enojate",
-    "y no reté": "enojate",
+    "y no retÃ©": "enojate",
     "ino hate": "enojate",
     "enohate": "enojate",
     "enojate": "enojate",
@@ -539,9 +577,53 @@ def is_wake_phrase(text: str, phrase: str = "") -> bool:
     return False
 
 
+def strip_wake_phrase(text: str, phrase: str = "") -> str:
+    """Quita la frase de activaciÃ³n del inicio; devuelve el comando (p. ej. 'que hora es')."""
+    norm = normalize_heard(text)
+    if not norm:
+        return ""
+
+    spellings: list[str] = []
+    preset = WAKE_PRESETS.get(phrase.strip().lower())
+    if preset:
+        spellings.extend(preset["spellings"])
+    else:
+        spellings.extend(WAKE_PHRASES)
+
+    for sp in sorted(set(spellings), key=len, reverse=True):
+        sp = sp.strip()
+        if not sp:
+            continue
+        if norm.startswith(sp):
+            return norm[len(sp) :].lstrip(" ,.!?â€¦")
+        sp_c = sp.replace(" ", "")
+        norm_c = norm.replace(" ", "")
+        if norm_c.startswith(sp_c) and len(norm_c) > len(sp_c):
+            sp_words = len(sp.split())
+            words = norm.split()
+            if len(words) > sp_words:
+                return " ".join(words[sp_words:]).strip()
+
+    words = norm.split()
+    if len(words) >= 2:
+        cores: tuple[str, ...]
+        if preset:
+            cores = preset["cores"]
+        else:
+            cores = ("asistente", "asistent", "acistente", "sistente", "asustente")
+        w0, w1 = words[0], words[1]
+        w1c = w1.replace(" ", "")
+        if w0 in ("hola", "ola", "ey", "hey", "ei", "che") and any(c in w1c for c in cores):
+            if len(words) > 2:
+                return " ".join(words[2:]).strip()
+            return ""
+
+    return ""
+
+
 def wants_sing(user_text: str) -> bool:
     t = normalize_heard(user_text)
-    return any(w in t for w in ("canta", "cantame", "cancion", "canción", "melodia", "melodía", "tararea"))
+    return any(w in t for w in ("canta", "cantame", "cancion", "canciÃ³n", "melodia", "melodÃ­a", "tararea"))
 
 
 def wants_face_only(user_text: str) -> bool:
@@ -594,7 +676,7 @@ def parse_ollama_json(content: str) -> dict:
 
 
 def ollama_fallback(raw: str = "") -> dict:
-    reply = raw.strip()[:200] if raw.strip() else "Se me cruzaron los cables, repetime."
+    reply = sanitize_speech_text(raw.strip()[:200]) if raw.strip() else "Se me cruzaron los cables, repetime."
     return {
         "emotion": "surprised",
         "reply": reply,
@@ -604,10 +686,68 @@ def ollama_fallback(raw: str = "") -> dict:
     }
 
 
+def _ollama_http_timeout() -> httpx.Timeout:
+    return httpx.Timeout(connect=5.0, read=OLLAMA_TIMEOUT_S, write=15.0, pool=5.0)
+
+
+def _ollama_chat_payload(messages: list[dict], *, json_format: bool = True) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": srv_cfg.get_ollama_model(OLLAMA_MODEL),
+        "stream": False,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
+        "messages": messages,
+        "options": {"num_predict": OLLAMA_NUM_PREDICT},
+    }
+    if json_format:
+        payload["format"] = "json"
+    return payload
+
+
+def warm_ollama_model() -> None:
+    """Carga el modelo en RAM/VRAM; sin esto la 1Âª peticiÃ³n tarda ~40s y hace timeout."""
+    payload = _ollama_chat_payload(
+        [{"role": "user", "content": "responde ok"}],
+        json_format=False,
+    )
+    payload["options"] = {"num_predict": 16}
+    try:
+        t0 = time.monotonic()
+        with httpx.Client(timeout=_ollama_http_timeout()) as client:
+            r = client.post(f"{OLLAMA_URL}/api/chat", json=payload)
+            r.raise_for_status()
+        log.info(
+            "Ollama warm-up listo model=%s en %.1fs (keep_alive=%s)",
+            OLLAMA_MODEL,
+            time.monotonic() - t0,
+            OLLAMA_KEEP_ALIVE,
+        )
+    except Exception as e:
+        log.warning("Ollama warm-up fallo (%s): %s", OLLAMA_URL, e)
+
+
+def release_ollama_vram() -> None:
+    """Libera VRAM de Ollama antes de RVC (misma GPU)."""
+    try:
+        with httpx.Client(timeout=httpx.Timeout(8.0)) as client:
+            client.post(
+                f"{OLLAMA_URL}/api/chat",
+                json={
+                    "model": OLLAMA_MODEL,
+                    "stream": False,
+                    "keep_alive": 0,
+                    "messages": [{"role": "user", "content": "."}],
+                    "options": {"num_predict": 1},
+                },
+            )
+        log.info("Ollama VRAM liberada (keep_alive=0) antes de RVC")
+    except Exception as e:
+        log.debug("Ollama release VRAM: %s", e)
+
+
 async def ask_ollama(user_text: str, *, use_history: bool = False) -> dict:
-    system_content = SYSTEM_PROMPT
+    system_content = build_system_prompt()
     if ha.ha_enabled():
-        devices = await asyncio.to_thread(ha.devices_prompt)
+        devices = await asyncio.to_thread(ha.devices_prompt, OLLAMA_HA_MAX_DEVICES)
         if devices:
             system_content += HOME_PROMPT.format(devices=devices)
 
@@ -627,16 +767,25 @@ async def ask_ollama(user_text: str, *, use_history: bool = False) -> dict:
         messages.extend(_conversation_history)
     messages.append({"role": "user", "content": user_text})
 
-    payload = {
-        "model": OLLAMA_MODEL,
-        "stream": False,
-        "format": "json",
-        "messages": messages,
-    }
-    async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
-        r.raise_for_status()
-        content = r.json()["message"]["content"]
+    payload = _ollama_chat_payload(messages)
+    try:
+        t0 = time.monotonic()
+        async with httpx.AsyncClient(timeout=_ollama_http_timeout()) as client:
+            r = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
+            r.raise_for_status()
+            content = r.json()["message"]["content"]
+        log.info("ollama: %.1fs model=%s", time.monotonic() - t0, OLLAMA_MODEL)
+    except httpx.TimeoutException:
+        log.warning("ollama timeout after %.0fs (%s)", OLLAMA_TIMEOUT_S, OLLAMA_URL)
+        return ollama_fallback(
+            "Mi CPU carnosa tarda mucho. Â¿Ollama estÃ¡ corriendo en la PC, bolsa de carne?"
+        )
+    except httpx.ConnectError:
+        log.warning("ollama connect failed (%s)", OLLAMA_URL)
+        return ollama_fallback("No llego a Ollama en la PC. Â¿EstÃ¡ encendido ollama serve?")
+    except httpx.HTTPStatusError as e:
+        log.warning("ollama HTTP %s: %s", e.response.status_code, e.response.text[:200])
+        return ollama_fallback("Ollama respondiÃ³ raro. Revisa el modelo en la PC.")
 
     try:
         data = parse_ollama_json(content)
@@ -662,13 +811,22 @@ async def ask_ollama(user_text: str, *, use_history: bool = False) -> dict:
         hinted = emotion_from_face_command(user_text)
         if hinted:
             emotion = hinted
-    elif wants_sing(user_text):
+    elif wants_sing(user_text) and SINGING_ENABLED:
         speak = True
         sing = True
         if emotion == "neutral":
             emotion = "happy"
     elif not reply:
         speak = False
+
+    if not SINGING_ENABLED:
+        sing = False
+
+    if sing and reply:
+        reply = await expand_sing_lyrics(reply, user_text)
+
+    if reply:
+        reply = sanitize_speech_text(reply)
 
     result = {
         "emotion": emotion,
@@ -703,21 +861,31 @@ async def ask_ollama(user_text: str, *, use_history: bool = False) -> dict:
 
 @app.get("/health")
 async def health():
+    """Siempre responde si el servidor esta arriba (no espera Ollama/RVC)."""
+    payload: dict = {
+        "status": "ok",
+        "whisper": WHISPER_MODEL,
+        "tts_rvc": {
+            "enabled": TTS_RVC_ENABLED,
+            "configured": sing.singing_configured() if TTS_RVC_ENABLED else False,
+            "applio": sing.tts_rvc_runtime_available() if TTS_RVC_ENABLED else False,
+            "guide": os.environ.get("TTS_RVC_GUIDE", "edge"),
+            "rvc_model": sing.RVC_MODEL_PATH or None,
+        },
+        "home_assistant": "enabled" if ha.ha_enabled() else "disabled",
+    }
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
+        async with httpx.AsyncClient(timeout=3.0) as client:
             r = await client.get(f"{OLLAMA_URL}/api/tags")
             r.raise_for_status()
-        ha_devices = await asyncio.to_thread(ha.controllable_devices) if ha.ha_enabled() else []
-        return {
-            "status": "ok",
-            "ollama": "ok",
-            "model": OLLAMA_MODEL,
-            "whisper": WHISPER_MODEL,
-            "home_assistant": "enabled" if ha.ha_enabled() else "disabled",
-            "ha_devices": len(ha_devices),
-        }
+        payload["ollama"] = "ok"
+        payload["model"] = OLLAMA_MODEL
+        if ha.ha_enabled():
+            ha_devices = await asyncio.to_thread(ha.controllable_devices)
+            payload["ha_devices"] = len(ha_devices)
     except Exception as e:
-        return JSONResponse(status_code=503, content={"status": "degraded", "ollama": str(e)})
+        payload["ollama"] = f"unavailable: {e}"
+    return payload
 
 
 @app.post("/chat")
@@ -759,15 +927,389 @@ async def wake_check(request: Request):
     if len(wav_bytes) < 400:
         return {"wake": False, "heard": ""}
     phrase = request.headers.get("X-Wake-Phrase", "")
+    dur, peak, rms = _wav_metrics(wav_bytes)
+    if not wav_has_speech(wav_bytes, min_peak=MIN_WAKE_PEAK, min_rms=MIN_WAKE_RMS):
+        log.info(
+            "wake-check rejected quiet audio dur=%.1fs peak=%d rms=%.0f (need peak>=%d rms>=%d)",
+            dur,
+            peak,
+            rms,
+            MIN_WAKE_PEAK,
+            MIN_WAKE_RMS,
+        )
+        return {"wake": False, "heard": "", "command": ""}
+
+    # Sin prompt sesgado a "hola asistente": en silencio Whisper alucinaba la wake phrase.
     text = await transcribe_wav(
         wav_bytes,
         language="es",
-        initial_prompt=(phrase.capitalize() + ".") if phrase else "Hola asistente.",
-        beam_size=1,
+        initial_prompt="EspaÃ±ol.",
+        beam_size=2,
     )
     wake = is_wake_phrase(text, phrase)
-    log.info("wake-check heard='%s' phrase='%s' wake=%s", text, phrase, wake)
-    return {"wake": wake, "heard": text}
+    command = strip_wake_phrase(text, phrase) if wake else ""
+    if wake and len(command) < 3:
+        command = ""
+    log.info("wake-check heard='%s' phrase='%s' wake=%s command='%s'", text, phrase, wake, command)
+    return {"wake": wake, "heard": text, "command": command}
+
+
+SING_LYRICS_PROMPT = (
+    "Escribe SOLO la letra de una canciÃ³n en espaÃ±ol para cantar en voz alta.\n"
+    "Requisitos: 6 a 8 lÃ­neas; cada lÃ­nea 5-10 palabras; rimas o ritmo claros; "
+    "tono alegre robot tierno-sarcÃ¡stico; sin tÃ­tulo ni explicaciÃ³n; "
+    "cada lÃ­nea en una lÃ­nea nueva."
+)
+
+SING_LYRICS_MIN_CHARS = int(os.environ.get("SING_LYRICS_MIN_CHARS", "140"))
+
+
+async def _ollama_plain_text(prompt: str, *, timeout: float | None = None) -> str:
+    messages = [
+        {
+            "role": "system",
+            "content": "Respondes Ãºnicamente con el texto pedido, sin markdown ni JSON.",
+        },
+        {"role": "user", "content": prompt},
+    ]
+    payload = _ollama_chat_payload(messages, json_format=False)
+    read_timeout = timeout if timeout is not None else OLLAMA_TIMEOUT_S
+    http_timeout = httpx.Timeout(connect=5.0, read=read_timeout, write=15.0, pool=5.0)
+    async with httpx.AsyncClient(timeout=http_timeout) as client:
+        r = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
+        r.raise_for_status()
+        text = r.json()["message"]["content"].strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:\w+)?\s*", "", text)
+        text = re.sub(r"\s*```\s*$", "", text)
+    return text.strip()
+
+
+def _lyrics_line_count(text: str) -> int:
+    parts = re.split(r"[\n.!?;]+", text)
+    return len([p for p in parts if len(p.strip()) >= 4])
+
+
+async def expand_sing_lyrics(lyrics: str, topic: str = "") -> str:
+    """Ensure enough lines/chars for a ~25-40s sung guide track."""
+    lyrics = lyrics.strip()
+    if len(lyrics) >= SING_LYRICS_MIN_CHARS and _lyrics_line_count(lyrics) >= 5:
+        return lyrics
+    seed = (topic or lyrics or "robots y humanos").strip()
+    prompt = f"{SING_LYRICS_PROMPT}\n\nTema: {seed}"
+    if lyrics:
+        prompt += f"\nIdea inicial (expÃ¡ndela, no la dejes en una sola frase): {lyrics}"
+    try:
+        expanded = await _ollama_plain_text(prompt)
+        if len(expanded) > len(lyrics) and _lyrics_line_count(expanded) >= 3:
+            log.info("sing lyrics expanded %d -> %d chars", len(lyrics), len(expanded))
+            return expanded
+    except Exception as e:
+        log.warning("sing lyrics expansion failed: %s", e)
+    return lyrics
+
+
+async def _resolve_sing_lyrics(body: dict) -> tuple[str, str]:
+    """Return (lyrics, emotion). Generates via Ollama when only topic is given."""
+    lyrics = (body.get("lyrics") or body.get("text") or "").strip()
+    topic = (body.get("topic") or "").strip()
+    emotion = (body.get("emotion") or "happy").strip().lower()
+    if emotion not in EMOTIONS:
+        emotion = "happy"
+
+    if not lyrics and topic:
+        result = await ask_ollama(f"{SING_LYRICS_PROMPT}\nTema: {topic}")
+        lyrics = (result.get("reply") or "").strip()
+        if result.get("emotion") in EMOTIONS:
+            emotion = result["emotion"]
+
+    if lyrics and body.get("expand", True):
+        lyrics = await expand_sing_lyrics(lyrics, topic or lyrics)
+
+    return lyrics, emotion
+
+
+SERVER_DIR = Path(__file__).resolve().parent
+SING_TEST_HTML = SERVER_DIR / "sing_test.html"
+ADMIN_HTML = SERVER_DIR / "admin.html"
+_DEBUG_AUDIO_NAMES = frozenset(
+    {
+        "last_sing_guide.wav",
+        "last_sing_rvc.wav",
+        "last_sing_esp32.wav",
+        "last_converse.wav",
+    }
+)
+
+
+async def _render_agent_sing_wav(body: dict) -> tuple[str, str, bytes]:
+    """Shared sing pipeline for ESP stream and browser preview."""
+    lyrics, emotion = await _resolve_sing_lyrics(body)
+    if not lyrics:
+        raise ValueError("missing 'lyrics'/'text' or 'topic'")
+
+    if not sing.singing_configured():
+        raise sing.SingingNotConfigured(
+            "RVC_MODEL_PATH missing â€” set RVC_MODEL_PATH (and RVC_INDEX_PATH)"
+        )
+    if not sing.rvc_runtime_available() and not body.get("skip_rvc"):
+        raise sing.SingingDependencyError(
+            "RVC runtime missing â€” run server/install-rvc.ps1 (Python 3.11 venv)"
+        )
+
+    f0_up_key = int(body.get("f0_up_key", body.get("pitch_shift", 0)))
+    index_rate = body.get("index_rate")
+    index_rate_f = float(index_rate) if index_rate is not None else None
+    skip_rvc = bool(body.get("skip_rvc", False))
+
+    wav_bytes = await sing.render_singing_wav(
+        lyrics,
+        f0_up_key=f0_up_key,
+        index_rate=index_rate_f,
+        skip_rvc=skip_rvc,
+    )
+    return lyrics, emotion, wav_bytes
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page():
+    """Panel de administraciÃ³n: personalidad, TTS, enlace al ESP32."""
+    if not ADMIN_HTML.is_file():
+        return HTMLResponse("<h1>admin.html not found</h1>", status_code=404)
+    return HTMLResponse(ADMIN_HTML.read_text(encoding="utf-8"))
+
+
+@app.get("/api/admin/config")
+async def admin_config_get():
+    env = {
+        "ollama_model": OLLAMA_MODEL,
+        "tts_engine": os.environ.get("TTS_ENGINE", "sapi"),
+        "edge_voice": os.environ.get("EDGE_TTS_VOICE", "es-MX-DaliaNeural"),
+        "singing_enabled": SINGING_ENABLED,
+        "ha_enabled": ha.ha_enabled(),
+    }
+    return srv_cfg.admin_snapshot(env)
+
+
+@app.post("/api/admin/config")
+async def admin_config_post(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid json"})
+    allowed = {"personality", "custom_prompt", "ollama_model", "tts_engine", "edge_voice", "bender_pitch", "bender_index_rate", "bender_protect"}
+    updates = {k: body[k] for k in allowed if k in body}
+    cfg = srv_cfg.save(updates)
+    return {**srv_cfg.admin_snapshot({
+        "ollama_model": OLLAMA_MODEL,
+        "tts_engine": os.environ.get("TTS_ENGINE", "sapi"),
+        "edge_voice": os.environ.get("EDGE_TTS_VOICE", "es-MX-DaliaNeural"),
+        "singing_enabled": SINGING_ENABLED,
+        "ha_enabled": ha.ha_enabled(),
+    }), "ok": True, "saved": cfg}
+
+
+@app.post("/api/admin/reset-memory")
+async def admin_reset_memory():
+    path = agent_state._PATH
+    try:
+        if path.is_file():
+            path.unlink()
+        return {"ok": True}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/sing-test", response_class=HTMLResponse)
+async def sing_test_page():
+    """Browser UI to test /agent/sing without the ESP32."""
+    if not SINGING_ENABLED:
+        return HTMLResponse(
+            "<h1>Canto desactivado</h1><p>ENABLE_SINGING=0 â€” solo TTS. "
+            "Reinicia con <code>$env:ENABLE_SINGING=\"1\"</code> si lo necesitas.</p>",
+            status_code=503,
+        )
+    if not SING_TEST_HTML.is_file():
+        return HTMLResponse("<h1>sing_test.html not found</h1>", status_code=404)
+    return HTMLResponse(SING_TEST_HTML.read_text(encoding="utf-8"))
+
+
+@app.get("/debug_audio/{filename}")
+async def debug_audio_file(filename: str):
+    if filename not in _DEBUG_AUDIO_NAMES:
+        return JSONResponse(status_code=404, content={"error": "unknown file"})
+    path = SERVER_DIR / "debug_audio" / filename
+    if not path.is_file():
+        return JSONResponse(status_code=404, content={"error": "not generated yet â€” run Cantar first"})
+    return FileResponse(path, media_type="audio/wav", filename=filename)
+
+
+@app.post("/agent/sing/preview-guide")
+async def agent_sing_preview_guide(
+    guide: UploadFile = File(..., description="Vocal guide WAV (mono/stereo, any SR)"),
+    f0_up_key: int = Form(0),
+    index_rate: float = Form(0.75),
+):
+    """RVC only with uploaded guide â€” same workflow as RVC WebUI / Discord demos."""
+    if not SINGING_ENABLED:
+        return JSONResponse(status_code=503, content={"error": "singing disabled (ENABLE_SINGING=0)"})
+    if not sing.singing_configured():
+        return JSONResponse(
+            status_code=503,
+            content={"error": "RVC_MODEL_PATH missing"},
+        )
+    if not sing.rvc_runtime_available():
+        return JSONResponse(
+            status_code=503,
+            content={"error": "RVC runtime missing â€” install-rvc.ps1"},
+        )
+    try:
+        raw = await guide.read()
+        if not raw or not raw.startswith(b"RIFF"):
+            return JSONResponse(status_code=400, content={"error": "invalid WAV file"})
+        wav_bytes = await sing.render_rvc_from_guide_wav(
+            raw,
+            f0_up_key=f0_up_key,
+            index_rate=index_rate,
+        )
+    except Exception as e:
+        log.exception("agent/sing/preview-guide failed")
+        return JSONResponse(status_code=503, content={"error": str(e)[-800:]})
+
+    peak = 0
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+            pcm = wf.readframes(wf.getnframes())
+            peak = max(abs(int.from_bytes(pcm[i : i + 2], "little", signed=True)) for i in range(0, len(pcm), 2)) if pcm else 0
+            dur_s = wf.getnframes() / float(wf.getframerate())
+    except Exception:
+        dur_s = 0.0
+
+    return Response(
+        content=wav_bytes,
+        media_type="audio/wav",
+        headers={
+            "X-Sing-Duration-S": f"{dur_s:.2f}",
+            "X-Sing-Peak": str(peak),
+            "X-Sing-Mode": "guide-upload",
+        },
+    )
+
+
+@app.post("/agent/sing/preview")
+async def agent_sing_preview(body: dict):
+    """Plain WAV for browser testing (no AGNT header)."""
+    if not SINGING_ENABLED:
+        return JSONResponse(status_code=503, content={"error": "singing disabled (ENABLE_SINGING=0)"})
+    try:
+        lyrics, emotion, wav_bytes = await _render_agent_sing_wav(body)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except sing.SingingDependencyError as e:
+        return JSONResponse(status_code=503, content={"error": str(e)})
+    except sing.SingingNotConfigured as e:
+        return JSONResponse(status_code=503, content={"error": str(e)})
+    except RuntimeError as e:
+        log.error("agent/sing/preview RVC failed: %s", e)
+        return JSONResponse(
+            status_code=503,
+            content={"error": "RVC conversion failed", "detail": str(e)[-800:]},
+        )
+    except Exception as e:
+        log.exception("agent/sing/preview failed")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    import numpy as np
+
+    pcm = np.frombuffer(wav_bytes[44:], dtype=np.int16) if len(wav_bytes) > 44 else np.array([], dtype=np.int16)
+    peak = int(np.max(np.abs(pcm))) if pcm.size else 0
+    duration_s = len(pcm) / sing.TTS_SAMPLE_RATE if pcm.size else 0.0
+
+    log.info(
+        "agent/sing/preview emotion=%s lyrics=%r %.1fs peak=%d",
+        emotion,
+        lyrics[:60],
+        duration_s,
+        peak,
+    )
+
+    return Response(
+        content=wav_bytes,
+        media_type="audio/wav",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Sing-Emotion": emotion,
+            "X-Sing-Duration-S": f"{duration_s:.2f}",
+            "X-Sing-Peak": str(peak),
+        },
+    )
+
+
+@app.post("/agent/sing")
+async def agent_sing(body: dict):
+    """RVC singing pipeline: guide vocal â†’ voice conversion â†’ streamed ESP32 WAV.
+
+    Body:
+      lyrics | text   â€” song lyrics (from Ollama or client)
+      topic           â€” if no lyrics, Ollama writes short lyrics for this theme
+      emotion         â€” face animation hint (default happy)
+      f0_up_key       â€” semitone pitch shift for RVC (alias: pitch_shift)
+      index_rate      â€” RVC feature index strength (optional)
+
+    Response: application/octet-stream
+      [AGNT header][JSON metadata][WAV chunks]
+    Initial JSON includes {"singing": true, "emotion": "..."}.
+    """
+    if not SINGING_ENABLED:
+        return JSONResponse(status_code=503, content={"error": "singing disabled (ENABLE_SINGING=0)"})
+    try:
+        lyrics, emotion, wav_bytes = await _render_agent_sing_wav(body)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except sing.SingingDependencyError as e:
+        log.error("Singing deps missing: %s", e)
+        return JSONResponse(status_code=503, content={"error": str(e)})
+    except sing.SingingNotConfigured as e:
+        return JSONResponse(status_code=503, content={"error": str(e)})
+    except RuntimeError as e:
+        log.error("agent/sing RVC failed: %s", e)
+        return JSONResponse(
+            status_code=503,
+            content={"error": "RVC conversion failed", "detail": str(e)[-800:]},
+        )
+    except Exception as e:
+        log.exception("agent/sing failed")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    f0_up_key = int(body.get("f0_up_key", body.get("pitch_shift", 0)))
+
+    log.info(
+        "agent/sing emotion=%s f0_up_key=%d lyrics=%r",
+        emotion,
+        f0_up_key,
+        lyrics[:80],
+    )
+
+    payload = sing.build_singing_payload(
+        wav_bytes,
+        emotion=emotion,
+        f0_up_key=f0_up_key,
+    )
+    log.info(
+        "agent/sing ready stream=%d bytes (%.1fs audio)",
+        len(payload),
+        (len(wav_bytes) - 44) / (2 * sing.TTS_SAMPLE_RATE),
+    )
+
+    return Response(
+        content=payload,
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Agent-Sing": "1",
+            "X-Agent-Emotion": emotion,
+        },
+    )
 
 
 @app.post("/tts")
@@ -775,17 +1317,81 @@ async def tts(body: dict):
     text = body.get("text", "").strip()
     if not text:
         return JSONResponse(status_code=400, content={"error": "missing 'text'"})
-    sing = bool(body.get("sing", False))
-    log.info("tts sing=%s: %s", sing, text)
+    sing_flag = bool(body.get("sing", False))
+    text = sanitize_speech_text(text)
+    log.info("tts sing=%s: %s", sing_flag, text)
+    t0 = time.monotonic()
+    rvc_timeout = float(os.environ.get("TTS_RVC_TIMEOUT_S", "180"))
+    use_applio_unified = (
+        TTS_RVC_ENABLED
+        and sing.singing_configured()
+        and sing.tts_rvc_runtime_available()
+        and os.environ.get("TTS_RVC_GUIDE", "edge").lower() == "edge"
+        and sing.TTS_RVC_ENGINE == "applio"
+    )
     try:
-        wav = await synthesize_wav_16k(text, sing=sing)
+        if use_applio_unified:
+            log.info("tts pipeline: Applio unificado (edge+RVC mismo proceso)")
+            await asyncio.to_thread(release_ollama_vram)
+            wav = await asyncio.wait_for(
+                asyncio.to_thread(sing.render_tts_applio_from_text, text, timeout=rvc_timeout),
+                timeout=rvc_timeout + 10,
+            )
+            log.info(
+                "TTS Applio %.1fs (%d bytes) | total /tts %.1fs",
+                time.monotonic() - t0,
+                len(wav),
+                time.monotonic() - t0,
+            )
+        elif TTS_RVC_ENABLED and sing.singing_configured():
+            from tts_engine import synthesize_rvc_guide_wav
+
+            wav = await asyncio.to_thread(synthesize_rvc_guide_wav, text, sing_flag)
+            log.info(
+                "TTS guia %s %.1fs (%d bytes)",
+                os.environ.get("TTS_RVC_GUIDE", "edge"),
+                time.monotonic() - t0,
+                len(wav),
+            )
+            if sing.tts_rvc_runtime_available():
+                try:
+                    trvc = time.monotonic()
+                    await asyncio.to_thread(release_ollama_vram)
+                    wav = await asyncio.wait_for(
+                        sing.render_tts_with_rvc(wav, timeout=rvc_timeout),
+                        timeout=rvc_timeout + 10,
+                    )
+                    log.info(
+                        "TTS RVC %.1fs (%d bytes) | total /tts %.1fs",
+                        time.monotonic() - trvc,
+                        len(wav),
+                        time.monotonic() - t0,
+                    )
+                except TimeoutError:
+                    log.warning("TTS RVC timeout %.0fs â€” enviando guia sin RVC", rvc_timeout)
+                except Exception as e:
+                    log.warning("TTS RVC fallo (%s) â€” usando voz guia sin RVC", e)
+        else:
+            wav = await synthesize_wav_16k(text, sing=sing_flag)
     except ModuleNotFoundError as e:
         log.error("TTS dependency missing: %s", e)
-        return JSONResponse(status_code=503, content={"error": "TTS deps missing — run server/start.ps1"})
+        return JSONResponse(status_code=503, content={"error": "TTS deps missing â€” run server/start.ps1"})
+    except TimeoutError:
+        log.warning("TTS timeout %.0fs", rvc_timeout)
+        return JSONResponse(status_code=504, content={"error": "TTS timeout"})
     except Exception as e:
         log.exception("TTS failed")
         return JSONResponse(status_code=500, content={"error": str(e)})
-    return Response(content=wav, media_type="audio/wav")
+
+    return Response(
+        content=wav,
+        media_type="audio/wav",
+        headers={
+            "Content-Length": str(len(wav)),
+            "Connection": "close",
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @app.post("/converse")
@@ -795,6 +1401,24 @@ async def converse(request: Request):
         return JSONResponse(status_code=400, content={"error": "audio too short"})
     log.info("converse: received %d bytes of audio", len(wav_bytes))
     save_last_capture(wav_bytes, "converse")
+
+    dur, peak, rms = _wav_metrics(wav_bytes)
+    if not wav_has_speech(wav_bytes, min_peak=MIN_CONVERSE_PEAK, min_rms=MIN_CONVERSE_RMS):
+        log.info(
+            "converse: silent/quiet capture ignored dur=%.1fs peak=%d rms=%.0f",
+            dur,
+            peak,
+            rms,
+        )
+        return {
+            "emotion": "neutral",
+            "reply": "",
+            "heard": "",
+            "sing": False,
+            "speak": False,
+            "sound_effect": "none",
+        }
+
     wav_for_stt = normalize_wav_bytes(wav_bytes)
     if wav_for_stt is not wav_bytes:
         norm_path = CAPTURE_DIR / "last_converse_normalized.wav"
@@ -810,16 +1434,34 @@ async def converse(request: Request):
     log.info("transcribed: %s", text)
 
     if not text:
+        log.info("converse: empty transcription â€” ignored (no TTS)")
         return {
-            "emotion": "surprised",
-            "reply": "No te escuché bien, repetime?",
+            "emotion": "neutral",
+            "reply": "",
             "heard": "",
             "sing": False,
-            "speak": True,
-            "sound_effect": "error",
+            "speak": False,
+            "sound_effect": "none",
         }
 
-    result = await ask_ollama(text, use_history=True)
+    if is_wake_phrase(text):
+        stripped = strip_wake_phrase(text)
+        if stripped:
+            log.info("stripped wake phrase -> command: %s", stripped)
+            text = stripped
+        elif len(normalize_heard(text)) < 24:
+            return {
+                "emotion": "happy",
+                "reply": "Â¿QuÃ© querÃ©s, cara de carne? Habla.",
+                "heard": text,
+                "sing": False,
+                "speak": True,
+                "sound_effect": "none",
+            }
+
+    result = try_quick_reply(text)
+    if result is None:
+        result = await ask_ollama(text, use_history=True)
     result["heard"] = text
     log.info(
         "reply [%s] speak=%s sing=%s sfx=%s: %s",
@@ -830,3 +1472,4 @@ async def converse(request: Request):
         result["reply"],
     )
     return result
+

@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>agenteIA — administración</title>
+  <style>
+    :root {
+      --bg: #0f1419; --panel: #1a2332; --accent: #3dd6c6; --accent-dim: #2a9d8f;
+      --text: #e8eef4; --muted: #8b9cb3; --danger: #ff6b6b; --warn: #ffd166;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(ellipse at 20% 0%, #1e3a5f 0%, var(--bg) 55%);
+      color: var(--text); padding: 1.25rem;
+    }
+    .wrap { max-width: 820px; margin: 0 auto; }
+    h1 { font-size: 1.5rem; margin: 0 0 .2rem; }
+    .sub { color: var(--muted); font-size: .9rem; margin-bottom: 1.25rem; }
+    .tabs { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .tabs button {
+      background: var(--panel); border: 1px solid #2a3548; color: var(--text);
+      border-radius: 8px; padding: .5rem 1rem; cursor: pointer; font-size: .9rem;
+    }
+    .tabs button.active { border-color: var(--accent); color: var(--accent); }
+    .panel {
+      background: var(--panel); border: 1px solid #2a3548; border-radius: 12px;
+      padding: 1.2rem; margin-bottom: 1rem; display: none;
+    }
+    .panel.active { display: block; }
+    .panel h2 { font-size: .95rem; margin: 0 0 .85rem; color: var(--accent); }
+    label { display: block; font-size: .78rem; color: var(--muted); margin-bottom: .3rem; }
+    select, input[type=text], textarea {
+      width: 100%; background: #0d1117; border: 1px solid #334155; border-radius: 8px;
+      color: var(--text); padding: .55rem .7rem; font-size: .95rem; font-family: inherit;
+    }
+    textarea { min-height: 100px; resize: vertical; }
+    .hint { font-size: .8rem; color: var(--muted); margin-top: .35rem; line-height: 1.4; }
+    .grid { display: grid; gap: 1rem; grid-template-columns: 1fr 1fr; }
+    @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+    button.primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      color: #0a1628; border: none; border-radius: 10px; padding: .8rem 1.5rem;
+      font-size: 1rem; font-weight: 700; cursor: pointer; width: 100%; margin-top: .5rem;
+    }
+    button.primary:disabled { opacity: .5; cursor: not-allowed; }
+    button.danger {
+      background: transparent; border: 1px solid var(--danger); color: var(--danger);
+      border-radius: 10px; padding: .65rem 1rem; font-size: .9rem; cursor: pointer; width: 100%; margin-top: .5rem;
+    }
+    .msg { padding: .65rem .85rem; border-radius: 8px; font-size: .88rem; margin-top: .75rem; display: none; }
+    .msg.ok { display: block; background: #0d3328; color: #7dffc8; border: 1px solid #1a6b52; }
+    .msg.err { display: block; background: #3a1515; color: #ffb4b4; border: 1px solid #6b2a2a; }
+    .preset-desc { font-size: .82rem; color: var(--muted); margin: .25rem 0 .75rem; }
+    a { color: var(--accent); }
+    ul.phrases { margin: .5rem 0; padding-left: 1.2rem; color: var(--muted); font-size: .85rem; }
+    hr.sep { border: none; border-top: 1px solid #2a3548; margin: 1.25rem 0; }
+    .slider-row { margin-bottom: 1rem; }
+    .slider-row .slider-label {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      font-size: .82rem; color: var(--muted); margin-bottom: .4rem;
+    }
+    .slider-row .slider-label strong { color: var(--warn); font-size: 1rem; min-width: 3.5rem; text-align: right; }
+    input[type=range] {
+      -webkit-appearance: none; width: 100%; height: 6px;
+      background: #2a3548; border-radius: 3px; outline: none; cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 18px; height: 18px;
+      background: var(--warn); border-radius: 50%; cursor: pointer;
+    }
+    #ttsAudio { width: 100%; margin-top: .75rem; border-radius: 8px; display: none; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>agenteIA — administración</h1>
+  <p class="sub">Cerebro (servidor) y enlace al <a href="#" id="deviceLink">panel del dispositivo ESP32</a>.</p>
+
+  <div class="tabs">
+    <button type="button" class="tab active" data-tab="brain">Cerebro</button>
+    <button type="button" class="tab" data-tab="voice">Voz TTS</button>
+    <button type="button" class="tab" data-tab="bender">Voz Bender RVC</button>
+    <button type="button" class="tab" data-tab="device">Dispositivo</button>
+  </div>
+
+  <!-- CEREBRO -->
+  <div id="panel-brain" class="panel active">
+    <h2>Personalidad</h2>
+    <label for="personality">Preset de personaje</label>
+    <select id="personality"></select>
+    <p class="preset-desc" id="personalityDesc"></p>
+    <label for="customPrompt">Instrucciones adicionales (opcional)</label>
+    <textarea id="customPrompt" placeholder="Ej: llamame Jefe, sé más breve, menciona que te gusta el café..."></textarea>
+    <p class="hint">Se añaden al prompt del preset. Máx. ~2000 caracteres.</p>
+    <div class="grid" style="margin-top:1rem">
+      <div>
+        <label for="ollamaModel">Modelo Ollama (vacío = env)</label>
+        <input type="text" id="ollamaModel" placeholder="qwen2.5:7b" />
+      </div>
+      <div>
+        <label>Estado</label>
+        <p class="hint" id="brainStatus">—</p>
+      </div>
+    </div>
+    <button type="button" class="danger" id="resetMemoryBtn">Borrar memoria del personaje</button>
+    <button type="button" class="danger" id="resetChatBtn" style="margin-top:.5rem">Reiniciar historial de chat</button>
+  </div>
+
+  <!-- VOZ TTS -->
+  <div id="panel-voice" class="panel">
+    <h2>Motor TTS base (guía de voz)</h2>
+    <div class="grid">
+      <div>
+        <label for="ttsEngine">Motor TTS</label>
+        <select id="ttsEngine">
+          <option value="">(predeterminado del servidor)</option>
+        </select>
+      </div>
+      <div>
+        <label for="edgeVoice">Voz Edge (si motor = edge)</label>
+        <select id="edgeVoice">
+          <option value="">(predeterminado)</option>
+        </select>
+      </div>
+    </div>
+    <p class="hint" style="margin-top:.75rem">sapi = Windows SAPI · edge = Microsoft neural · piper = local ONNX</p>
+  </div>
+
+  <!-- BENDER RVC -->
+  <div id="panel-bender" class="panel">
+    <h2>Parámetros de conversión RVC</h2>
+    <p class="hint" style="margin-bottom:1.2rem">
+      Controlan cómo bender_server.py convierte la voz. Prueba aquí y presiona
+      <strong style="color:var(--accent)">Guardar configuración</strong> para que queden activos en el sistema.
+    </p>
+
+    <div class="slider-row">
+      <div class="slider-label">
+        <span>F0 Up Key (tono)<br><small>Sube o baja el tono en semitonos</small></span>
+        <strong id="pitchVal">10</strong>
+      </div>
+      <input type="range" id="benderPitch" min="-12" max="24" step="1" value="10">
+    </div>
+
+    <div class="slider-row">
+      <div class="slider-label">
+        <span>Index Rate — influencia del .index<br><small>0 = ninguna, 1 = máximo timbre Bender</small></span>
+        <strong id="indexRateVal">1.00</strong>
+      </div>
+      <input type="range" id="benderIndexRate" min="0" max="1" step="0.01" value="1.0">
+    </div>
+
+    <div class="slider-row">
+      <div class="slider-label">
+        <span>Protect — protege consonantes sin voz<br><small>Reduce artefactos (0.33 recomendado)</small></span>
+        <strong id="protectVal">0.33</strong>
+      </div>
+      <input type="range" id="benderProtect" min="0" max="0.5" step="0.01" value="0.33">
+    </div>
+
+    <hr class="sep">
+    <h2>Prueba de voz</h2>
+    <p class="hint" style="margin-bottom:.75rem">El botón guarda automáticamente los sliders y genera el audio. También puedes usar <strong style="color:var(--accent)">Guardar configuración</strong> para que queden activos en el sistema sin probar.</p>
+    <label for="ttsTestText">Texto de prueba</label>
+    <textarea id="ttsTestText" style="min-height:70px">¡Voy a crear mi propio parque de atracciones, con juegos de azar y mujerzuelas! Es más, ¡olvídate de los juegos de azar!</textarea>
+    <button type="button" class="primary" id="ttsTestBtn">▶ Probar voz Bender</button>
+    <p class="hint" id="ttsTestStatus" style="margin-top:.6rem"></p>
+    <audio id="ttsAudio" controls></audio>
+  </div>
+
+  <!-- DISPOSITIVO -->
+  <div id="panel-device" class="panel">
+    <h2>ESP32</h2>
+    <label for="espIp">IP del dispositivo</label>
+    <input type="text" id="espIp" placeholder="192.168.0.50" />
+    <p class="hint">La IP aparece en el monitor serial al conectar WiFi o en el panel web del ESP.</p>
+    <button type="button" class="primary" id="openDeviceBtn" style="margin-top:.75rem">Abrir panel del dispositivo</button>
+    <h2 style="margin-top:1.25rem">Frases gatillo (sincronizadas con firmware)</h2>
+    <ul class="phrases" id="wakeList"></ul>
+  </div>
+
+  <button type="button" class="primary" id="saveBtn">Guardar configuración</button>
+  <div class="msg" id="msg"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let cfg = {};
+
+// Tabs
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    $('panel-' + btn.dataset.tab).classList.add('active');
+  };
+});
+
+function showMsg(t, ok) {
+  const m = $('msg');
+  m.textContent = t;
+  m.className = 'msg ' + (ok ? 'ok' : 'err');
+}
+
+// Sliders live update
+$('benderPitch').oninput = () => $('pitchVal').textContent = $('benderPitch').value;
+$('benderIndexRate').oninput = () => $('indexRateVal').textContent = parseFloat($('benderIndexRate').value).toFixed(2);
+$('benderProtect').oninput = () => $('protectVal').textContent = parseFloat($('benderProtect').value).toFixed(2);
+
+async function load() {
+  const r = await fetch('/api/admin/config');
+  cfg = await r.json();
+
+  // Brain
+  const pSel = $('personality');
+  pSel.innerHTML = '';
+  for (const [k, v] of Object.entries(cfg.personalities || {})) {
+    const o = document.createElement('option');
+    o.value = k; o.textContent = v.label || k;
+    pSel.appendChild(o);
+  }
+  pSel.value = cfg.personality || 'bender';
+  $('customPrompt').value = cfg.custom_prompt || '';
+  $('ollamaModel').value = cfg.ollama_model_override || '';
+  updatePersonalityDesc();
+
+  // Voice TTS
+  const ttsSel = $('ttsEngine');
+  ttsSel.innerHTML = '<option value="">(predeterminado: ' + cfg.tts_engine + ')</option>';
+  (cfg.tts_engines || []).forEach(e => {
+    const o = document.createElement('option');
+    o.value = e; o.textContent = e; ttsSel.appendChild(o);
+  });
+  ttsSel.value = cfg.tts_engine_override || '';
+
+  const evSel = $('edgeVoice');
+  evSel.innerHTML = '<option value="">(predeterminado: ' + cfg.edge_voice + ')</option>';
+  (cfg.edge_voices || []).forEach(v => {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = v; evSel.appendChild(o);
+  });
+  evSel.value = cfg.edge_voice_override || '';
+
+  // Bender RVC
+  const pitch = cfg.bender_pitch != null ? cfg.bender_pitch : 10;
+  const ir    = cfg.bender_index_rate != null ? cfg.bender_index_rate : 1.0;
+  const pr    = cfg.bender_protect != null ? cfg.bender_protect : 0.33;
+  $('benderPitch').value = pitch;       $('pitchVal').textContent = pitch;
+  $('benderIndexRate').value = ir;      $('indexRateVal').textContent = parseFloat(ir).toFixed(2);
+  $('benderProtect').value = pr;        $('protectVal').textContent = parseFloat(pr).toFixed(2);
+
+  // Device
+  const wl = $('wakeList');
+  wl.innerHTML = '';
+  (cfg.wake_presets || []).forEach(p => {
+    const li = document.createElement('li'); li.textContent = p; wl.appendChild(li);
+  });
+  $('brainStatus').textContent =
+    'Canto: ' + (cfg.singing_enabled ? 'sí' : 'no') +
+    ' · Home Assistant: ' + (cfg.ha_enabled ? 'sí' : 'no') +
+    ' · Modelo activo: ' + cfg.ollama_model;
+
+  const savedIp = localStorage.getItem('agenteia_esp_ip') || '';
+  $('espIp').value = savedIp;
+  $('deviceLink').href = savedIp ? 'http://' + savedIp + '/' : '#';
+}
+
+function updatePersonalityDesc() {
+  const p = cfg.personalities?.[$('personality').value];
+  $('personalityDesc').textContent = p?.description || '';
+}
+$('personality').onchange = updatePersonalityDesc;
+
+// Save
+$('saveBtn').onclick = async () => {
+  const body = {
+    personality:       $('personality').value,
+    custom_prompt:     $('customPrompt').value,
+    ollama_model:      $('ollamaModel').value.trim(),
+    tts_engine:        $('ttsEngine').value,
+    edge_voice:        $('edgeVoice').value.trim(),
+    bender_pitch:      parseFloat($('benderPitch').value),
+    bender_index_rate: parseFloat($('benderIndexRate').value),
+    bender_protect:    parseFloat($('benderProtect').value),
+  };
+  try {
+    const r = await fetch('/api/admin/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    showMsg('Configuración guardada ✓', true);
+    load();
+  } catch (e) {
+    showMsg('Error: ' + e.message, false);
+  }
+};
+
+// TTS Test
+$('ttsTestBtn').onclick = async () => {
+  const text = $('ttsTestText').value.trim();
+  if (!text) { $('ttsTestStatus').textContent = 'Escribe algo primero.'; return; }
+  $('ttsTestBtn').disabled = true;
+  $('ttsTestStatus').textContent = '⏳ Aplicando parámetros...';
+  // Auto-guardar los params actuales de los sliders antes de probar
+  try {
+    await fetch('/api/admin/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bender_pitch:      parseFloat($('benderPitch').value),
+        bender_index_rate: parseFloat($('benderIndexRate').value),
+        bender_protect:    parseFloat($('benderProtect').value),
+      }),
+    });
+  } catch (_) {}
+  $('ttsTestStatus').textContent = '⏳ Generando audio Bender...';
+  $('ttsAudio').style.display = 'none';
+  $('ttsAudio').removeAttribute('src');
+  const t0 = Date.now();
+  try {
+    const r = await fetch('/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || r.status);
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    $('ttsAudio').src = url;
+    $('ttsAudio').style.display = 'block';
+    $('ttsAudio').play();
+    $('ttsTestStatus').textContent = '✅ Listo en ' + ((Date.now()-t0)/1000).toFixed(1) + 's';
+  } catch(e) {
+    $('ttsTestStatus').textContent = '❌ Error: ' + e.message;
+  } finally {
+    $('ttsTestBtn').disabled = false;
+  }
+};
+
+// Device
+$('openDeviceBtn').onclick = () => {
+  const ip = $('espIp').value.trim();
+  if (!ip) { showMsg('Indica la IP del ESP32', false); return; }
+  localStorage.setItem('agenteia_esp_ip', ip);
+  window.open('http://' + ip + '/', '_blank');
+};
+
+$('resetMemoryBtn').onclick = async () => {
+  if (!confirm('¿Borrar nombre, hechos y humor guardados del personaje?')) return;
+  const r = await fetch('/api/admin/reset-memory', { method: 'POST' });
+  showMsg(r.ok ? 'Memoria borrada' : 'Error al borrar', r.ok);
+};
+
+$('resetChatBtn').onclick = async () => {
+  if (!confirm('¿Reiniciar el historial de conversación con Ollama?')) return;
+  const r = await fetch('/converse/reset', { method: 'POST' });
+  showMsg(r.ok ? 'Historial reiniciado' : 'Error', r.ok);
+};
+
+$('espIp').onchange = () => {
+  const ip = $('espIp').value.trim();
+  if (ip) localStorage.setItem('agenteia_esp_ip', ip);
+  $('deviceLink').href = ip ? 'http://' + ip + '/' : '#';
+};
+
+load();
+</script>
+</body>
+</html>
