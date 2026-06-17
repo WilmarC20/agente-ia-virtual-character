@@ -398,7 +398,7 @@ $('espIp').onchange = () => {
 };
 
 async function loadOllamaModels() {
-  const sel = ollamaModel;
+  const sel = document.getElementById('ollamaModel');
   try {
     const r = await fetch('http://localhost:11434/api/tags');
     const j = await r.json();
@@ -416,7 +416,6 @@ async function loadOllamaModels() {
     sel.value = current;
   } catch(e) {
     sel.innerHTML = '<option value="">(Ollama no disponible)</option>';
-  }ption>';
   }
 }
 
