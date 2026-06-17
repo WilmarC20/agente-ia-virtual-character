@@ -470,11 +470,23 @@ load();
     input.value = '';
     bubble('user', text);
     const thinking = bubble('bot', '…', 'thinking');
+
+    // Tomar valores actuales del formulario (sin guardar)
+    const model      = (document.getElementById('ollamaModel')?.value || '').trim();
+    const basePrompt = (document.getElementById('personalityPrompt')?.value || '').trim();
+    const extraPrompt= (document.getElementById('customPrompt')?.value || '').trim();
+    let system_prompt = basePrompt;
+    if (extraPrompt) system_prompt += '\n\nINSTRUCCIONES ADICIONALES DEL USUARIO:\n' + extraPrompt;
+
+    const body = { text };
+    if (model)         body.model         = model;
+    if (system_prompt) body.system_prompt = system_prompt;
+
     try {
       const r = await fetch('/chat', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({text}),
+        body: JSON.stringify(body),
       });
       const j = await r.json();
       log.removeChild(thinking);
