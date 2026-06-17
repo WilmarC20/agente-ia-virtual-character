@@ -1,4 +1,4 @@
-﻿"""Singing pipeline: guide track (Bark / TTS) → RVC voice conversion → ESP32 PCM stream.
+"""Singing pipeline: guide track (Bark / TTS) → RVC voice conversion → ESP32 PCM stream.
 
 Environment (optional):
   RVC_MODEL_PATH      Path to character .pth
@@ -60,7 +60,7 @@ BARK_PYTHON = os.environ.get("BARK_PYTHON", RVC_PYTHON)
 BARK_WORKER_TIMEOUT_S = float(os.environ.get("BARK_WORKER_TIMEOUT_S", "600"))
 BARK_USE_DAEMON = os.environ.get("BARK_USE_DAEMON", "1") != "0"
 RVC_USE_DAEMON = os.environ.get("RVC_USE_DAEMON", "1") != "0"
-TTS_RVC_ENGINE = os.environ.get("TTS_RVC_ENGINE", "applio").lower()
+TTS_RVC_ENGINE = os.environ.get("TTS_RVC_ENGINE", "bender_http").lower()
 BENDER_SERVER_URL = os.environ.get("BENDER_SERVER_URL", "http://localhost:7860")
 
 STREAM_MAGIC = b"AGNT"
@@ -128,6 +128,9 @@ class SingingDependencyError(RuntimeError):
 
 
 def singing_configured() -> bool:
+    # bender_http no necesita RVC_MODEL_PATH local
+    if TTS_RVC_ENGINE == "bender_http":
+        return True
     return rvc_model_configured()
 
 
