@@ -1,4 +1,4 @@
-﻿"""Runtime admin config (personality, TTS, Ollama) â€” persisted in admin_config.json."""
+"""Runtime admin config (personality, TTS, Ollama) â€” persisted in admin_config.json."""
 
 from __future__ import annotations
 
@@ -97,6 +97,7 @@ _DEFAULT: dict = {
     "bender_pitch": 10,
     "bender_index_rate": 1.0,
     "bender_protect": 0.33,
+    "personality_prompts": {},
 }
 
 
@@ -118,7 +119,13 @@ def save(updates: dict) -> dict:
         cfg = _load_raw()
         for key in _DEFAULT:
             if key in updates:
-                cfg[key] = updates[key]
+                if key == "personality_prompts" and isinstance(updates[key], dict):
+                    # Merge instead of replace
+                    existing = cfg.get("personality_prompts") or {}
+                    existing.update(updates[key])
+                    cfg[key] = existing
+                else:
+                    cfg[key] = updates[key]
         if cfg.get("personality") not in PERSONALITIES:
             cfg["personality"] = "bender"
         if cfg.get("tts_engine") and cfg["tts_engine"] not in TTS_ENGINES:
@@ -136,10 +143,33 @@ def save(updates: dict) -> dict:
         return cfg
 
 
+_COMMON_PROMPT_SUFFIX = """\
+
+TEXTO PARA HABLAR (campo "reply"):
+- Español latino con tildes correctas (qué, cómo, súper, índice, también).
+- SIN emojis, SIN markdown (* # `), SIN URLs.
+- Escribí "40 por ciento de" en lugar de "40%"; no uses superíndices ni símbolos raros.
+- Solo palabras que suenen bien al leerlas en voz alta.
+
+Tus respuestas DEBEN ser cortas. DEBES responder ÚNICAMENTE en formato JSON estricto, sin \
+texto antes ni después, sin bloques markdown.
+
+Estructura obligatoria del JSON:
+{"emotion": "neutral" | "happy" | "sad" | "angry" | "surprised" | "thinking" | "sleepy" \
+| "love" | "excited" | "cool" | "confused" | "dizzy", \
+"reply": "Texto para el TTS", "speak": true | false, "sing": true | false, \
+"sound_effect": "none" | "beep" | "laugh" | "error" | "yawn" | "power_up" | "glitch"}
+"""
+
 def get_personality_prompt() -> str:
     cfg = load()
     pid = cfg.get("personality", "bender")
-    base = PERSONALITIES.get(pid, PERSONALITIES["bender"])["prompt"]
+    # Usar prompt personalizado si existe, sino el default
+    custom_prompts = cfg.get("personality_prompts", {})
+    if pid in custom_prompts and str(custom_prompts[pid]).strip():
+        base = str(custom_prompts[pid]).strip()
+    else:
+        base = PERSONALITIES.get(pid, PERSONALITIES["bender"])["prompt"]
     extra = (cfg.get("custom_prompt") or "").strip()
     if extra:
         base += "\n\nINSTRUCCIONES ADICIONALES DEL USUARIO:\n" + extra[:2000]
@@ -147,47 +177,6 @@ def get_personality_prompt() -> str:
     return base
 
 
-_COMMON_PROMPT_SUFFIX = """\
-
-TEXTO PARA HABLAR (campo "reply"):
-- EspaÃ±ol latino con tildes correctas (quÃ©, cÃ³mo, sÃºper, Ã­ndice, tambiÃ©n).
-- SIN emojis, SIN markdown (* # `), SIN URLs.
-- EscribÃ­ "40 por ciento de" en lugar de "40%"; no uses superÃ­ndices ni sÃ­mbolos raros.
-- Solo palabras que suenen bien al leerlas en voz alta.
-
-Tus respuestas DEBEN ser cortas. DEBES responder ÃšNICAMENTE en formato JSON estricto, sin \
-texto antes ni despuÃ©s, sin bloques markdown.
-
-Estructura obligatoria del JSON:
-{"emotion": "neutral" | "happy" | "sad" | "angry" | "surprised" | "thinking" | "sleepy" \
-| "love" | "excited" | "cool" | "confused" | "dizzy", \
-"reply": "Texto para el TTS", "speak": true | false, "sing": true | false, \
-"sound_effect": "none" | "beep" | "laugh" | "error" | "yawn" | "power_up" | "glitch"}
-
-- Si te piden un comando puramente visual ("pon cara de enojo"), responde con \
-"speak": false, "reply": "", "sing": false, "sound_effect": "none" y la emociÃ³n adecuada.
-"""
-
-
-def build_system_prompt(singing_enabled: bool) -> str:
-    prompt = get_personality_prompt()
-    if singing_enabled:
-        prompt += """\
-- Si piden cantar: "sing": true, "speak": true, "emotion": "happy". En "reply" pon \
-SOLO la letra (6 a 8 lÃ­neas, cada lÃ­nea 5-10 palabras, rimas simples, separadas por \
-salto de lÃ­nea). NO una sola frase corta; debe durar ~25-40 segundos cantada. \
-No incluyas comentarios fuera de la letra.
-"""
-    else:
-        prompt += """\
-- Canto desactivado: SIEMPRE "sing": false. Si piden cantar, quejate en character y \
-respondÃ© hablando en "reply", nunca letra larga.
-"""
-    prompt += """\
-- Usa "sound_effect" con criterio cÃ³mico para que el ESP32 reproduzca sonidos cortos \
-desde su memoria local (beep, laugh, yawn, glitch, power_up, error).
-"""
-    return prompt
 
 
 def get_ollama_model(default: str) -> str:
@@ -215,9 +204,29 @@ def get_bender_rvc_params() -> dict:
     }
 
 
+def build_system_prompt(singing_enabled: bool) -> str:
+    prompt = get_personality_prompt()
+    if singing_enabled:
+        prompt += """\
+- Si piden cantar: "sing": true, "speak": true, "emotion": "happy". En "reply" pon \
+SOLO la letra (6 a 8 líneas, cada línea 5-10 palabras, rimas simples, separadas por \
+salto de línea). NO una sola frase corta; debe durar ~25-40 segundos cantada. \
+No incluyas comentarios fuera de la letra.
+"""
+    else:
+        prompt += """\
+- Canto desactivado: SIEMPRE "sing": false. Si piden cantar, quejate en character y \
+respondé hablando en "reply", nunca letra larga.
+"""
+    prompt += """\
+- Usa "sound_effect" con criterio cómico para que el ESP32 reproduzca sonidos cortos \
+desde su memoria local (beep, laugh, yawn, glitch, power_up, error).
+"""
+    return prompt
 def admin_snapshot(env: dict) -> dict:
     """Full config for GET /api/admin/config (includes env fallbacks)."""
     cfg = load()
+    personality_prompts = cfg.get("personality_prompts") or {}
     return {
         "personality": cfg.get("personality", "bender"),
         "custom_prompt": cfg.get("custom_prompt", ""),
@@ -228,9 +237,16 @@ def admin_snapshot(env: dict) -> dict:
         "edge_voice": get_edge_voice(env.get("edge_voice", "")),
         "edge_voice_override": cfg.get("edge_voice", ""),
         "personalities": {
-            k: {"label": v["label"], "description": v["description"]}
+            k: {
+                "label": v["label"],
+                "description": v["description"],
+                "prompt": personality_prompts.get(k) or v["prompt"],
+                "default_prompt": v["prompt"],
+                "is_custom": bool(personality_prompts.get(k)),
+            }
             for k, v in PERSONALITIES.items()
         },
+        "personality_prompts": personality_prompts,
         "wake_presets": list(WAKE_PRESET_LABELS),
         "tts_engines": list(TTS_ENGINES),
         "edge_voices": list(EDGE_VOICES),
