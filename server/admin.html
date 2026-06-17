@@ -84,7 +84,6 @@
     <button type="button" class="tab" data-tab="voice">Voz TTS</button>
     <button type="button" class="tab" data-tab="bender">Voz Bender RVC</button>
     <button type="button" class="tab" data-tab="device">Dispositivo</button>
-    <button type="button" class="tab" data-tab="chat">Chat IA</button>
   </div>
 
   <!-- CEREBRO -->
@@ -120,6 +119,18 @@
     </div>
     <button type="button" class="danger" id="resetMemoryBtn">Borrar memoria del personaje</button>
     <button type="button" class="danger" id="resetChatBtn" style="margin-top:.5rem">Reiniciar historial de chat</button>
+
+    <hr class="sep">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
+      <label style="margin:0;font-size:.85rem;color:var(--accent)">🤖 Probar personaje activo</label>
+      <button type="button" id="chatClearBtn" style="font-size:.72rem;padding:.2rem .55rem;background:transparent;border:1px solid var(--muted);color:var(--muted);border-radius:6px;cursor:pointer">Limpiar</button>
+    </div>
+    <div id="chatLog" style="height:260px;overflow-y:auto;border:1px solid #2a3548;border-radius:10px;padding:.65rem .8rem;background:#0d1117;display:flex;flex-direction:column;gap:.45rem;margin-bottom:.6rem"></div>
+    <div style="display:flex;gap:.5rem">
+      <input id="chatInput" type="text" placeholder="Escribí algo al personaje…" style="flex:1;margin:0" />
+      <button type="button" id="chatSendBtn" style="background:linear-gradient(135deg,var(--accent),var(--accent-dim));color:#0a1628;border:none;border-radius:8px;padding:.55rem 1rem;font-weight:700;cursor:pointer;white-space:nowrap">Enviar</button>
+    </div>
+    <p class="hint">Usa la personalidad y modelo activos. No modifica el historial del ESP32.</p>
   </div>
 
   <!-- VOZ TTS -->
@@ -421,64 +432,66 @@ async function loadOllamaModels() {
 
 load();
 
-// ─── Chat IA ────────────────────────────────────────────────────────────────
-const chatLog = document.getElementById('chatLog');
-const chatInput = document.getElementById('chatInput');
 
-function appendMsg(role, text) {
-  const div = document.createElement('div');
-  div.style.cssText = 'max-width:85%;padding:.5rem .75rem;border-radius:12px;font-size:.9rem;line-height:1.4;white-space:pre-wrap;word-break:break-word;';
-  if (role === 'user') {
-    div.style.cssText += 'align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:3px;';
-  } else {
-    div.style.cssText += 'align-self:flex-start;background:var(--border);border-bottom-left-radius:3px;';
+
+// ─── Chat inline (panel Cerebro) ────────────────────────────────────────────
+(function() {
+  const log    = document.getElementById('chatLog');
+  const input  = document.getElementById('chatInput');
+  const EMOTION_EMOJI = {
+    neutral:'😐', happy:'😄', sad:'😢', angry:'😠', surprised:'😲',
+    thinking:'🤔', sleepy:'😴', love:'🥰', excited:'🤩', cool:'😎',
+    confused:'😕', dizzy:'😵',
+  };
+
+  function bubble(role, text, emotion) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;gap:.4rem;align-items:flex-end;' +
+      (role === 'user' ? 'flex-direction:row-reverse' : '');
+    const avatar = document.createElement('span');
+    avatar.style.cssText = 'font-size:1.1rem;flex-shrink:0;line-height:1';
+    avatar.textContent = role === 'user' ? '🧑' : (EMOTION_EMOJI[emotion] || '🤖');
+    const msg = document.createElement('div');
+    msg.style.cssText = 'max-width:80%;padding:.45rem .75rem;border-radius:12px;font-size:.88rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;' +
+      (role === 'user'
+        ? 'background:var(--accent);color:#0a1628;border-bottom-right-radius:3px'
+        : 'background:#1e2d42;border-bottom-left-radius:3px');
+    msg.textContent = text;
+    wrap.appendChild(avatar);
+    wrap.appendChild(msg);
+    log.appendChild(wrap);
+    log.scrollTop = log.scrollHeight;
+    return wrap;
   }
-  div.textContent = text;
-  chatLog.appendChild(div);
-  chatLog.scrollTop = chatLog.scrollHeight;
-}
 
-async function sendChat() {
-  const text = chatInput.value.trim();
-  if (!text) return;
-  chatInput.value = '';
-  appendMsg('user', text);
-  const thinking = document.createElement('div');
-  thinking.style.cssText = 'align-self:flex-start;font-size:.85rem;color:var(--muted);font-style:italic;';
-  thinking.textContent = '…';
-  chatLog.appendChild(thinking);
-  chatLog.scrollTop = chatLog.scrollHeight;
-  try {
-    const r = await fetch('/chat', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text}),
-    });
-    const j = await r.json();
-    chatLog.removeChild(thinking);
-    const reply = j.reply || j.error || '(sin respuesta)';
-    appendMsg('bot', reply);
-  } catch(e) {
-    chatLog.removeChild(thinking);
-    appendMsg('bot', '⚠ Error: ' + e.message);
+  async function sendChat() {
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    bubble('user', text);
+    const thinking = bubble('bot', '…', 'thinking');
+    try {
+      const r = await fetch('/chat', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text}),
+      });
+      const j = await r.json();
+      log.removeChild(thinking);
+      bubble('bot', j.reply || j.error || '(sin respuesta)', j.emotion);
+    } catch(e) {
+      log.removeChild(thinking);
+      bubble('bot', '⚠ Error: ' + e.message, 'sad');
+    }
   }
-}
 
-document.getElementById('chatSendBtn').onclick = sendChat;
-chatInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });
+  document.getElementById('chatSendBtn').onclick = sendChat;
+  document.getElementById('chatClearBtn').onclick = () => { log.innerHTML = ''; };
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  });
+})();
 
 </script>
-
-  <!-- CHAT IA -->
-  <div id="panel-chat" class="panel">
-    <h2>Chat con la IA</h2>
-    <div id="chatLog" style="height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:.75rem;margin-bottom:.75rem;display:flex;flex-direction:column;gap:.5rem;background:var(--surface)"></div>
-    <div style="display:flex;gap:.5rem">
-      <input id="chatInput" type="text" placeholder="Escribí tu mensaje..." style="flex:1" />
-      <button type="button" id="chatSendBtn">Enviar</button>
-    </div>
-    <p class="hint" style="margin-top:.5rem">Responde usando la personalidad activa. El historial del personaje <em>no</em> se modifica.</p>
-  </div>
-
 </body>
 </html>
