@@ -92,13 +92,25 @@
     <label for="personality">Preset de personaje</label>
     <select id="personality"></select>
     <p class="preset-desc" id="personalityDesc"></p>
-    <label for="customPrompt">Instrucciones adicionales (opcional)</label>
+
+    <label for="personalityPrompt" style="margin-top:.75rem;display:flex;justify-content:space-between;align-items:center">
+      <span>Prompt completo del personaje</span>
+      <button type="button" id="resetPromptBtn" style="font-size:.75rem;padding:.2rem .6rem;background:transparent;border:1px solid var(--muted);color:var(--muted);border-radius:6px;cursor:pointer">↩ Restablecer default</button>
+    </label>
+    <textarea id="personalityPrompt" style="min-height:160px;font-family:monospace;font-size:.82rem"></textarea>
+    <p class="hint">Este es el prompt base del personaje. Edítalo para ajustar su comportamiento.</p>
+
+    <hr class="sep">
+    <label for="customPrompt">Instrucciones adicionales (se añaden al final)</label>
     <textarea id="customPrompt" placeholder="Ej: llamame Jefe, sé más breve, menciona que te gusta el café..."></textarea>
     <p class="hint">Se añaden al prompt del preset. Máx. ~2000 caracteres.</p>
+
     <div class="grid" style="margin-top:1rem">
       <div>
-        <label for="ollamaModel">Modelo Ollama (vacío = env)</label>
-        <input type="text" id="ollamaModel" placeholder="qwen2.5:7b" />
+        <label for="ollamaModel">Modelo Ollama</label>
+        <select id="ollamaModel">
+          <option value="">(cargando...)</option>
+        </select>
       </div>
       <div>
         <label>Estado</label>
@@ -225,7 +237,7 @@ async function load() {
   }
   pSel.value = cfg.personality || 'bender';
   $('customPrompt').value = cfg.custom_prompt || '';
-  $('ollamaModel').value = cfg.ollama_model_override || '';
+  // ollamaModel se carga en loadOllamaModels()
   updatePersonalityDesc();
 
   // Voice TTS
@@ -244,6 +256,9 @@ async function load() {
     o.value = v; o.textContent = v; evSel.appendChild(o);
   });
   evSel.value = cfg.edge_voice_override || '';
+
+  // Ollama models
+  loadOllamaModels();
 
   // Bender RVC
   const pitch = cfg.bender_pitch != null ? cfg.bender_pitch : 10;
@@ -270,17 +285,25 @@ async function load() {
 }
 
 function updatePersonalityDesc() {
-  const p = cfg.personalities?.[$('personality').value];
+  const pid = $('personality').value;
+  const p = cfg.personalities?.[pid];
   $('personalityDesc').textContent = p?.description || '';
+  $('personalityPrompt').value = p?.prompt || '';
 }
 $('personality').onchange = updatePersonalityDesc;
+
+$('resetPromptBtn').onclick = () => {
+  const pid = $('personality').value;
+  $('personalityPrompt').value = cfg.personalities?.[pid]?.default_prompt || '';
+};
 
 // Save
 $('saveBtn').onclick = async () => {
   const body = {
     personality:       $('personality').value,
     custom_prompt:     $('customPrompt').value,
-    ollama_model:      $('ollamaModel').value.trim(),
+    ollama_model:      $('ollamaModel').value,
+    personality_prompts: { [$('personality').value]: $('personalityPrompt').value },
     tts_engine:        $('ttsEngine').value,
     edge_voice:        $('edgeVoice').value.trim(),
     bender_pitch:      parseFloat($('benderPitch').value),
@@ -372,6 +395,29 @@ $('espIp').onchange = () => {
   if (ip) localStorage.setItem('agenteia_esp_ip', ip);
   $('deviceLink').href = ip ? 'http://' + ip + '/' : '#';
 };
+
+async async async function loadOllamaModels() {
+  const sel = ollamaModel;
+  try {
+    const r = await fetch('http://localhost:11434/api/tags');
+    const j = await r.json();
+    const current = cfg.ollama_model_override || '';
+    sel.innerHTML = '<option value="">(predeterminado del servidor)</option>';
+    (j.models || [])
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .forEach(m => {
+        const o = document.createElement('option');
+        o.value = m.name;
+        const gb = (m.size / 1e9).toFixed(1);
+        o.textContent = m.name + ' (' + gb + ' GB)';
+        sel.appendChild(o);
+      });
+    sel.value = current;
+  } catch(e) {
+    sel.innerHTML = '<option value="">(Ollama no disponible)</option>';
+  }ption>';
+  }
+}
 
 load();
 </script>

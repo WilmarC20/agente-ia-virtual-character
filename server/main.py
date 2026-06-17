@@ -1097,7 +1097,7 @@ async def admin_config_post(request: Request):
         body = await request.json()
     except Exception:
         return JSONResponse(status_code=400, content={"error": "invalid json"})
-    allowed = {"personality", "custom_prompt", "ollama_model", "tts_engine", "edge_voice", "bender_pitch", "bender_index_rate", "bender_protect"}
+    allowed = {"personality", "custom_prompt", "ollama_model", "tts_engine", "edge_voice", "bender_pitch", "bender_index_rate", "bender_protect", "personality_prompts"}
     updates = {k: body[k] for k in allowed if k in body}
     cfg = srv_cfg.save(updates)
     return {**srv_cfg.admin_snapshot({
