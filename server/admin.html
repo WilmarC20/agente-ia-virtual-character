@@ -84,6 +84,7 @@
     <button type="button" class="tab" data-tab="voice">Voz TTS</button>
     <button type="button" class="tab" data-tab="bender">Voz Bender RVC</button>
     <button type="button" class="tab" data-tab="device">Dispositivo</button>
+    <button type="button" class="tab" data-tab="chat">Chat IA</button>
   </div>
 
   <!-- CEREBRO -->
@@ -396,7 +397,7 @@ $('espIp').onchange = () => {
   $('deviceLink').href = ip ? 'http://' + ip + '/' : '#';
 };
 
-async async async function loadOllamaModels() {
+async function loadOllamaModels() {
   const sel = ollamaModel;
   try {
     const r = await fetch('http://localhost:11434/api/tags');
@@ -420,6 +421,65 @@ async async async function loadOllamaModels() {
 }
 
 load();
+
+// ─── Chat IA ────────────────────────────────────────────────────────────────
+const chatLog = document.getElementById('chatLog');
+const chatInput = document.getElementById('chatInput');
+
+function appendMsg(role, text) {
+  const div = document.createElement('div');
+  div.style.cssText = 'max-width:85%;padding:.5rem .75rem;border-radius:12px;font-size:.9rem;line-height:1.4;white-space:pre-wrap;word-break:break-word;';
+  if (role === 'user') {
+    div.style.cssText += 'align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:3px;';
+  } else {
+    div.style.cssText += 'align-self:flex-start;background:var(--border);border-bottom-left-radius:3px;';
+  }
+  div.textContent = text;
+  chatLog.appendChild(div);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+async function sendChat() {
+  const text = chatInput.value.trim();
+  if (!text) return;
+  chatInput.value = '';
+  appendMsg('user', text);
+  const thinking = document.createElement('div');
+  thinking.style.cssText = 'align-self:flex-start;font-size:.85rem;color:var(--muted);font-style:italic;';
+  thinking.textContent = '…';
+  chatLog.appendChild(thinking);
+  chatLog.scrollTop = chatLog.scrollHeight;
+  try {
+    const r = await fetch('/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text}),
+    });
+    const j = await r.json();
+    chatLog.removeChild(thinking);
+    const reply = j.reply || j.error || '(sin respuesta)';
+    appendMsg('bot', reply);
+  } catch(e) {
+    chatLog.removeChild(thinking);
+    appendMsg('bot', '⚠ Error: ' + e.message);
+  }
+}
+
+document.getElementById('chatSendBtn').onclick = sendChat;
+chatInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });
+
 </script>
+
+  <!-- CHAT IA -->
+  <div id="panel-chat" class="panel">
+    <h2>Chat con la IA</h2>
+    <div id="chatLog" style="height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:.75rem;margin-bottom:.75rem;display:flex;flex-direction:column;gap:.5rem;background:var(--surface)"></div>
+    <div style="display:flex;gap:.5rem">
+      <input id="chatInput" type="text" placeholder="Escribí tu mensaje..." style="flex:1" />
+      <button type="button" id="chatSendBtn">Enviar</button>
+    </div>
+    <p class="hint" style="margin-top:.5rem">Responde usando la personalidad activa. El historial del personaje <em>no</em> se modifica.</p>
+  </div>
+
 </body>
 </html>
