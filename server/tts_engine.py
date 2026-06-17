@@ -88,6 +88,11 @@ def sanitize_speech_text(text: str) -> str:
     text = text.replace("…", ".").replace("–", "-").replace("—", "-")
     text = text.replace(""", '"').replace(""", '"').replace("'", "'").replace("'", "'")
     text = re.sub(r"(\d)\s*%", r"\1 por ciento", text)
+    # Slash/diagonal y guiones como bullet se leen mal en SAPI
+    text = re.sub(r'(?<!\w)/(?!\w)', ' ', text)   # '/' aislado -> espacio
+    text = re.sub(r'(?<=\w)/(?=\w)', ' o ', text)  # 'x/y' -> 'x o y'
+    text = re.sub(r'^[\-–—]\s+', '', text, flags=re.MULTILINE)  # bullet guión
+    text = re.sub(r'\s[\-–—]\s', ', ', text)       # dash entre palabras -> coma
     text = text.replace("&", " y ")
     text = text.translate(str.maketrans(_SUPERSCRIPT, "0123456789"))
     for ch in _SUBSCRIPT:
