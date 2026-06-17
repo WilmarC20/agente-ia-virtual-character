@@ -1,4 +1,5 @@
 fastapi>=0.115
+python-multipart>=0.0.9
 uvicorn[standard]>=0.30
 httpx>=0.27
 faster-whisper>=1.0
@@ -6,6 +7,10 @@ piper-tts>=1.2
 edge-tts>=6.1
 miniaudio>=1.61
 numpy
+scipy>=1.11
+soundfile>=0.12
+# Cantar (RVC) — venv aparte Python 3.11: .\install-rvc.ps1
+# Luego copia robot.pth (+ .index) a rvc_models/
 # GPU para faster-whisper (ctranslate2 CUDA 12). main.py los pone en PATH.
 nvidia-cublas-cu12
 nvidia-cudnn-cu12

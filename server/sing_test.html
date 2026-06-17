@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>agenteIA — prueba de canto</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --accent: #3dd6c6;
+      --accent-dim: #2a9d8f;
+      --text: #e8eef4;
+      --muted: #8b9cb3;
+      --danger: #ff6b6b;
+      --warn: #ffd166;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(ellipse at 20% 0%, #1e3a5f 0%, var(--bg) 55%);
+      color: var(--text);
+      padding: 1.5rem;
+    }
+    .wrap { max-width: 720px; margin: 0 auto; }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin: 0 0 0.25rem;
+      letter-spacing: -0.02em;
+    }
+    .sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.5rem; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid #2a3548;
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-bottom: 1rem;
+    }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.35rem; }
+    textarea {
+      width: 100%;
+      min-height: 160px;
+      resize: vertical;
+      background: #0d1117;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      color: var(--text);
+      padding: 0.75rem;
+      font-size: 1rem;
+      line-height: 1.5;
+      font-family: inherit;
+    }
+    textarea:focus { outline: 2px solid var(--accent-dim); border-color: var(--accent-dim); }
+    .row { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; align-items: flex-end; }
+    .field { flex: 1; min-width: 120px; }
+    select, input[type="number"] {
+      width: 100%;
+      background: #0d1117;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      color: var(--text);
+      padding: 0.5rem 0.65rem;
+      font-size: 0.95rem;
+    }
+    .checks { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; font-size: 0.9rem; }
+    .checks label { display: flex; align-items: center; gap: 0.4rem; color: var(--text); margin: 0; cursor: pointer; }
+    button.primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      color: #0a1628;
+      border: none;
+      border-radius: 10px;
+      padding: 0.85rem 1.75rem;
+      font-size: 1.05rem;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 1.25rem;
+      width: 100%;
+      transition: transform 0.1s, opacity 0.2s;
+    }
+    button.primary:hover:not(:disabled) { transform: translateY(-1px); }
+    button.primary:disabled { opacity: 0.5; cursor: wait; }
+    #status {
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      background: #0d1117;
+      font-size: 0.9rem;
+      min-height: 2.5rem;
+      border: 1px solid #334155;
+    }
+    #status.ok { border-color: var(--accent-dim); color: var(--accent); }
+    #status.err { border-color: var(--danger); color: var(--danger); }
+    #status.busy { border-color: var(--warn); color: var(--warn); }
+    audio { width: 100%; margin-top: 1rem; }
+    .debug-links {
+      margin-top: 0.75rem;
+      font-size: 0.85rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+    .debug-links a { color: var(--accent); text-decoration: none; }
+    .debug-links a:hover { text-decoration: underline; }
+    .health { font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🎤 Prueba de canto RVC</h1>
+    <p class="sub">Hay <strong>dos modos</strong> distintos — no se mezclan:</p>
+    <ul class="sub" style="margin-top:0;padding-left:1.25rem">
+      <li><strong>Letra</strong> → Bark inventa la melodía + RVC pone voz Luis Miguel (lento).</li>
+      <li><strong>WAV subido</strong> → solo RVC: el audio ya debe traer alguien <em>cantando</em>; la letra de abajo <strong>no se usa</strong>.</li>
+    </ul>
+
+    <div class="panel" style="margin-bottom:1rem;padding:0.75rem 1rem">
+      <label style="display:flex;align-items:center;gap:0.5rem;margin:0.35rem 0;cursor:pointer;color:var(--text)">
+        <input type="radio" name="singMode" id="modeLyrics" value="lyrics" checked />
+        Modo A — Cantar la letra (Bark + RVC)
+      </label>
+      <label style="display:flex;align-items:center;gap:0.5rem;margin:0.35rem 0;cursor:pointer;color:var(--text)">
+        <input type="radio" name="singMode" id="modeGuide" value="guide" />
+        Modo B — Ya tengo un WAV cantado (solo RVC, como Discord)
+      </label>
+    </div>
+
+    <div class="panel">
+      <label for="lyrics">Letra</label>
+      <textarea id="lyrics" spellcheck="false">Vamos a cantar hoy
+nuestro día se alumbra
+Sonrisas que en rima caen
+bienvenido el sol que brilla
+Robots coreando risas
+canciones sin control</textarea>
+
+      <div class="row">
+        <div class="field">
+          <label for="emotion">Emoción</label>
+          <select id="emotion">
+            <option value="happy" selected>happy</option>
+            <option value="sad">sad</option>
+            <option value="angry">angry</option>
+            <option value="surprised">surprised</option>
+            <option value="thinking">thinking</option>
+            <option value="neutral">neutral</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="f0">Pitch (f0_up_key)</label>
+          <input type="number" id="f0" value="0" min="-12" max="12" step="1" />
+        </div>
+        <div class="field">
+          <label for="index">index_rate (0.75 típico Discord/WebUI)</label>
+          <input type="number" id="index" value="0.75" min="0" max="1" step="0.05" />
+        </div>
+      </div>
+
+      <div class="panel mode-guide-only" style="margin-top:1rem;padding:1rem;background:#121a24;display:none">
+        <label for="guideFile">Archivo WAV con voz ya cantada (acapella / cover)</label>
+        <input type="file" id="guideFile" accept="audio/wav,audio/*" style="margin-top:0.35rem;width:100%" />
+        <p class="health" style="margin-top:0.5rem;color:var(--warn)">
+          ⚠️ La letra del cuadro de arriba <strong>se ignora</strong>. Solo se convierte el timbre del WAV a Luis Miguel.
+          Para cantar texto nuevo, usa Modo A y <strong>no</strong> subas archivo.
+        </p>
+      </div>
+
+      <div class="checks">
+        <label><input type="checkbox" id="expand" /> Expandir letra con Ollama (más lento)</label>
+        <label><input type="checkbox" id="skipRvc" /> Solo guía TTS (sin RVC)</label>
+      </div>
+
+      <button type="button" class="primary" id="singBtn">▶ Cantar</button>
+      <div id="status" class="busy">Listo — pulsa Cantar</div>
+      <audio id="player" controls></audio>
+      <div class="debug-links">
+        <span>Últimos WAV de debug:</span>
+        <a href="/debug_audio/last_sing_guide.wav" target="_blank">guía</a>
+        <a href="/debug_audio/last_sing_rvc.wav" target="_blank">RVC</a>
+        <a href="/debug_audio/last_sing_esp32.wav" target="_blank">ESP32</a>
+      </div>
+      <div class="health" id="health"></div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let audioUrl = null;
+
+    async function loadHealth() {
+      try {
+        const r = await fetch("/health");
+        const j = await r.json();
+        const s = j.singing || {};
+        $("health").textContent =
+          `RVC: configured=${s.configured} runtime=${s.runtime} | ` +
+          `Guia Bark: ${s.bark ? "si" : "NO — ejecuta install-bark.ps1"}`;
+      } catch {
+        $("health").textContent = "No se pudo leer /health";
+      }
+    }
+    loadHealth();
+
+    function syncModeUi() {
+      const guideMode = $("modeGuide").checked;
+      $("lyrics").disabled = guideMode;
+      $("lyrics").style.opacity = guideMode ? "0.45" : "1";
+      document.querySelector(".mode-guide-only").style.display = guideMode ? "block" : "none";
+      document.querySelector(".checks").style.display = guideMode ? "none" : "flex";
+      $("singBtn").textContent = guideMode ? "▶ Convertir WAV (RVC)" : "▶ Cantar letra";
+      if (!guideMode) $("guideFile").value = "";
+    }
+    $("modeLyrics").addEventListener("change", syncModeUi);
+    $("modeGuide").addEventListener("change", syncModeUi);
+    syncModeUi();
+
+    function setStatus(msg, kind) {
+      const el = $("status");
+      el.textContent = msg;
+      el.className = kind || "";
+    }
+
+    $("singBtn").addEventListener("click", async () => {
+      const guideMode = $("modeGuide").checked;
+      const guideFile = $("guideFile").files[0];
+      const lyrics = $("lyrics").value.trim();
+
+      if (guideMode) {
+        if (!guideFile) {
+          setStatus("Modo B: elige un WAV con la voz ya cantada.", "err");
+          return;
+        }
+      } else if (!lyrics) {
+        setStatus("Modo A: escribe la letra que quieres cantar.", "err");
+        return;
+      }
+
+      const btn = $("singBtn");
+      btn.disabled = true;
+      const t0 = performance.now();
+      setStatus(
+        guideMode
+          ? "Convirtiendo timbre del WAV con RVC…"
+          : "Generando guía Bark + RVC (puede tardar varios minutos)",
+        "busy"
+      );
+
+      if (audioUrl) {
+        URL.revokeObjectURL(audioUrl);
+        audioUrl = null;
+        $("player").removeAttribute("src");
+      }
+
+      const f0 = parseInt($("f0").value, 10) || 0;
+      const indexRate = parseFloat($("index").value);
+
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 300000);
+
+      try {
+        let res;
+        if (guideMode && guideFile) {
+          const fd = new FormData();
+          fd.append("guide", guideFile);
+          fd.append("f0_up_key", String(f0));
+          fd.append("index_rate", String(indexRate));
+          res = await fetch("/agent/sing/preview-guide", {
+            method: "POST",
+            body: fd,
+            signal: ctrl.signal,
+          });
+        } else {
+          const body = {
+            lyrics,
+            emotion: $("emotion").value,
+            f0_up_key: f0,
+            index_rate: indexRate,
+            expand: $("expand").checked,
+            skip_rvc: $("skipRvc").checked,
+          };
+          res = await fetch("/agent/sing/preview", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            signal: ctrl.signal,
+          });
+        }
+        clearTimeout(timer);
+
+        if (!res.ok) {
+          let detail = res.statusText;
+          try {
+            const err = await res.json();
+            detail = err.error || err.detail || JSON.stringify(err);
+          } catch { /* wav body */ }
+          setStatus(`Error ${res.status}: ${detail}`, "err");
+          return;
+        }
+
+        const blob = await res.blob();
+        const dur = res.headers.get("X-Sing-Duration-S");
+        const peak = res.headers.get("X-Sing-Peak");
+        const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+
+        audioUrl = URL.createObjectURL(blob);
+        const player = $("player");
+        player.src = audioUrl;
+        await player.play().catch(() => {});
+
+        setStatus(
+          (guideMode ? "RVC listo" : "Canto listo") +
+          ` en ${elapsed}s — audio ${dur ? dur + "s" : (blob.size / 32000).toFixed(1) + "s est."}` +
+          (peak ? `, peak ${peak}` : "") +
+          ` (${(blob.size / 1024).toFixed(0)} KB). ` +
+          (guideMode
+            ? "Compara guía vs RVC en enlaces de abajo."
+            : "Si suena raro, abre «guía» — ahí está la melodía antes de Luis Miguel."),
+          "ok"
+        );
+      } catch (e) {
+        clearTimeout(timer);
+        const msg = e.name === "AbortError" ? "Timeout (5 min)" : String(e);
+        setStatus("Fallo: " + msg, "err");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
