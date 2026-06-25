@@ -1,10 +1,7 @@
 // FT6336 capacitive touch: read a screen-mapped point.
 //
-// LovyanGFX does NOT drive the touch panel on this board, so we read the controller
-// over I2C ourselves. The panel is native 240x320 portrait; the display runs rotated
-// (landscape 320x240), so the raw point is swapped/inverted to screen coordinates.
-// If taps land in the wrong place, flip TOUCH_SWAP_XY / TOUCH_INVERT_* in config.h
-// (set TOUCH_DEBUG 1 to print raw + mapped coords and calibrate in seconds).
+// LovyanGFX does NOT drive touch on this board — we read FT6336 over I2C.
+// Mapping depends on DISPLAY_ROTATION in config.h (see TOUCH_* flags).
 #pragma once
 
 #include <Wire.h>
@@ -29,7 +26,7 @@ inline bool touchReadPoint(int screenW, int screenH, int &sx, int &sy) {
   int rawY = ((yh & 0x0F) << 8) | yl;   // 0..319 (panel native height)
 
 #if TOUCH_SWAP_XY
-  int x = rawY, y = rawX;               // landscape: screen X comes from raw Y
+  int x = rawY, y = rawX;               // landscape
 #else
   int x = rawX, y = rawY;
 #endif

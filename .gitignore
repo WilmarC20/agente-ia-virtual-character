@@ -1,23 +1,26 @@
-# Secrets — never commit (WiFi credentials, Home Assistant token, server URL)
+# Secrets (WiFi credentials, API keys, Home Assistant token)
 firmware/agente-ia/secrets.h
 server/secrets.local.ps1
 server/.env
 
 # Persistent agent memory (personal: the human's name, facts, mood)
 server/agent_state.json
+server/admin_config.json
 
-# Generated SPIFFS image (build it with upload_spiffs.ps1 from data/)
-firmware/agente-ia/spiffs.bin
+# YouTube Music (cookies locales, no commitear)
+server/ytmusic_cookies.txt
+server/.cache-music/
 
 # Python
 server/.venv/
+server/.venv-rvc/
+server/.cache-suno/
+server/.hf-cache/
+server/.pip-tmp/
+server/.pip-cache/
 server/__pycache__/
 *.pyc
 
-# Downloaded/large runtime assets
-server/voices/
-
-# Local recordings / scratch / logs
-server/debug_audio/
+# Scratch / temp
 tmp/
 *.log

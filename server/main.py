@@ -1037,6 +1037,12 @@ async def dev_face(request: Request):
     if vmic is not None:
         vmic = max(50, min(300, int(vmic)))
         cmd["vibing_mic"] = vmic
+    vflo = body.get("vibing_floor")
+    if vflo is not None:
+        cmd["vibing_floor"] = max(0, min(500, int(vflo)))
+    vcei = body.get("vibing_ceil")
+    if vcei is not None:
+        cmd["vibing_ceil"] = max(200, min(900, int(vcei)))
     async with _dev_lock:
         _dev_queue.append(cmd)
         qlen = len(_dev_queue)
@@ -1374,6 +1380,10 @@ async def admin_device_dev_face(request: Request):
     }
     if body.get("vibing_mic") is not None:
         payload["vibing_mic"] = max(50, min(300, int(body.get("vibing_mic"))))
+    if body.get("vibing_floor") is not None:
+        payload["vibing_floor"] = max(0, min(500, int(body.get("vibing_floor"))))
+    if body.get("vibing_ceil") is not None:
+        payload["vibing_ceil"] = max(200, min(900, int(body.get("vibing_ceil"))))
     try:
         async with httpx.AsyncClient(timeout=_ESP_TIMEOUT) as client:
             r = await client.post(f"{base}/api/dev/face", json=payload)

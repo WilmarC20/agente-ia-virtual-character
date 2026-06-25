@@ -1,9 +1,9 @@
-﻿"""Worker RVC local â€” subprocess bajo APPLIO_PYTHON.
+﻿"""Worker RVC local — subprocess bajo APPLIO_PYTHON.
 
 stdin JSON (oneshot) o --daemon con framing >I length.
 stderr: logs / READY
 
-No depende de Flask ni de ningÃºn servidor en :7860.
+No depende de Flask ni de ningún servidor en :7860.
 """
 
 from __future__ import annotations

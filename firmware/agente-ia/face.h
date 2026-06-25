@@ -57,7 +57,7 @@ public:
         for (int i = 0; i < kVibingNotes; i++) _noteY[i] = -50.0f;
         _lastNoteSpawn = 0;
         memset(_vibingBands, 0, sizeof(_vibingBands));
-        memset(_specHist, 0, sizeof(_specHist));
+        memset(_colHist, 0, sizeof(_colHist));
       }
       _nextGazeAt = millis() + 700 + random(1800);
       _dirty = true;
@@ -80,17 +80,45 @@ public:
   }
   uint8_t vibingMicGain() const { return _vibingMicGain; }
 
+  void setVibingRange(uint16_t floor, uint16_t ceil) {
+    if (floor > 500) floor = 500;
+    if (ceil < 200) ceil = 200;
+    if (ceil > 900) ceil = 900;
+    if (floor >= ceil - 40) {
+      floor = (ceil > 40) ? (uint16_t)(ceil - 40) : 0;
+    }
+    _vibingFloor = floor;
+    _vibingCeil = ceil;
+    _dirty = true;
+  }
+  uint16_t vibingFloor() const { return _vibingFloor; }
+  uint16_t vibingCeil() const { return _vibingCeil; }
+
+  float mapVibingLevel(float raw) const {
+    if (raw <= (float)_vibingFloor) return 0.0f;
+    if (raw >= (float)_vibingCeil) return 220.0f;
+    return (raw - (float)_vibingFloor) / ((float)_vibingCeil - (float)_vibingFloor) * 220.0f;
+  }
+
   void setVibingSpectrum(const uint8_t *bands, int n, uint32_t peak) {
     if (_emotion != Emotion::Vibing || !bands || n < 1) return;
     const int nb = n > kVibingBands ? kVibingBands : n;
     const float gain = _vibingMicGain / 100.0f;
+    const float span = (float)_vibingCeil - (float)_vibingFloor;
     for (int i = 0; i < nb; i++) {
-      float tgt = fminf(255.0f, (float)bands[i] * gain);
-      _vibingBands[i] += (tgt - _vibingBands[i]) * 0.30f;
+      float raw = (float)bands[i] * gain;
+      float tgt = mapVibingLevel(raw);
+      // Decay faster below noise floor so idle hiss does not linger.
+      const float rate = (raw <= (float)_vibingFloor + span * 0.04f) ? 0.48f : 0.34f;
+      _vibingBands[i] += (tgt - _vibingBands[i]) * rate;
     }
-    float norm = (float)peak * gain / 520.0f;
-    if (norm > 1.0f) norm = 1.0f;
-    int lvl = (int)(powf(norm, 0.28f) * 100.0f);
+    float peakRaw = (float)peak * gain;
+    float norm = 0.0f;
+    if (peakRaw > (float)_vibingFloor && span > 1.0f) {
+      norm = (peakRaw - (float)_vibingFloor) / span;
+      if (norm > 1.0f) norm = 1.0f;
+    }
+    int lvl = (int)(powf(norm, 0.38f) * 100.0f);
     if (lvl > 100) lvl = 100;
     setMouthAmplitude((uint8_t)lvl);
     _dirty = true;
@@ -255,11 +283,12 @@ private:
   float _blinkAmt = 0, _gazeX = 0, _gazeY = 0, _gazeTx = 0, _gazeTy = 0, _browPhase = 0;
   float _vibingBobY = 0, _lastVibingBobDraw = 0;
   uint8_t _vibingMicGain = 150;
+  uint16_t _vibingFloor = 100;
+  uint16_t _vibingCeil = 500;
   static constexpr int kVibingBands = 12;
   static constexpr int kSpecCols = 20;
-  static constexpr int kSpecRows = 8;
   float _vibingBands[kVibingBands]{};
-  uint8_t _specHist[kSpecCols][kSpecRows]{};
+  uint8_t _colHist[kSpecCols]{};
   static constexpr int kVibingNotes = 4;
   float _noteX[kVibingNotes]{}, _noteY[kVibingNotes]{}, _noteVx[kVibingNotes]{}, _noteVy[kVibingNotes]{};
   uint8_t _noteKind[kVibingNotes]{};
@@ -1019,32 +1048,27 @@ private:
     if (_showGear) _gfx.clearClipRect();
   }
 
-  void advanceSpecHistory() {
+  void advanceVibingHistory() {
     for (int x = 0; x < kSpecCols - 1; x++) {
-      for (int y = 0; y < kSpecRows; y++) {
-        _specHist[x][y] = _specHist[x + 1][y];
-      }
+      _colHist[x] = _colHist[x + 1];
     }
-    for (int y = 0; y < kSpecRows; y++) {
-      _specHist[kSpecCols - 1][y] = 0;
-    }
+    float peak = 0.0f, sum = 0.0f;
     for (int b = 0; b < kVibingBands; b++) {
-      uint8_t v = (uint8_t)fminf(255.0f, _vibingBands[b]);
-      int center = b * kSpecRows / kVibingBands;
-      for (int dy = -1; dy <= 1; dy++) {
-        int row = center + dy;
-        if (row < 0 || row >= kSpecRows) continue;
-        uint8_t scaled = (uint8_t)((float)v * (dy == 0 ? 1.0f : 0.55f));
-        if (scaled > _specHist[kSpecCols - 1][row]) {
-          _specHist[kSpecCols - 1][row] = scaled;
-        }
-      }
+      sum += _vibingBands[b];
+      if (_vibingBands[b] > peak) peak = _vibingBands[b];
     }
+    const float avg = sum / (float)kVibingBands;
+    const float mix = peak * 0.62f + avg * 0.38f;
+    int lvl = (int)(mix + 0.5f);
+    if (lvl > 220) lvl = 220;
+    if (lvl < 0) lvl = 0;
+    _colHist[kSpecCols - 1] = (uint8_t)lvl;
   }
 
+  // LED equalizer waterfall (same mouth frame as drawLedMouth / web preview).
   void drawVibingSpectrogramMouth(int dy) {
     const int x0 = 78, x1 = 242, y0 = 138 + dy, y1 = 172 + dy;
-    const int pad = 4;
+    const int pad = 5, gap = 1;
     uint16_t segInk, segGlow, segHi;
     mouthLedInk(segInk, segGlow, segHi);
     _canvas.fillRoundRect(x0, y0, x1 - x0, y1 - y0, 10, VISOR_DEEP);
@@ -1052,24 +1076,28 @@ private:
 
     const int innerW = x1 - x0 - pad * 2;
     const int innerH = y1 - y0 - pad * 2;
-    const int cellW = innerW / kSpecCols;
-    const int cellH = innerH / kSpecRows;
+    const int barW = (innerW - gap * (kSpecCols - 1)) / kSpecCols;
     const int ox = x0 + pad;
     const int oy = y0 + pad;
+    int sx = ox;
 
     for (int cx = 0; cx < kSpecCols; cx++) {
-      for (int row = 0; row < kSpecRows; row++) {
-        uint8_t v = _specHist[cx][row];
-        if (v < 10) continue;
-        float t = v / 255.0f;
-        uint16_t col = lerp565(VISOR_DEEP, lerp565(segGlow, segHi, t), 0.35f + t * 0.65f);
-        int px = ox + cx * cellW;
-        int ph = (int)(cellH * t * 1.15f);
-        if (ph < 2) ph = 2;
+      uint8_t v = _colHist[cx];
+      if (v >= 6) {
+        float t = powf(v / 220.0f, 0.68f);
+        if (t > 1.0f) t = 1.0f;
+        int ph = (int)(innerH * t);
+        if (ph < 3) ph = 3;
         if (ph > innerH) ph = innerH;
-        int py = oy + innerH - ph;
-        _canvas.fillRect(px + 1, py, cellW - 2, ph, col);
+        const int py = oy + innerH - ph;
+        const uint16_t fill = (t > 0.58f) ? segHi : segInk;
+        _canvas.fillRoundRect(sx - 1, py - 1, barW + 2, ph + 2, 3, segGlow);
+        _canvas.fillRoundRect(sx, py, barW, ph, 2, fill);
+        if (t > 0.35f) {
+          _canvas.drawFastHLine(sx + 1, py + 1, barW - 2, segHi);
+        }
       }
+      sx += barW + gap;
     }
     _canvas.drawRoundRect(x0, y0, x1 - x0, y1 - y0, 10, segInk);
   }
@@ -1077,7 +1105,7 @@ private:
   void drawVibingFace() {
     const int bob = (int)(_vibingBobY + 0.5f);
     _canvas.fillSprite(BG);
-    advanceSpecHistory();
+    advanceVibingHistory();
     drawCapsule(bob);
     _canvas.setClipRect(VISOR_CLIP_X, VISOR_CLIP_Y + bob, VISOR_CLIP_W, VISOR_CLIP_H);
     drawHappyClosedEye(EYE_L, EYE_Y + bob, EYE_RAD);

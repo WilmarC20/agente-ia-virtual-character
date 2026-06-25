@@ -9,6 +9,10 @@ miniaudio>=1.61
 numpy
 scipy>=1.11
 soundfile>=0.12
+yt-dlp>=2024.12
+yt-dlp-ejs>=0.1
+pytubefix>=10.0
+ytmusicapi>=1.8
 # Cantar (RVC) — venv aparte Python 3.11: .\install-rvc.ps1
 # Luego copia robot.pth (+ .index) a rvc_models/
 # GPU para faster-whisper (ctranslate2 CUDA 12). main.py los pone en PATH.

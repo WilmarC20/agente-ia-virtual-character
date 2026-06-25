@@ -95,11 +95,10 @@ public:
   void setAdcVolume(uint8_t v) { writeReg(0x17, v); }
   void setDacVolume(uint8_t v) { writeReg(0x32, v); }
 
-  // Reg 0x32 DAC volume: full 8-bit linear. 0x00 = mute, 0xBF ~= 0 dB, 0xFF ~= +32 dB.
-  // It is NOT a 7-bit field with a mute bit — masking 0x7F here was muting playback.
+  // Reg 0x32 DAC volume: 0x00 = mute, 0xBF ~= 0 dB, 0xFF ~= +32 dB.
   void setPlaybackVolumePercent(uint8_t percent) {
     if (percent > 100) percent = 100;
-    uint8_t v = (uint8_t)((255UL * percent) / 100UL);  // 70% -> 0xB2 (~-6 dB)
+    uint8_t v = (uint8_t)((255UL * percent) / 100UL);
     setDacVolume(v);
     Serial.printf("ES8311 DAC vol %u%% reg=0x%02X\n", percent, v);
   }
