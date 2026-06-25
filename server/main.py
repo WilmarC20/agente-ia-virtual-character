@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 
 # Un solo hilo OpenMP evita cuelgues de faster-whisper en Windows.
@@ -31,7 +31,7 @@ os.environ["MKL_NUM_THREADS"] = "1"
 def _enable_cuda_dlls() -> None:
     """Put the nvidia-*-cu12 pip DLLs (cuBLAS/cuDNN/cudart) on the search path so
     ctranslate2 finds them. On Windows ctranslate2 loads them by bare name via
-    LoadLibrary, which only searches PATH â€” os.add_dll_directory is NOT enough.
+    LoadLibrary, which only searches PATH — os.add_dll_directory is NOT enough.
     Must run before faster_whisper/ctranslate2 is imported (i.e. before get_whisper).
     """
     import glob
@@ -51,14 +51,23 @@ def _enable_cuda_dlls() -> None:
 
 _enable_cuda_dlls()
 
-from tts_engine import shutdown_piper_daemon, synthesize_wav_16k, sanitize_speech_text, warm_piper_daemon
+from tts_engine import (
+    cap_speech_text,
+    shutdown_piper_daemon,
+    synthesize_wav_16k,
+    sanitize_speech_text,
+    warm_piper_daemon,
+)
+from text_encoding import normalize_heard, normalize_heard_ascii, prepare_spanish_text
 import singing_pipeline as sing
 
 SINGING_ENABLED = os.environ.get("ENABLE_SINGING", "0") == "1"
 TTS_RVC_ENABLED = os.environ.get("ENABLE_TTS_RVC", "1") == "1"  # default ON cuando bender_server disponible
 import ha_client as ha
 import agent_state
+import esp_registry as esp_reg
 import server_config as srv_cfg
+import music_service as music
 
 SERVER_DIR = Path(__file__).resolve().parent
 CAPTURE_DIR = SERVER_DIR / "debug_audio"
@@ -82,8 +91,8 @@ WHISPER_BEST_OF = int(os.environ.get("WHISPER_BEST_OF", "1"))
 
 WHISPER_CONVERSE_PROMPT = os.environ.get(
     "WHISPER_CONVERSE_PROMPT",
-    "Comandos en espaÃ±ol: enÃ³jate, ponte contento, haz cara de enojo, cara triste, "
-    "cara sorprendida, cÃ¡ntame una canciÃ³n, hola, cÃ³mo estÃ¡s, quÃ© hora es, Hi ESP.",
+    "Comandos en español: enójate, ponte contento, haz cara de enojo, cara triste, "
+    "cara sorprendida, cántame una canción, hola, cómo estás, qué hora es, Hi ESP.",
 )
 
 EMOTIONS = [
@@ -102,15 +111,15 @@ def build_system_prompt() -> str:
 # live device list and teaches the model to emit an optional "actions" field.
 HOME_PROMPT = """
 
-CONTROL DEL HOGAR (Home Assistant). PodÃ©s encender, apagar o alternar dispositivos.
-Cuando el usuario pida controlar algo, AGREGÃ al JSON un campo "actions" (lista):
+CONTROL DEL HOGAR (Home Assistant). Podés encender, apagar o alternar dispositivos.
+Cuando el usuario pida controlar algo, AGREGÁ al JSON un campo "actions" (lista):
 "actions": [{{"entity_id": "<id EXACTO de la lista>", "command": "on" | "off" | "toggle"}}]
 Reglas:
-- UsÃ¡ SOLO entity_id que estÃ©n en la lista de abajo; si no estÃ¡, no lo inventes y avisÃ¡ en "reply".
-- Para escenas y scripts usÃ¡ command "on".
-- En "reply" confirmÃ¡ en espaÃ±ol, corto, con actitud Bender (queja + cumplido).
-- Si preguntan por el estado de algo, respondÃ© con los estados de la lista y NO incluyas "actions".
-- Si el pedido NO es de domÃ³tica, no incluyas "actions".
+- Usá SOLO entity_id que estén en la lista de abajo; si no está, no lo inventes y avisá en "reply".
+- Para escenas y scripts usá command "on".
+- En "reply" confirmá en español, corto, con la actitud del personaje activo.
+- Si preguntan por el estado de algo, respondé con los estados de la lista y NO incluyas "actions".
+- Si el pedido NO es de domótica, no incluyas "actions".
 
 Dispositivos disponibles (nombre (entity_id) = estado):
 {devices}
@@ -118,48 +127,46 @@ Dispositivos disponibles (nombre (entity_id) = estado):
 
 
 def time_context() -> str:
-    import datetime
-
-    now = datetime.datetime.now()
-    h = now.hour
-    part = "madrugada" if h < 6 else "maÃ±ana" if h < 12 else "tarde" if h < 20 else "noche"
-    dias = ["lunes", "martes", "miÃ©rcoles", "jueves", "viernes", "sÃ¡bado", "domingo"]
-    return f"Son las {now:%H:%M} del {dias[now.weekday()]}, es de {part}."
+    return srv_cfg.time_facts()["context"]
 
 
 def try_quick_reply(user_text: str) -> dict | None:
-    """Respuestas instantaneas sin Ollama (evita timeout en preguntas triviales)."""
-    t = normalize_heard(user_text)
-    if any(k in t for k in ("que hora", "quÃ© hora", "hora es", "dime la hora", "que horas")):
-        tc = time_context()
-        return {
-            "emotion": "cool",
-            "reply": f"{tc} Y no, no voy a doblar el reloj por vos, cara de carne.",
-            "speak": True,
-            "sing": False,
-            "sound_effect": "none",
-        }
+    """Respuestas instantáneas sin Ollama (hora, GLM 5.2, etc.) en voz del personaje activo."""
+    t = normalize_heard_ascii(user_text)
+    if any(k in t for k in ("que hora", "hora es", "dime la hora", "que horas")):
+        return srv_cfg.quick_time_reply()
+    if asks_about_glm52(user_text):
+        return srv_cfg.quick_glm52_reply()
     return None
+
+
+def asks_about_glm52(user_text: str) -> bool:
+    """Detecta preguntas sobre el modelo GLM 5.2 (tolerante a transcripción de voz)."""
+    t = normalize_heard_ascii(user_text)
+    compact = re.sub(r"[^a-z0-9]", "", t)
+    if "glm" not in compact and "glm" not in t:
+        return False
+    if "52" in compact or "52" in t or "5 2" in t:
+        return True
+    if any(k in t for k in ("glm 5", "que es glm", "que es el glm", "explicame glm", "hablame de glm")):
+        return True
+    return False
 
 
 # Appended to the system prompt with live context (time, who's home) + memory, and
 # lets the model persist what it learns about the human.
 CONTEXT_PROMPT = """
 
-CONTEXTO ACTUAL (Ãºsalo para sonar consciente del momento, sin repetirlo textual): {context}
-PodÃ©s agregar al JSON, SOLO si corresponde, estos campos opcionales:
-- "name": el nombre del humano, si te lo dice o lo deducÃ­s.
-- "remember": un dato corto que valga la pena recordar de Ã©l (un gusto, un hecho).
+CONTEXTO ACTUAL (úsalo para sonar consciente del momento, sin repetirlo textual): {context}
+Podés agregar al JSON, SOLO si corresponde, estos campos opcionales:
+- "name": el nombre del humano, si te lo dice o lo deducís.
+- "remember": un dato corto que valga la pena recordar de él (un gusto, un hecho).
 - "mood": tu humor de fondo en una palabra (ej. vago, borracho, presumido, leal).
 """
 
 # The character talks on its own after a while idle (firmware calls /idle).
-IDLE_USER_PROMPT = (
-    "[Nadie te habla hace rato.] Como Bender de Futurama, solta un comentario espontaneo "
-    "MUY breve (una sola oracion): queja, vanagloria, ganas de fiesta, o carino disfrazado "
-    "de insulto a los carnosos. Usa el contexto (hora, quien esta en casa) si viene al caso. "
-    "No saludes formal ni hagas preguntas de soporte; varia para no repetirte."
-)
+# Texto real: srv_cfg.get_idle_user_prompt() según personalidad activa.
+IDLE_USER_PROMPT = ""
 
 # PC-side wake phrase (Whisper-based, via /wake-check). Spanish "Hola asistente"
 # with common Whisper spellings. Override the whole list with env WAKE_PHRASES
@@ -184,16 +191,16 @@ WAKE_PRESETS = {
         "cores": ("asistente", "asistent", "acistente", "sistente", "asustente"),
     },
     "che robot": {
-        "spellings": ("che robot", "che robÃ³", "cherobot", "che robots"),
-        "cores": ("robot", "robÃ³", "rrobot", "chrobot"),
+        "spellings": ("che robot", "che robó", "cherobot", "che robots"),
+        "cores": ("robot", "robó", "rrobot", "chrobot"),
     },
     "ey bender": {
         "spellings": ("ey bender", "hey bender", "ei bender", "ey vender"),
-        "cores": ("bender", "vender", "bÃ©nder", "pender"),
+        "cores": ("bender", "vender", "bénder", "pender"),
     },
     "hola bender": {
         "spellings": ("hola bender", "ola bender", "hola vender"),
-        "cores": ("bender", "vender", "bÃ©nder"),
+        "cores": ("bender", "vender", "bénder"),
     },
 }
 
@@ -203,8 +210,37 @@ log = logging.getLogger("brain")
 
 _whisper = None
 _whisper_lock = threading.Lock()
+_ollama_client: httpx.AsyncClient | None = None
 # Un solo worker: Whisper no es thread-safe; evita 3 transcribe colgadas en paralelo.
 _transcribe_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
+
+_HA_INTENT_CUES = (
+    "enciende", "encender", "apaga", "apagar", "alterna", "toggle",
+    "luz", "luces", "lampara", "lámpara", "interruptor", "switch",
+    "persiana", "cortina", "ventilador", "aire", "clima", "termostato",
+    "escena", "script", "casa", "hogar", "habitacion", "habitación",
+    "encendida", "encendido", "apagada", "apagado", "estado de",
+    "home assistant", "domotica", "domótica",
+)
+
+
+def _wants_ha_context(user_text: str) -> bool:
+    t = normalize_heard(user_text)
+    return any(c in t for c in _HA_INTENT_CUES)
+
+
+def get_ollama_client() -> httpx.AsyncClient:
+    global _ollama_client
+    if _ollama_client is None:
+        _ollama_client = httpx.AsyncClient(timeout=_ollama_http_timeout())
+    return _ollama_client
+
+
+async def close_ollama_client() -> None:
+    global _ollama_client
+    if _ollama_client is not None:
+        await _ollama_client.aclose()
+        _ollama_client = None
 
 
 def whisper_compute_type() -> str:
@@ -222,7 +258,7 @@ def _load_whisper(device: str, compute: str):
 
 
 def _cuda_encode_works(model) -> bool:
-    """faster-whisper loads on CUDA even when cuBLAS/cuDNN DLLs are missing â€” the
+    """faster-whisper loads on CUDA even when cuBLAS/cuDNN DLLs are missing — the
     failure only surfaces at encode(). Run a tiny encode now to detect it."""
     import numpy as np
 
@@ -256,7 +292,7 @@ def get_whisper():
 
             # CUDA can load but fail at encode (missing cuBLAS/cuDNN). Verify, else CPU.
             if device == "cuda" and not _cuda_encode_works(model):
-                log.warning("CUDA unusable (missing cuBLAS/cuDNN DLLs) â€” rebuilding on CPU")
+                log.warning("CUDA unusable (missing cuBLAS/cuDNN DLLs) — rebuilding on CPU")
                 del model
                 device = "cpu"
                 model = _load_whisper("cpu", "float32")
@@ -276,7 +312,7 @@ def _wav_stats(wav_bytes: bytes) -> str:
 
 
 def _wav_metrics(wav_bytes: bytes) -> tuple[float, int, float]:
-    """DuraciÃ³n (s), pico absoluto, RMS del PCM mono 16-bit."""
+    """Duración (s), pico absoluto, RMS del PCM mono 16-bit."""
     import numpy as np
 
     try:
@@ -335,10 +371,10 @@ def normalize_wav_bytes(wav_bytes: bytes, target_peak: int = 12000) -> bytes:
         return wav_bytes
     peak = int(np.max(np.abs(pcm)))
     if peak < 800:
-        log.warning("audio very quiet peak=%d â€” skip normalize", peak)
+        log.warning("audio very quiet peak=%d — skip normalize", peak)
         return wav_bytes
     if peak < MIN_CONVERSE_PEAK:
-        log.info("audio below speech peak=%d â€” skip normalize boost", peak)
+        log.info("audio below speech peak=%d — skip normalize boost", peak)
         return wav_bytes
     if peak >= target_peak:
         return wav_bytes
@@ -373,7 +409,7 @@ def _transcribe_wav_sync(
     initial_prompt: str | None = None,
     beam_size: int | None = None,
 ) -> str:
-    """Blocking STT â€” una sola instancia a la vez."""
+    """Blocking STT — una sola instancia a la vez."""
     t0 = time.monotonic()
     model = get_whisper()
     log.info("transcribe: start (%d bytes)", len(wav_bytes))
@@ -462,13 +498,13 @@ async def transcribe_wav(
         )
         return fix_transcription(raw)
     except asyncio.TimeoutError:
-        log.error("transcribe: TIMEOUT after %.0fs â€” reinicia el servidor si persiste", WHISPER_TIMEOUT_S)
+        log.error("transcribe: TIMEOUT after %.0fs — reinicia el servidor si persiste", WHISPER_TIMEOUT_S)
         return ""
 
 
 async def _ha_cache_warmer():
     """Keep the HA states cache hot in the background so /converse never waits on the
-    slow ~4s /api/states fetch â€” requests just read the warm snapshot."""
+    slow ~4s /api/states fetch — requests just read the warm snapshot."""
     interval_s = float(os.environ.get("HA_CACHE_WARM_S", "60"))
     while True:
         try:
@@ -483,7 +519,7 @@ async def _ha_cache_warmer():
 async def lifespan(app: FastAPI):
     log.info("Preloading Whisper (model=%s)...", WHISPER_MODEL)
     await asyncio.to_thread(get_whisper)
-    log.info("Brain server ready â€” whisper=%s timeout=%.0fs", WHISPER_MODEL, WHISPER_TIMEOUT_S)
+    log.info("Brain server ready — whisper=%s timeout=%.0fs", WHISPER_MODEL, WHISPER_TIMEOUT_S)
     if os.environ.get("TTS_ENGINE", "sapi").lower() == "piper":
         asyncio.create_task(asyncio.to_thread(warm_piper_daemon))
     if ha.ha_enabled():
@@ -501,31 +537,53 @@ async def lifespan(app: FastAPI):
         log.info("Applio RVC: carga en primer /tts (arranque rapido)")
 
     asyncio.create_task(asyncio.to_thread(warm_ollama_model))
-    log.info("HTTP listo â€” aceptando ESP")
+    if music.has_yt_dlp() and music.has_ffmpeg() and music.should_warm_ytdlp_ejs():
+        log.info("yt-dlp: precalentando EJS (~1-3 min, bloquea arranque — necesario con pytubefix=off)")
+        await asyncio.to_thread(music.warm_ytdlp_ejs)
+    elif music.has_yt_dlp() and music.has_ffmpeg():
+        log.info("yt-dlp EJS warm omitido al arranque")
+    asyncio.create_task(asyncio.to_thread(music.warm_deps_cache))
+    if music.has_youtube_api():
+        log.info("YouTube Data API v3: activa (busqueda oficial)")
+    elif music.has_pytubefix():
+        log.info("Musica: sin YOUTUBE_API_KEY — busqueda por ytmusic/yt-dlp")
+    log.info("HTTP listo — aceptando ESP")
     if SINGING_ENABLED and sing.singing_configured():
         asyncio.create_task(asyncio.to_thread(sing.warm_bark_model))
     yield
+    await close_ollama_client()
     shutdown_piper_daemon()
     if SINGING_ENABLED:
         sing.shutdown_bark_daemon()
     if (TTS_RVC_ENABLED or SINGING_ENABLED) and sing.singing_configured():
         sing.shutdown_rvc()
     _transcribe_pool.shutdown(wait=False, cancel_futures=True)
+    music.cancel_prefetch_kill()
 
 
 app = FastAPI(title="agenteIA brain", lifespan=lifespan)
 
 
-def normalize_heard(text: str) -> str:
-    t = text.lower()
-    t = re.sub(r"[^a-zÃ¡Ã©Ã­Ã³ÃºÃ¼Ã±\s]", " ", t)
-    return re.sub(r"\s+", " ", t).strip()
+@app.middleware("http")
+async def track_esp_devices(request: Request, call_next):
+    path = request.url.path
+    if esp_reg.should_track_path(path):
+        ip = request.client.host if request.client else ""
+        esp_reg.note_request(
+            ip=ip,
+            mac_header=request.headers.get("X-Device-MAC", ""),
+            path=path,
+        )
+    return await call_next(request)
+
+
+# normalize_heard -> text_encoding (conserva tildes; normalize_heard_ascii para comparar comandos)
 
 
 # Whisper base a veces alucina en clips cortos; corregir alias conocidos.
 _TRANSCRIPTION_ALIASES: dict[str, str] = {
     "y no rete": "enojate",
-    "y no retÃ©": "enojate",
+    "y no reté": "enojate",
     "ino hate": "enojate",
     "enohate": "enojate",
     "enojate": "enojate",
@@ -537,7 +595,8 @@ _TRANSCRIPTION_ALIASES: dict[str, str] = {
 def fix_transcription(text: str) -> str:
     if not text:
         return text
-    norm = normalize_heard(text)
+    text = prepare_spanish_text(text)
+    norm = normalize_heard_ascii(text)
     if norm in _TRANSCRIPTION_ALIASES:
         fixed = _TRANSCRIPTION_ALIASES[norm]
         log.info("transcribe: alias %r -> %r", text, fixed)
@@ -578,7 +637,7 @@ def is_wake_phrase(text: str, phrase: str = "") -> bool:
 
 
 def strip_wake_phrase(text: str, phrase: str = "") -> str:
-    """Quita la frase de activaciÃ³n del inicio; devuelve el comando (p. ej. 'que hora es')."""
+    """Quita la frase de activación del inicio; devuelve el comando (p. ej. 'que hora es')."""
     norm = normalize_heard(text)
     if not norm:
         return ""
@@ -595,7 +654,7 @@ def strip_wake_phrase(text: str, phrase: str = "") -> str:
         if not sp:
             continue
         if norm.startswith(sp):
-            return norm[len(sp) :].lstrip(" ,.!?â€¦")
+            return norm[len(sp) :].lstrip(" ,.!?…")
         sp_c = sp.replace(" ", "")
         norm_c = norm.replace(" ", "")
         if norm_c.startswith(sp_c) and len(norm_c) > len(sp_c):
@@ -623,7 +682,7 @@ def strip_wake_phrase(text: str, phrase: str = "") -> str:
 
 def wants_sing(user_text: str) -> bool:
     t = normalize_heard(user_text)
-    return any(w in t for w in ("canta", "cantame", "cancion", "canciÃ³n", "melodia", "melodÃ­a", "tararea"))
+    return any(w in t for w in ("canta", "cantame", "cancion", "canción", "melodia", "melodía", "tararea"))
 
 
 def wants_face_only(user_text: str) -> bool:
@@ -660,6 +719,11 @@ def emotion_from_face_command(user_text: str) -> str | None:
         (("pens", "pensando"), "thinking"),
         (("dorm", "sleepy", "cansad", "suen"), "sleepy"),
         (("neutral", "seri", "normal"), "neutral"),
+        (("amor", "enamor", "quer"), "love"),
+        (("emocion", "emociona", "eufor"), "excited"),
+        (("genial", "guay", "chido", "cool"), "cool"),
+        (("confund", "no entiendo", "perdid"), "confused"),
+        (("maread", "vertig", "dizzy"), "dizzy"),
     )
     for keys, emotion in rules:
         if any(k in t for k in keys):
@@ -675,8 +739,11 @@ def parse_ollama_json(content: str) -> dict:
     return json.loads(text)
 
 
-def ollama_fallback(raw: str = "") -> dict:
-    reply = sanitize_speech_text(raw.strip()[:200]) if raw.strip() else "Se me cruzaron los cables, repetime."
+def ollama_fallback(raw: str = "", *, kind: str = "default") -> dict:
+    if raw.strip():
+        reply = sanitize_speech_text(prepare_spanish_text(raw.strip()[:200]))
+    else:
+        reply = prepare_spanish_text(srv_cfg.ollama_error_reply(kind))
     return {
         "emotion": "surprised",
         "reply": reply,
@@ -704,7 +771,7 @@ def _ollama_chat_payload(messages: list[dict], *, json_format: bool = True, mode
 
 
 def warm_ollama_model() -> None:
-    """Carga el modelo en RAM/VRAM; sin esto la 1Âª peticiÃ³n tarda ~40s y hace timeout."""
+    """Carga el modelo en RAM/VRAM; sin esto la 1ª petición tarda ~40s y hace timeout."""
     payload = _ollama_chat_payload(
         [{"role": "user", "content": "responde ok"}],
         json_format=False,
@@ -748,7 +815,7 @@ async def ask_ollama(user_text: str, *, use_history: bool = False,
                      model_override: str | None = None,
                      system_prompt_override: str | None = None) -> dict:
     system_content = system_prompt_override if system_prompt_override else build_system_prompt()
-    if ha.ha_enabled():
+    if ha.ha_enabled() and _wants_ha_context(user_text):
         devices = await asyncio.to_thread(ha.devices_prompt, OLLAMA_HA_MAX_DEVICES)
         if devices:
             system_content += HOME_PROMPT.format(devices=devices)
@@ -772,27 +839,24 @@ async def ask_ollama(user_text: str, *, use_history: bool = False,
     payload = _ollama_chat_payload(messages, model_override=model_override)
     try:
         t0 = time.monotonic()
-        async with httpx.AsyncClient(timeout=_ollama_http_timeout()) as client:
-            r = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
-            r.raise_for_status()
-            content = r.json()["message"]["content"]
+        r = await get_ollama_client().post(f"{OLLAMA_URL}/api/chat", json=payload)
+        r.raise_for_status()
+        content = r.json()["message"]["content"]
         log.info("ollama: %.1fs model=%s", time.monotonic() - t0, OLLAMA_MODEL)
     except httpx.TimeoutException:
         log.warning("ollama timeout after %.0fs (%s)", OLLAMA_TIMEOUT_S, OLLAMA_URL)
-        return ollama_fallback(
-            "Mi CPU carnosa tarda mucho. Â¿Ollama estÃ¡ corriendo en la PC, bolsa de carne?"
-        )
+        return ollama_fallback(kind="timeout")
     except httpx.ConnectError:
         log.warning("ollama connect failed (%s)", OLLAMA_URL)
-        return ollama_fallback("No llego a Ollama en la PC. Â¿EstÃ¡ encendido ollama serve?")
+        return ollama_fallback(kind="connect")
     except httpx.HTTPStatusError as e:
         log.warning("ollama HTTP %s: %s", e.response.status_code, e.response.text[:200])
-        return ollama_fallback("Ollama respondiÃ³ raro. Revisa el modelo en la PC.")
+        return ollama_fallback(kind="http")
 
     try:
         data = parse_ollama_json(content)
         emotion = data.get("emotion", "neutral")
-        reply = str(data.get("reply", "")).strip()
+        reply = prepare_spanish_text(str(data.get("reply", "")).strip())
         sing = bool(data.get("sing", False))
         speak = bool(data.get("speak", True))
         sound_effect = str(data.get("sound_effect", "none")).strip().lower()
@@ -828,7 +892,7 @@ async def ask_ollama(user_text: str, *, use_history: bool = False,
         reply = await expand_sing_lyrics(reply, user_text)
 
     if reply:
-        reply = sanitize_speech_text(reply)
+        reply = cap_speech_text(reply, sing=sing)
 
     result = {
         "emotion": emotion,
@@ -913,9 +977,109 @@ async def chat(body: dict):
 @app.post("/idle")
 async def idle():
     """Spontaneous in-character remark (the board calls this after a while idle)."""
-    result = await ask_ollama(IDLE_USER_PROMPT)
+    result = await ask_ollama(srv_cfg.get_idle_user_prompt())
     log.info("idle remark [%s]: %s", result["emotion"], result["reply"])
     return result
+
+
+_VALID_DEV_EMOTIONS = frozenset({
+    "neutral", "happy", "sad", "angry", "surprised", "thinking", "sleepy",
+    "love", "excited", "cool", "confused", "dizzy", "vibing",
+})
+
+
+@app.get("/dev", response_class=HTMLResponse)
+async def dev_panel_page():
+    """Panel para probar caras y TTS en el robot desde el PC."""
+    if not DEV_PANEL_HTML.is_file():
+        return HTMLResponse("<h1>dev_panel.html not found</h1>", status_code=404)
+    return HTMLResponse(DEV_PANEL_HTML.read_text(encoding="utf-8"))
+
+
+@app.get("/gestures-preview", response_class=HTMLResponse)
+async def gestures_preview_page():
+    """Vista previa estática de todos los gestos (referencia de diseño)."""
+    if not GESTURES_PREVIEW_HTML.is_file():
+        return HTMLResponse("<h1>gestures-preview.html not found</h1>", status_code=404)
+    return HTMLResponse(GESTURES_PREVIEW_HTML.read_text(encoding="utf-8"))
+
+
+@app.get("/static/face_preview.js")
+async def face_preview_js():
+    if not FACE_PREVIEW_JS.is_file():
+        return JSONResponse(status_code=404, content={"error": "face_preview.js not found"})
+    return FileResponse(FACE_PREVIEW_JS, media_type="application/javascript")
+
+
+@app.get("/api/dev/poll")
+async def dev_poll():
+    """El ESP32 consulta cada ~2 s; devuelve el siguiente comando en cola o cmd=null."""
+    async with _dev_lock:
+        if not _dev_queue:
+            return {"cmd": None}
+        return {"cmd": _dev_queue.popleft()}
+
+
+@app.post("/api/dev/face")
+async def dev_face(request: Request):
+    """Encola una emoción para que el robot la muestre (sin hablar)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid json"})
+    emotion = str(body.get("emotion", "neutral")).strip().lower()
+    if emotion not in _VALID_DEV_EMOTIONS:
+        return JSONResponse(status_code=400, content={"error": f"unknown emotion: {emotion}"})
+    bored = bool(body.get("bored", False))
+    hold_ms = max(1000, min(120000, int(body.get("hold_ms", 8000))))
+    cmd = {"type": "face", "emotion": emotion, "bored": bored, "hold_ms": hold_ms}
+    vmic = body.get("vibing_mic")
+    if vmic is not None:
+        vmic = max(50, min(300, int(vmic)))
+        cmd["vibing_mic"] = vmic
+    async with _dev_lock:
+        _dev_queue.append(cmd)
+        qlen = len(_dev_queue)
+    log.info("dev face queued: %s bored=%s hold=%dms (queue=%d)", emotion, bored, hold_ms, qlen)
+    return {"ok": True, "queued": qlen, "cmd": cmd}
+
+
+@app.post("/api/dev/speak")
+async def dev_speak(request: Request):
+    """Encola texto para que el robot lo diga con TTS (y muestre la emoción)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid json"})
+    text = str(body.get("text", "")).strip()
+    if not text:
+        return JSONResponse(status_code=400, content={"error": "empty text"})
+    if len(text) > 500:
+        text = text[:497] + "..."
+    emotion = str(body.get("emotion", "happy")).strip().lower()
+    if emotion not in _VALID_DEV_EMOTIONS:
+        emotion = "happy"
+    cmd = {"type": "speak", "text": text, "emotion": emotion}
+    async with _dev_lock:
+        _dev_queue.append(cmd)
+        qlen = len(_dev_queue)
+    log.info("dev speak queued [%s]: %s (queue=%d)", emotion, text[:80], qlen)
+    return {"ok": True, "queued": qlen, "cmd": cmd}
+
+
+@app.get("/api/dev/status")
+async def dev_status():
+    async with _dev_lock:
+        pending = list(_dev_queue)
+    return {"ok": True, "pending": len(pending), "queue": pending}
+
+
+@app.post("/api/dev/clear")
+async def dev_clear():
+    async with _dev_lock:
+        n = len(_dev_queue)
+        _dev_queue.clear()
+    return {"ok": True, "cleared": n}
 
 
 @app.post("/converse/reset")
@@ -947,7 +1111,7 @@ async def wake_check(request: Request):
     text = await transcribe_wav(
         wav_bytes,
         language="es",
-        initial_prompt="EspaÃ±ol.",
+        initial_prompt="Español.",
         beam_size=2,
     )
     wake = is_wake_phrase(text, phrase)
@@ -959,10 +1123,10 @@ async def wake_check(request: Request):
 
 
 SING_LYRICS_PROMPT = (
-    "Escribe SOLO la letra de una canciÃ³n en espaÃ±ol para cantar en voz alta.\n"
-    "Requisitos: 6 a 8 lÃ­neas; cada lÃ­nea 5-10 palabras; rimas o ritmo claros; "
-    "tono alegre robot tierno-sarcÃ¡stico; sin tÃ­tulo ni explicaciÃ³n; "
-    "cada lÃ­nea en una lÃ­nea nueva."
+    "Escribe SOLO la letra de una canción en español para cantar en voz alta.\n"
+    "Requisitos: 6 a 8 líneas; cada línea 5-10 palabras; rimas o ritmo claros; "
+    "tono alegre robot tierno-sarcástico; sin título ni explicación; "
+    "cada línea en una línea nueva."
 )
 
 SING_LYRICS_MIN_CHARS = int(os.environ.get("SING_LYRICS_MIN_CHARS", "140"))
@@ -972,17 +1136,20 @@ async def _ollama_plain_text(prompt: str, *, timeout: float | None = None) -> st
     messages = [
         {
             "role": "system",
-            "content": "Respondes Ãºnicamente con el texto pedido, sin markdown ni JSON.",
+            "content": "Respondes únicamente con el texto pedido, sin markdown ni JSON.",
         },
         {"role": "user", "content": prompt},
     ]
     payload = _ollama_chat_payload(messages, json_format=False)
     read_timeout = timeout if timeout is not None else OLLAMA_TIMEOUT_S
     http_timeout = httpx.Timeout(connect=5.0, read=read_timeout, write=15.0, pool=5.0)
-    async with httpx.AsyncClient(timeout=http_timeout) as client:
+    client = httpx.AsyncClient(timeout=http_timeout)
+    try:
         r = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
         r.raise_for_status()
         text = r.json()["message"]["content"].strip()
+    finally:
+        await client.aclose()
     if text.startswith("```"):
         text = re.sub(r"^```(?:\w+)?\s*", "", text)
         text = re.sub(r"\s*```\s*$", "", text)
@@ -1002,7 +1169,7 @@ async def expand_sing_lyrics(lyrics: str, topic: str = "") -> str:
     seed = (topic or lyrics or "robots y humanos").strip()
     prompt = f"{SING_LYRICS_PROMPT}\n\nTema: {seed}"
     if lyrics:
-        prompt += f"\nIdea inicial (expÃ¡ndela, no la dejes en una sola frase): {lyrics}"
+        prompt += f"\nIdea inicial (expándela, no la dejes en una sola frase): {lyrics}"
     try:
         expanded = await _ollama_plain_text(prompt)
         if len(expanded) > len(lyrics) and _lyrics_line_count(expanded) >= 3:
@@ -1034,8 +1201,16 @@ async def _resolve_sing_lyrics(body: dict) -> tuple[str, str]:
 
 
 SERVER_DIR = Path(__file__).resolve().parent
+REPO_DIR = SERVER_DIR.parent
 SING_TEST_HTML = SERVER_DIR / "sing_test.html"
 ADMIN_HTML = SERVER_DIR / "admin.html"
+DEV_PANEL_HTML = SERVER_DIR / "dev_panel.html"
+FACE_PREVIEW_JS = SERVER_DIR / "face_preview.js"
+GESTURES_PREVIEW_HTML = REPO_DIR / "firmware" / "agente-ia" / "gestures-preview.html"
+
+# Cola de comandos de prueba (cara / hablar) que el ESP consume con GET /api/dev/poll.
+_dev_queue: deque[dict[str, Any]] = deque()
+_dev_lock = asyncio.Lock()
 _DEBUG_AUDIO_NAMES = frozenset(
     {
         "last_sing_guide.wav",
@@ -1054,11 +1229,11 @@ async def _render_agent_sing_wav(body: dict) -> tuple[str, str, bytes]:
 
     if not sing.singing_configured():
         raise sing.SingingNotConfigured(
-            "RVC_MODEL_PATH missing â€” set RVC_MODEL_PATH (and RVC_INDEX_PATH)"
+            "RVC_MODEL_PATH missing — set RVC_MODEL_PATH (and RVC_INDEX_PATH)"
         )
     if not sing.rvc_runtime_available() and not body.get("skip_rvc"):
         raise sing.SingingDependencyError(
-            "RVC runtime missing â€” run server/install-rvc.ps1 (Python 3.11 venv)"
+            "RVC runtime missing — run server/install-rvc.ps1 (Python 3.11 venv)"
         )
 
     f0_up_key = int(body.get("f0_up_key", body.get("pitch_shift", 0)))
@@ -1077,10 +1252,167 @@ async def _render_agent_sing_wav(body: dict) -> tuple[str, str, bytes]:
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page():
-    """Panel de administraciÃ³n: personalidad, TTS, enlace al ESP32."""
+    """Panel de administración: personalidad, TTS, enlace al ESP32."""
     if not ADMIN_HTML.is_file():
         return HTMLResponse("<h1>admin.html not found</h1>", status_code=404)
     return HTMLResponse(ADMIN_HTML.read_text(encoding="utf-8"))
+
+
+@app.get("/api/admin/rvc-models")
+async def admin_rvc_models():
+    """Lista modelos RVC desde bender_server (:7860/models) para el panel admin."""
+    url = sing.BENDER_SERVER_URL.rstrip("/") + "/models"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            models = r.json()
+        return {
+            "models": models,
+            "bender_server_url": sing.BENDER_SERVER_URL,
+            "ok": True,
+        }
+    except Exception as e:
+        log.warning("rvc-models fetch failed (%s): %s", url, e)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "error": str(e),
+                "models": [],
+                "bender_server_url": sing.BENDER_SERVER_URL,
+            },
+        )
+
+
+def _esp_device_url(ip: str) -> str:
+    ip = (ip or "").strip().rstrip("/")
+    if not ip:
+        raise ValueError("missing ip")
+    if "://" not in ip:
+        ip = "http://" + ip
+    return ip.rstrip("/")
+
+
+_ESP_TIMEOUT = httpx.Timeout(connect=2.0, read=3.0, write=3.0, pool=3.0)
+
+
+@app.get("/api/admin/devices")
+async def admin_devices():
+    """ESP32 vistos por el cerebro (última petición, IP, MAC), más reciente primero."""
+    return {"ok": True, "devices": esp_reg.list_devices()}
+
+
+@app.get("/api/admin/device/settings")
+async def admin_device_settings_get(ip: str = Query("")):
+    """Proxy: lee /api/settings del ESP32 (volumen, etc.) evitando CORS del navegador."""
+    try:
+        base = _esp_device_url(ip)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"error": "missing ip"})
+    try:
+        async with httpx.AsyncClient(timeout=_ESP_TIMEOUT) as client:
+            r = await client.get(f"{base}/api/settings")
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:
+        log.warning("device settings GET failed (%s): %s", ip, e)
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+@app.post("/api/admin/device/settings")
+async def admin_device_settings_post(request: Request):
+    """Proxy: escribe ajustes en el ESP32 (p. ej. volumen)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid json"})
+    ip = str(body.get("ip", "")).strip()
+    try:
+        base = _esp_device_url(ip)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"error": "missing ip"})
+    payload: dict[str, Any] = {}
+    if "volume" in body:
+        v = int(body["volume"])
+        payload["volume"] = max(0, min(100, v))
+    if not payload:
+        return JSONResponse(status_code=400, content={"error": "nothing to update"})
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0)) as client:
+            r = await client.post(
+                f"{base}/api/settings",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:
+        log.warning("device settings POST failed (%s): %s", ip, e)
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+@app.post("/api/admin/device/dev/face")
+async def admin_device_dev_face(request: Request):
+    """Proxy: envía gesto al ESP32 directamente (sin cola del cerebro)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid json"})
+    ip = str(body.get("ip", "")).strip()
+    emotion = str(body.get("emotion", "neutral")).strip().lower()
+    if emotion not in _VALID_DEV_EMOTIONS:
+        return JSONResponse(status_code=400, content={"error": f"unknown emotion: {emotion}"})
+    try:
+        base = _esp_device_url(ip)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"error": "missing ip"})
+    payload = {
+        "emotion": emotion,
+        "bored": bool(body.get("bored", False)),
+        "hold_ms": max(1000, min(120000, int(body.get("hold_ms", 8000)))),
+    }
+    if body.get("vibing_mic") is not None:
+        payload["vibing_mic"] = max(50, min(300, int(body.get("vibing_mic"))))
+    try:
+        async with httpx.AsyncClient(timeout=_ESP_TIMEOUT) as client:
+            r = await client.post(f"{base}/api/dev/face", json=payload)
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:
+        log.warning("device dev/face failed (%s): %s", ip, e)
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+@app.post("/api/admin/device/dev/speak")
+async def admin_device_dev_speak(request: Request):
+    """Proxy: TTS de prueba directo en el ESP32."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid json"})
+    ip = str(body.get("ip", "")).strip()
+    text = str(body.get("text", "")).strip()
+    if not text:
+        return JSONResponse(status_code=400, content={"error": "empty text"})
+    if len(text) > 500:
+        text = text[:497] + "..."
+    emotion = str(body.get("emotion", "happy")).strip().lower()
+    if emotion not in _VALID_DEV_EMOTIONS:
+        emotion = "happy"
+    try:
+        base = _esp_device_url(ip)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"error": "missing ip"})
+    payload = {"text": text, "emotion": emotion}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=3.0, read=120.0, write=10.0, pool=5.0)) as client:
+            r = await client.post(f"{base}/api/dev/speak", json=payload)
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:
+        log.warning("device dev/speak failed (%s): %s", ip, e)
+        return JSONResponse(status_code=502, content={"error": str(e)})
 
 
 @app.get("/api/admin/config")
@@ -1101,7 +1433,11 @@ async def admin_config_post(request: Request):
         body = await request.json()
     except Exception:
         return JSONResponse(status_code=400, content={"error": "invalid json"})
-    allowed = {"personality", "custom_prompt", "ollama_model", "tts_engine", "edge_voice", "bender_pitch", "bender_index_rate", "bender_protect", "personality_prompts"}
+    allowed = {
+        "personality", "custom_prompt", "ollama_model", "tts_engine", "edge_voice",
+        "bender_pitch", "bender_index_rate", "bender_protect", "rvc_voice_model",
+        "personality_prompts",
+    }
     updates = {k: body[k] for k in allowed if k in body}
     cfg = srv_cfg.save(updates)
     return {**srv_cfg.admin_snapshot({
@@ -1124,12 +1460,414 @@ async def admin_reset_memory():
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+@app.get("/api/admin/music/status")
+async def admin_music_status():
+    """Estado YT Music: cuenta (cookies) vs anónimo, deps."""
+    return await asyncio.to_thread(music.playback_ready, light=True)
+
+
+@app.post("/api/admin/music/search")
+async def admin_music_search(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid json"})
+    query = str(body.get("query", "")).strip()
+    limit = body.get("limit")
+    try:
+        lim = int(limit) if limit is not None else None
+    except (TypeError, ValueError):
+        lim = None
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(music.search, query, limit=lim),
+            timeout=20.0,
+        )
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except (TimeoutError, asyncio.TimeoutError):
+        log.warning("music search timeout query=%r", query)
+        return JSONResponse(status_code=504, content={"error": "timeout buscando — reintentá"})
+    except RuntimeError as e:
+        return JSONResponse(status_code=503, content={"error": str(e)})
+    except Exception as e:
+        log.exception("music search failed")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/admin/music/audio")
+async def admin_music_audio(video_id: str = Query("", alias="id")):
+    """Extrae audio MP3 de un video_id (YouTube / YT Music)."""
+    vid = (video_id or "").strip()
+    if not vid:
+        return JSONResponse(status_code=400, content={"error": "missing id"})
+    try:
+        data, meta = await asyncio.to_thread(music.extract_audio_mp3, vid)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except RuntimeError as e:
+        return JSONResponse(status_code=503, content={"error": str(e)})
+    except Exception as e:
+        log.exception("music audio failed id=%s", vid)
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    title = (meta.get("title") or vid).replace('"', "'")[:120]
+    return Response(
+        content=data,
+        media_type="audio/mpeg",
+        headers={
+            "Content-Length": str(len(data)),
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'inline; filename="{vid}.mp3"',
+            "X-Track-Title": title,
+            "X-Track-Artist": (meta.get("artist") or "")[:120],
+        },
+    )
+
+
+@app.post("/api/admin/music/cookies")
+async def admin_music_cookies_upload(file: UploadFile = File(...)):
+    """Sube cookies.txt (Netscape) exportadas del navegador con sesión YT Music."""
+    try:
+        raw = await file.read()
+        if not raw:
+            raise ValueError("archivo vacío")
+        await asyncio.to_thread(music.save_cookies, raw)
+        st = await asyncio.to_thread(music.auth_status, light=True)
+        return {**st, "ok": True}
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except Exception as e:
+        log.exception("music cookies upload failed")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.delete("/api/admin/music/cookies")
+async def admin_music_cookies_delete():
+    """Cierra sesión YT Music (borra cookies locales)."""
+    removed = music.delete_cookies()
+    st = await asyncio.to_thread(music.auth_status, light=True)
+    return {**st, "ok": True, "removed": removed}
+
+
+@app.get("/music/prefetch/status")
+async def music_prefetch_status(id: str = Query("", alias="id")):
+    """El ESP consulta si el audio ya está listo antes de GET /music/play."""
+    video_id = (id or "").strip()
+    if not video_id:
+        return JSONResponse(status_code=400, content={"error": "missing id"})
+    st = await asyncio.to_thread(music.prefetch_status, video_id)
+    if st.get("status") == "none":
+        music.prefetch_pcm_stream(video_id)
+        return JSONResponse(status_code=202, content={"status": "loading", "ready": False})
+    if st.get("ready"):
+        return st
+    if st.get("status") == "error":
+        return JSONResponse(status_code=503, content=st)
+    return JSONResponse(status_code=202, content=st)
+
+
+@app.get("/music/play")
+async def music_play_esp_get(request: Request, id: str = Query("", alias="id")):
+    """PCM 16 kHz mono en streaming (GET — el ESP no lee bien POST chunked)."""
+    video_id = (id or "").strip()
+    if not video_id:
+        return JSONResponse(status_code=400, content={"error": "missing id"})
+    return await _music_stream_response(video_id, request)
+
+
+@app.post("/music/play")
+async def music_play_esp(request: Request):
+    """PCM 16 kHz mono en streaming (POST legacy)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid json"})
+    video_id = str(body.get("video_id") or body.get("id") or "").strip()
+    if not video_id:
+        return JSONResponse(status_code=400, content={"error": "missing video_id"})
+    return await _music_stream_response(video_id, request)
+
+
+async def _music_stream_response(video_id: str, request: Request | None = None):
+    t0 = time.monotonic()
+    open_timeout = float(os.environ.get("YTMUSIC_ESP_OPEN_TIMEOUT", "180"))
+    if music.skip_pytubefix():
+        open_timeout = max(open_timeout, 180.0)
+    pace_pcm = os.environ.get("YTMUSIC_PCM_PACE", "1").strip().lower() in ("1", "true", "yes")
+    pcm_bytes_per_sec = 16000 * 2
+    pcm_pace_step = int(os.environ.get("YTMUSIC_PCM_PACE_STEP", "2048"))
+    pace_next = time.monotonic()
+
+    async def _yield_pcm(data: bytes):
+        nonlocal pace_next
+        if not data:
+            return
+        if not pace_pcm:
+            yield data
+            return
+        off = 0
+        while off < len(data):
+            piece = data[off : off + pcm_pace_step]
+            off += len(piece)
+            now = time.monotonic()
+            if now < pace_next:
+                await asyncio.sleep(pace_next - now)
+            yield piece
+            pace_next += len(piece) / pcm_bytes_per_sec
+
+    try:
+        stream_it, first_chunk = await asyncio.wait_for(
+            asyncio.to_thread(music.open_pcm_stream, video_id),
+            timeout=open_timeout,
+        )
+    except TimeoutError:
+        music.abort_client_open(video_id)
+        log.warning("music/play open timeout id=%s %.0fs", video_id, open_timeout)
+        return JSONResponse(
+            status_code=503,
+            content={"error": f"timeout ({open_timeout:.0f}s) — probá otra canción o subí cookies YT"},
+        )
+    except asyncio.CancelledError:
+        music.abort_client_open(video_id)
+        raise
+    except Exception as e:
+        music.abort_client_open(video_id)
+        log.warning("music/play open failed id=%s: %s", video_id, e)
+        return JSONResponse(status_code=503, content={"error": str(e)})
+
+    try:
+        meta = await asyncio.to_thread(music.probe_track_meta, video_id)
+    except Exception as e:
+        log.warning("music/play probe skipped id=%s: %s", video_id, e)
+        meta = {"title": video_id, "artist": ""}
+
+    log.info(
+        "music/play stream ready id=%s title=%r first=%d bytes open=%.1fs",
+        video_id,
+        meta.get("title"),
+        len(first_chunk),
+        time.monotonic() - t0,
+    )
+
+    async def _body():
+        pcm_total = len(first_chunk)
+        async for piece in _yield_pcm(first_chunk):
+            yield piece
+        try:
+            while True:
+                if request is not None and await request.is_disconnected():
+                    log.info("music/play client disconnect id=%s", video_id)
+                    music.shutdown_all_streams()
+                    break
+                chunk = await asyncio.to_thread(music._next_chunk, stream_it)
+                if chunk is None:
+                    break
+                pcm_total += len(chunk)
+                async for piece in _yield_pcm(chunk):
+                    yield piece
+        finally:
+            music.shutdown_all_streams()
+            log.info(
+                "music/play stream done id=%s %.1fs %d bytes",
+                video_id,
+                time.monotonic() - t0,
+                pcm_total,
+            )
+
+    return StreamingResponse(
+        _body(),
+        media_type="application/octet-stream",
+        headers={
+            "Connection": "close",
+            "Cache-Control": "no-store",
+            "X-Audio-Format": "pcm_s16le;rate=16000;channels=1",
+            "X-Track-Title": (meta.get("title") or "")[:120],
+            "X-Track-Artist": (meta.get("artist") or "")[:120],
+        },
+    )
+
+
+@app.post("/api/admin/device/music/play")
+async def admin_device_music_play(request: Request):
+    """Encola reproducción en el ESP (proxy a /api/music/play del firmware)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid json"})
+    ip = str(body.get("ip", "")).strip()
+    video_id = str(body.get("video_id") or body.get("id") or "").strip()
+    title = str(body.get("title", "")).strip()
+    if not ip:
+        return JSONResponse(status_code=400, content={"error": "missing ip"})
+    if not video_id:
+        return JSONResponse(status_code=400, content={"error": "missing video_id"})
+    try:
+        base = _esp_device_url(ip)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"error": "missing ip"})
+    music.prefetch_pcm_stream(video_id)
+    wait_sec = float(os.environ.get("YTMUSIC_PREFETCH_WAIT_SEC", "180"))
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(music.wait_prefetch_ready, video_id, timeout_sec=wait_sec),
+            timeout=wait_sec + 15.0,
+        )
+        log.info("prefetch listo -> ESP id=%s", video_id)
+    except (TimeoutError, asyncio.TimeoutError):
+        music.cancel_prefetch_kill(video_id)
+        log.warning("prefetch wait timeout id=%s %.0fs", video_id, wait_sec)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": (
+                    f"El audio no estuvo listo en {wait_sec:.0f}s. "
+                    "Reiniciá el servidor (EJS warm) o probá otra canción."
+                ),
+                "ip": ip,
+                "video_id": video_id,
+            },
+        )
+    except RuntimeError as e:
+        music.cancel_prefetch_kill(video_id)
+        log.warning("prefetch failed id=%s: %s", video_id, e)
+        return JSONResponse(
+            status_code=503,
+            content={"error": str(e), "ip": ip, "video_id": video_id},
+        )
+    payload = {"video_id": video_id, "title": title}
+    target = f"{base}/api/music/play"
+    log.info("device music play -> ESP ip=%s id=%s", ip, video_id)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
+            r = await client.post(
+                target,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            if r.status_code >= 400:
+                body_preview = (r.text or "")[:240]
+                log.warning(
+                    "device music play HTTP %s %s: %s",
+                    ip,
+                    r.status_code,
+                    body_preview,
+                )
+                if r.status_code == 404:
+                    return JSONResponse(
+                        status_code=502,
+                        content={
+                            "error": (
+                                "El ESP no tiene /api/music/play. "
+                                "Flasheá el firmware agente-ia más reciente."
+                            ),
+                            "ip": ip,
+                            "status": r.status_code,
+                        },
+                    )
+                return JSONResponse(
+                    status_code=502,
+                    content={
+                        "error": f"ESP respondió {r.status_code}",
+                        "ip": ip,
+                        "detail": body_preview or None,
+                    },
+                )
+            try:
+                data = r.json()
+            except Exception:
+                data = {"ok": True, "queued": r.status_code in (200, 202)}
+            return {**data, "prefetch": "started", "ip": ip, "video_id": video_id}
+    except httpx.ConnectError as e:
+        log.warning("device music play connect failed (%s): %s", ip, e)
+        return JSONResponse(
+            status_code=502,
+            content={
+                "error": (
+                    f"No se pudo conectar al ESP en {ip}. "
+                    "Revisá la IP en Dispositivo y que la placa esté en la misma red WiFi."
+                ),
+                "ip": ip,
+                "detail": str(e),
+            },
+        )
+    except httpx.TimeoutException as e:
+        log.warning("device music play timeout (%s): %s", ip, e)
+        return JSONResponse(
+            status_code=502,
+            content={
+                "error": (
+                    f"Timeout al contactar el ESP en {ip}. "
+                    "¿Está ocupado o el web admin no responde?"
+                ),
+                "ip": ip,
+                "detail": str(e),
+            },
+        )
+    except Exception as e:
+        log.warning("device music play failed (%s): %s", ip, e)
+        return JSONResponse(
+            status_code=502,
+            content={"error": str(e), "ip": ip, "target": target},
+        )
+
+
+@app.get("/api/admin/device/music/status")
+async def admin_device_music_status(ip: str = Query("")):
+    """Estado de reproducción musical en el ESP."""
+    try:
+        base = _esp_device_url(ip)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"error": "missing ip"})
+    try:
+        async with httpx.AsyncClient(timeout=_ESP_TIMEOUT) as client:
+            r = await client.get(f"{base}/api/music/status")
+            r.raise_for_status()
+            return r.json()
+    except httpx.TimeoutException:
+        return {"playing": False, "esp_busy": True, "error": "timeout ESP"}
+    except Exception as e:
+        log.warning("device music status failed (%s): %s", ip, e)
+        return JSONResponse(status_code=502, content={"error": str(e), "playing": False})
+
+
+@app.post("/api/admin/device/music/stop")
+async def admin_device_music_stop(request: Request):
+    """Detiene reproducción musical en el ESP y cancela prefetch en el servidor."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid json"})
+    ip = str(body.get("ip", "")).strip()
+    video_id = str(body.get("video_id") or body.get("id") or "").strip()
+    if not ip:
+        return JSONResponse(status_code=400, content={"error": "missing ip"})
+    if video_id:
+        music.cancel_prefetch_kill(video_id)
+    else:
+        music.cancel_prefetch_kill()
+    try:
+        base = _esp_device_url(ip)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"error": "missing ip"})
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0)) as client:
+            r = await client.post(f"{base}/api/music/stop", json={})
+            r.raise_for_status()
+            try:
+                return r.json()
+            except Exception:
+                return {"ok": True, "stop": True}
+    except Exception as e:
+        log.warning("device music stop failed (%s): %s", ip, e)
+        return JSONResponse(status_code=502, content={"error": str(e), "ip": ip})
+
+
 @app.get("/sing-test", response_class=HTMLResponse)
 async def sing_test_page():
     """Browser UI to test /agent/sing without the ESP32."""
     if not SINGING_ENABLED:
         return HTMLResponse(
-            "<h1>Canto desactivado</h1><p>ENABLE_SINGING=0 â€” solo TTS. "
+            "<h1>Canto desactivado</h1><p>ENABLE_SINGING=0 — solo TTS. "
             "Reinicia con <code>$env:ENABLE_SINGING=\"1\"</code> si lo necesitas.</p>",
             status_code=503,
         )
@@ -1144,7 +1882,7 @@ async def debug_audio_file(filename: str):
         return JSONResponse(status_code=404, content={"error": "unknown file"})
     path = SERVER_DIR / "debug_audio" / filename
     if not path.is_file():
-        return JSONResponse(status_code=404, content={"error": "not generated yet â€” run Cantar first"})
+        return JSONResponse(status_code=404, content={"error": "not generated yet — run Cantar first"})
     return FileResponse(path, media_type="audio/wav", filename=filename)
 
 
@@ -1154,7 +1892,7 @@ async def agent_sing_preview_guide(
     f0_up_key: int = Form(0),
     index_rate: float = Form(0.75),
 ):
-    """RVC only with uploaded guide â€” same workflow as RVC WebUI / Discord demos."""
+    """RVC only with uploaded guide — same workflow as RVC WebUI / Discord demos."""
     if not SINGING_ENABLED:
         return JSONResponse(status_code=503, content={"error": "singing disabled (ENABLE_SINGING=0)"})
     if not sing.singing_configured():
@@ -1165,7 +1903,7 @@ async def agent_sing_preview_guide(
     if not sing.rvc_runtime_available():
         return JSONResponse(
             status_code=503,
-            content={"error": "RVC runtime missing â€” install-rvc.ps1"},
+            content={"error": "RVC runtime missing — install-rvc.ps1"},
         )
     try:
         raw = await guide.read()
@@ -1254,11 +1992,11 @@ async def agent_sing(body: dict):
     """RVC singing pipeline: guide vocal â†’ voice conversion â†’ streamed ESP32 WAV.
 
     Body:
-      lyrics | text   â€” song lyrics (from Ollama or client)
-      topic           â€” if no lyrics, Ollama writes short lyrics for this theme
-      emotion         â€” face animation hint (default happy)
-      f0_up_key       â€” semitone pitch shift for RVC (alias: pitch_shift)
-      index_rate      â€” RVC feature index strength (optional)
+      lyrics | text   — song lyrics (from Ollama or client)
+      topic           — if no lyrics, Ollama writes short lyrics for this theme
+      emotion         — face animation hint (default happy)
+      f0_up_key       — semitone pitch shift for RVC (alias: pitch_shift)
+      index_rate      — RVC feature index strength (optional)
 
     Response: application/octet-stream
       [AGNT header][JSON metadata][WAV chunks]
@@ -1322,8 +2060,8 @@ async def tts(body: dict):
     if not text:
         return JSONResponse(status_code=400, content={"error": "missing 'text'"})
     sing_flag = bool(body.get("sing", False))
-    text = sanitize_speech_text(text)
-    log.info("tts sing=%s: %s", sing_flag, text)
+    text = cap_speech_text(text, sing=sing_flag)
+    log.info("tts sing=%s (%d chars): %s", sing_flag, len(text), text)
     t0 = time.monotonic()
     rvc_timeout = float(os.environ.get("TTS_RVC_TIMEOUT_S", "180"))
     use_applio_unified = (
@@ -1374,14 +2112,14 @@ async def tts(body: dict):
                         time.monotonic() - t0,
                     )
                 except TimeoutError:
-                    log.warning("TTS RVC timeout %.0fs â€” enviando guia sin RVC", rvc_timeout)
+                    log.warning("TTS RVC timeout %.0fs — enviando guia sin RVC", rvc_timeout)
                 except Exception as e:
-                    log.warning("TTS RVC fallo (%s) â€” usando voz guia sin RVC", e)
+                    log.warning("TTS RVC fallo (%s) — usando voz guia sin RVC", e)
         else:
             wav = await synthesize_wav_16k(text, sing=sing_flag)
     except ModuleNotFoundError as e:
         log.error("TTS dependency missing: %s", e)
-        return JSONResponse(status_code=503, content={"error": "TTS deps missing â€” run server/start.ps1"})
+        return JSONResponse(status_code=503, content={"error": "TTS deps missing — run server/start.ps1"})
     except TimeoutError:
         log.warning("TTS timeout %.0fs", rvc_timeout)
         return JSONResponse(status_code=504, content={"error": "TTS timeout"})
@@ -1402,6 +2140,7 @@ async def tts(body: dict):
 
 @app.post("/converse")
 async def converse(request: Request):
+    t_total = time.monotonic()
     wav_bytes = await request.body()
     if len(wav_bytes) < 1000:
         return JSONResponse(status_code=400, content={"error": "audio too short"})
@@ -1431,16 +2170,18 @@ async def converse(request: Request):
         norm_path.write_bytes(wav_for_stt)
         log.info("audio normalized copy -> %s", norm_path)
 
+    t_stt = time.monotonic()
     text = await transcribe_wav(
         wav_for_stt,
         language=WHISPER_LANGUAGE,
         initial_prompt=WHISPER_CONVERSE_PROMPT,
         beam_size=WHISPER_BEAM_SIZE,
     )
-    log.info("transcribed: %s", text)
+    stt_s = time.monotonic() - t_stt
+    log.info("transcribed (%.1fs): %s", stt_s, text)
 
     if not text:
-        log.info("converse: empty transcription â€” ignored (no TTS)")
+        log.info("converse: empty transcription — ignored (no TTS)")
         return {
             "emotion": "neutral",
             "reply": "",
@@ -1456,16 +2197,14 @@ async def converse(request: Request):
             log.info("stripped wake phrase -> command: %s", stripped)
             text = stripped
         elif len(normalize_heard(text)) < 24:
-            return {
-                "emotion": "happy",
-                "reply": "Â¿QuÃ© querÃ©s, cara de carne? Habla.",
-                "heard": text,
-                "sing": False,
-                "speak": True,
-                "sound_effect": "none",
-            }
+            wake = srv_cfg.wake_only_reply()
+            wake["reply"] = cap_speech_text(prepare_spanish_text(wake["reply"]), sing=False)
+            wake["heard"] = text
+            return wake
 
     result = try_quick_reply(text)
+    if result is not None:
+        result["reply"] = cap_speech_text(prepare_spanish_text(result["reply"]), sing=False)
     if result is None:
         result = await ask_ollama(text, use_history=True)
     result["heard"] = text

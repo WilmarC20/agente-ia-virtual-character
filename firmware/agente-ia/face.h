@@ -9,7 +9,7 @@
 
 enum class Emotion {
   Neutral, Happy, Sad, Angry, Surprised, Thinking, Sleepy,
-  Love, Excited, Cool, Confused, Dizzy
+  Love, Excited, Cool, Confused, Dizzy, Vibing
 };
 
 inline Emotion emotionFromString(const String &s) {
@@ -24,6 +24,7 @@ inline Emotion emotionFromString(const String &s) {
   if (s == "cool") return Emotion::Cool;
   if (s == "confused") return Emotion::Confused;
   if (s == "dizzy") return Emotion::Dizzy;
+  if (s == "vibing") return Emotion::Vibing;
   return Emotion::Neutral;
 }
 
@@ -42,15 +43,22 @@ public:
     _gfx.fillScreen(TFT_BLACK);
     _browPhase = random(0, 628) / 100.0f;
     _nextBlinkAt = millis() + 2800 + random(3700);
-    _mood = _moodTarget = moodPalette(_emotion);
   }
 
   void setEmotion(Emotion e) {
     if (e != _emotion) {
       _emotion = e;
-      _moodTarget = moodPalette(e);
       _gazeX = _gazeY = 0;
       _gazeTx = _gazeTy = 0;
+      if (e == Emotion::Vibing) {
+        _vibingBobY = 0;
+        _lastVibingBobDraw = 0;
+        _lastVibingDraw = 0;
+        for (int i = 0; i < kVibingNotes; i++) _noteY[i] = -50.0f;
+        _lastNoteSpawn = 0;
+        memset(_vibingBands, 0, sizeof(_vibingBands));
+        memset(_specHist, 0, sizeof(_specHist));
+      }
       _nextGazeAt = millis() + 700 + random(1800);
       _dirty = true;
     }
@@ -58,7 +66,35 @@ public:
 
   void setBored(bool b) { if (b != _bored) { _bored = b; _dirty = true; } }
   void setShowGear(bool v) { if (v != _showGear) { _showGear = v; _dirty = true; } }
+  Emotion emotion() const { return _emotion; }
+  bool isVibing() const { return _emotion == Emotion::Vibing; }
   void redraw() { _dirty = true; }
+
+  // Mic spectrum for vibing (bands 0..255, peak = raw sample peak).
+  void setVibingMicGain(uint8_t pct) {
+    if (pct < 50) pct = 50;
+    if (pct > 300) pct = 300;
+    if (pct == _vibingMicGain) return;
+    _vibingMicGain = pct;
+    _dirty = true;
+  }
+  uint8_t vibingMicGain() const { return _vibingMicGain; }
+
+  void setVibingSpectrum(const uint8_t *bands, int n, uint32_t peak) {
+    if (_emotion != Emotion::Vibing || !bands || n < 1) return;
+    const int nb = n > kVibingBands ? kVibingBands : n;
+    const float gain = _vibingMicGain / 100.0f;
+    for (int i = 0; i < nb; i++) {
+      float tgt = fminf(255.0f, (float)bands[i] * gain);
+      _vibingBands[i] += (tgt - _vibingBands[i]) * 0.30f;
+    }
+    float norm = (float)peak * gain / 520.0f;
+    if (norm > 1.0f) norm = 1.0f;
+    int lvl = (int)(powf(norm, 0.28f) * 100.0f);
+    if (lvl > 100) lvl = 100;
+    setMouthAmplitude((uint8_t)lvl);
+    _dirty = true;
+  }
 
   static bool gearHit(int sx, int sy, int screenW) {
     if (screenW <= 250) {
@@ -90,8 +126,11 @@ public:
   bool isSinging() const { return _singing; }
 
   void setMouthAmplitude(uint8_t level) {
-    _mouthAmpTarget = level > 100 ? 100 : level;
+    level = level > 100 ? 100 : level;
+    if (level == _mouthAmpTarget) return;
+    _mouthAmpTarget = level;
     if (_talking || _singing) _dirty = true;
+    else if (_emotion == Emotion::Vibing) _dirty = true;
   }
 
   void smoothMouthAmp() {
@@ -100,7 +139,7 @@ public:
       _mouthAmp = 100;
       return;
     }
-    if (!_talking) {
+    if (!_talking && _emotion != Emotion::Vibing) {
       _mouthAmpSmooth = 0.0f;
       _mouthAmpTarget = 0;
       _mouthAmp = 0;
@@ -111,6 +150,9 @@ public:
     float rate = (target > _mouthAmpSmooth)
       ? (0.88f + fminf(0.1f, gap * 0.009f))
       : (0.55f + fminf(0.4f, gap * 0.014f));
+    if (_emotion == Emotion::Vibing) {
+      rate = (target > _mouthAmpSmooth) ? 0.38f : 0.22f;
+    }
     _mouthAmpSmooth += (target - _mouthAmpSmooth) * rate;
     if (_mouthAmpSmooth < 0.06f) _mouthAmpSmooth = 0.0f;
     _mouthAmp = (uint8_t)(_mouthAmpSmooth + 0.5f);
@@ -120,18 +162,18 @@ public:
     uint32_t now = millis();
     bool changed = false;
 
-    if (!_talking && !_singing && now >= _nextBlinkAt && now >= _blinkEndAt) {
+    if (_emotion != Emotion::Vibing && !_talking && !_singing && now >= _nextBlinkAt && now >= _blinkEndAt) {
       _blinkEndAt = now + 110 + random(90);
       _nextBlinkAt = _blinkEndAt + blinkDelayMs();
       changed = true;
     }
     float blink = 0;
-    if (now < _blinkEndAt) {
+    if (_emotion != Emotion::Vibing && now < _blinkEndAt) {
       float u = (_blinkEndAt - now) / 200.0f;
       float bell = 1.0f - fminf(1.0f, fabsf(u - 0.5f) * 2.0f);
       blink = fminf(1.0f, bell * 1.2f);
       if (blink != _blinkAmt) changed = true;
-    } else if (_blinkAmt > 0) {
+    } else if (_emotion != Emotion::Vibing && _blinkAmt > 0) {
       changed = true;
     }
     _blinkAmt = blink;
@@ -140,27 +182,41 @@ public:
       if (_emotion == Emotion::Thinking) {
         int g = ((now / 320) % 2) ? 10 : -10;
         if (g != (int)_gazeTx) { _gazeTx = g; _gazeTy = -3; changed = true; }
-      } else if (now >= _nextGazeAt) {
+      } else if (_emotion != Emotion::Vibing && now >= _nextGazeAt) {
         int amp = gazeAmp();
         _gazeTx = random(-amp, amp + 1);
         _gazeTy = random(-(amp / 4), amp / 4 + 1);
         _nextGazeAt = now + 850 + random(2300);
         changed = true;
       }
-      float nx = _gazeX + (_gazeTx - _gazeX) * 0.18f;
-      float ny = _gazeY + (_gazeTy - _gazeY) * 0.14f;
-      if (fabsf(nx - _gazeX) > 0.3f || fabsf(ny - _gazeY) > 0.3f) {
-        _gazeX = nx; _gazeY = ny;
-        changed = true;
+      if (_emotion != Emotion::Vibing) {
+        float nx = _gazeX + (_gazeTx - _gazeX) * 0.18f;
+        float ny = _gazeY + (_gazeTy - _gazeY) * 0.14f;
+        if (fabsf(nx - _gazeX) > 0.3f || fabsf(ny - _gazeY) > 0.3f) {
+          _gazeX = nx; _gazeY = ny;
+          changed = true;
+        }
       }
     }
 
     if (_talking || _singing) {
       smoothMouthAmp();
       _dirty = true;
-    } else if (changed) _dirty = true;
-
-    if (tickMood()) _dirty = true;
+    } else if (_emotion == Emotion::Vibing) {
+      uint8_t prevMouth = _mouthAmp;
+      smoothMouthAmp();
+      tickVibingMotion(now, changed);
+      const bool mouthMoved = abs((int)_mouthAmp - (int)prevMouth) >= 1;
+      const bool bobMoved = fabsf(_vibingBobY - _lastVibingBobDraw) > 0.12f;
+      const bool frameDue = (now - _lastVibingDraw) >= 40;
+      if (changed || mouthMoved || bobMoved || frameDue) {
+        _dirty = true;
+        if (bobMoved) _lastVibingBobDraw = _vibingBobY;
+        if (frameDue) _lastVibingDraw = now;
+      }
+    } else if (changed) {
+      _dirty = true;
+    }
 
     if (_dirty) { draw(); _dirty = false; }
   }
@@ -197,11 +253,28 @@ private:
   uint32_t _blinkEndAt = 0, _nextBlinkAt = 5000, _nextGazeAt = 4000;
   int _faceScreenW = FACE_DESIGN_W;
   float _blinkAmt = 0, _gazeX = 0, _gazeY = 0, _gazeTx = 0, _gazeTy = 0, _browPhase = 0;
+  float _vibingBobY = 0, _lastVibingBobDraw = 0;
+  uint8_t _vibingMicGain = 150;
+  static constexpr int kVibingBands = 12;
+  static constexpr int kSpecCols = 20;
+  static constexpr int kSpecRows = 8;
+  float _vibingBands[kVibingBands]{};
+  uint8_t _specHist[kSpecCols][kSpecRows]{};
+  static constexpr int kVibingNotes = 4;
+  float _noteX[kVibingNotes]{}, _noteY[kVibingNotes]{}, _noteVx[kVibingNotes]{}, _noteVy[kVibingNotes]{};
+  uint8_t _noteKind[kVibingNotes]{};
+  uint32_t _lastNoteSpawn = 0, _lastVibingDraw = 0;
 
-  struct MoodPalette {
-    uint16_t ink, inkGlow, inkBright, visor, visorDeep, eyeGlow;
-  };
-  MoodPalette _mood{}, _moodTarget{};
+  void tickVibingMotion(uint32_t now, bool &changed) {
+    float t = now * 0.001f;
+    float amp = _mouthAmpSmooth / 100.0f;
+    amp = fmaxf(amp, 0.07f + 0.04f * sinf(t * 2.0f));
+    const float beatHz = 1.6f + amp * 1.4f;
+    const float targetBob = sinf(t * beatHz * 6.2831853f) * (2.0f + amp * 6.0f);
+    const float prev = _vibingBobY;
+    _vibingBobY += (targetBob - _vibingBobY) * 0.12f;
+    if (fabsf(_vibingBobY - prev) > 0.06f) changed = true;
+  }
 
   static uint16_t lerp565(uint16_t a, uint16_t b, float t) {
     if (t <= 0.0f) return a;
@@ -214,60 +287,6 @@ private:
     return (uint16_t)((r << 11) | (g << 5) | bl);
   }
 
-  static MoodPalette moodPalette(Emotion e) {
-    MoodPalette m{INK, INK_GLOW, INK_BRIGHT, VISOR, VISOR_DEEP, EYE_GLOW};
-    switch (e) {
-      case Emotion::Happy:
-      case Emotion::Excited:
-        m = {0x47E0, 0x0320, 0x67FF, 0x1422, 0x0A21, 0x3666};
-        break;
-      case Emotion::Love:
-        m = {0xF9A7, 0x4A08, 0xFDCF, 0x1A04, 0x1002, 0x5A2C};
-        break;
-      case Emotion::Sad:
-        m = {0x2D7F, 0x0218, 0x4DFF, 0x0C22, 0x0618, 0x1A4A};
-        break;
-      case Emotion::Angry:
-        m = {0xFA20, 0x4208, 0xFC60, 0x1804, 0x1002, 0x4A08};
-        break;
-      case Emotion::Surprised:
-        m = {0x67FF, 0x0C30, 0x9FFF, 0x1424, 0x0A20, 0x3A8C};
-        break;
-      case Emotion::Sleepy:
-        m = {0x059F, 0x0210, 0x2DFF, 0x0C20, 0x0618, 0x1A2C};
-        break;
-      case Emotion::Thinking:
-        m = {0x3DFF, 0x0218, 0x6DFF, 0x1022, 0x0818, 0x2545};
-        break;
-      case Emotion::Cool:
-        m = {0x5DFF, 0x0A28, 0x8FFF, 0x1224, 0x0A1C, 0x2A6C};
-        break;
-      case Emotion::Confused:
-      case Emotion::Dizzy:
-        m = {0x9813, 0x3008, 0xB81B, 0x1408, 0x0C04, 0x4A18};
-        break;
-      default:
-        break;
-    }
-    return m;
-  }
-
-  bool tickMood() {
-    bool moved = false;
-    const float rate = 0.14f;
-    auto step = [&](uint16_t &cur, uint16_t tgt) {
-      uint16_t n = lerp565(cur, tgt, rate);
-      if (n != cur) { cur = n; moved = true; }
-    };
-    step(_mood.ink, _moodTarget.ink);
-    step(_mood.inkGlow, _moodTarget.inkGlow);
-    step(_mood.inkBright, _moodTarget.inkBright);
-    step(_mood.visor, _moodTarget.visor);
-    step(_mood.visorDeep, _moodTarget.visorDeep);
-    step(_mood.eyeGlow, _moodTarget.eyeGlow);
-    return moved;
-  }
-
   uint16_t flickerInk(uint16_t base, uint16_t bright) const {
     float t = millis() * 0.001f;
     float flick = 0.88f + 0.12f * sinf(t * 17.0f + _browPhase);
@@ -275,7 +294,29 @@ private:
     return lerp565(base, bright, flick);
   }
 
-  uint16_t accentInk() const { return flickerInk(_mood.ink, _mood.inkBright); }
+  uint16_t accentInk() const { return flickerInk(INK, INK_BRIGHT); }
+
+  // Mouth LED tint only — eyes and visor stay cyan/white.
+  void mouthLedInk(uint16_t &seg, uint16_t &glow, uint16_t &hi) const {
+    seg = accentInk();
+    glow = INK_GLOW;
+    hi = INK_BRIGHT;
+    switch (_emotion) {
+      case Emotion::Angry:
+        seg = 0xFC60; glow = 0x4208; hi = 0xFE20; break;
+      case Emotion::Love:
+        seg = 0xF99F; glow = 0x4A08; hi = 0xFDCF; break;
+      case Emotion::Sad:
+        seg = 0x4DFF; glow = 0x0218; hi = 0x6DFF; break;
+      case Emotion::Sleepy:
+        seg = 0x2DFF; glow = 0x0210; hi = 0x3DFF; break;
+      case Emotion::Confused:
+      case Emotion::Dizzy:
+        seg = 0xB81B; glow = 0x3008; hi = 0xD81F; break;
+      default:
+        break;
+    }
+  }
 
   static constexpr int FACE_DESIGN_W = 320;
   static constexpr int FACE_H = 200;
@@ -407,6 +448,12 @@ private:
         p.pupil = Pupil::Spiral;
         p.mouth = {88, 232, 19, 6, 3, 0, 0, 0, 5};
         break;
+      case Emotion::Vibing:
+        p.brow = Brow::Arch;
+        p.topLid = 0.06f;
+        p.botLid = 0.20f;
+        p.mouth = {78, 242, 25, 8, 3, 14, 0, 0, 0};
+        break;
       default: // Neutral
         p.topLid = 0.12f;
         p.mouth = {88, 232, 19, 4, 3, 2, 0, 0, 0};
@@ -415,22 +462,23 @@ private:
     return p;
   }
 
-  void drawVisorScanlines() {
-    for (int y = 36; y < 100; y += 3) {
+  static constexpr int VISOR_CLIP_X = 44, VISOR_CLIP_Y = 38, VISOR_CLIP_W = 232, VISOR_CLIP_H = 60;
+
+  void drawVisorScanlines(int dy = 0) {
+    for (int y = 36 + dy; y < 100 + dy; y += 3) {
       _canvas.drawFastHLine(40, y, 240, SCANLINE);
     }
   }
 
-  void drawCapsule() {
-    const uint16_t frame = flickerInk(_mood.ink, _mood.inkBright);
-    const uint16_t glow = flickerInk(_mood.inkGlow, _mood.ink);
-    _canvas.fillRoundRect(36, 32, 248, 72, 36, _mood.visor);
-    _canvas.fillRoundRect(44, 38, 232, 60, 30, _mood.visorDeep);
-    drawVisorScanlines();
-    _canvas.drawRoundRect(21, 17, 278, 102, 50, glow);
-    _canvas.drawRoundRect(23, 19, 274, 98, 49, glow);
-    _canvas.drawRoundRect(24, 20, 272, 96, 48, frame);
-    _canvas.drawLine(32, 24, 72, 24, _mood.inkBright);
+  void drawCapsule(int dy = 0) {
+    const uint16_t frame = accentInk();
+    const uint16_t glow = flickerInk(INK_GLOW, INK);
+    _canvas.fillRoundRect(36, 32 + dy, 248, 72, 36, VISOR);
+    _canvas.fillRoundRect(44, 38 + dy, 232, 60, 30, VISOR_DEEP);
+    drawVisorScanlines(dy);
+    _canvas.drawRoundRect(21, 17 + dy, 278, 102, 50, glow);
+    _canvas.drawRoundRect(23, 19 + dy, 274, 98, 49, glow);
+    _canvas.drawRoundRect(24, 20 + dy, 272, 96, 48, frame);
   }
 
   void drawBrows(const Preset &p, float yOff, float tilt) {
@@ -471,7 +519,7 @@ private:
   }
 
   void drawLidMask(int cx, int cy, int r, float top, float bot, LidAng ang) {
-    const uint16_t lid = _mood.visor;
+    const uint16_t lid = VISOR_DEEP;
     if (ang == LidAng::AngryIn) {
       bool inner = cx > CXC;
       if (!inner) _canvas.fillTriangle(cx - r, cy - r, cx + r + 2, cy - r, cx + r + 2, cy - r + (int)(r * 0.55f), lid);
@@ -501,17 +549,19 @@ private:
   }
 
   // Bender-style LED segment mouth (glow bars, not wireframe grid).
-  void drawLedMouth(bool animate, float bowMul = 0.0f, int segCount = 7) {
-    const int x0 = 78, x1 = 242, y0 = 138, y1 = 172;
+  void drawLedMouth(bool animate, float bowMul = 0.0f, int segCount = 7, int dy = 0) {
+    const int x0 = 78, x1 = 242, y0 = 138 + dy, y1 = 172 + dy;
     const int segs = segCount, gap = 3, pad = 5;
-    const uint16_t segInk = accentInk();
-    _canvas.fillRoundRect(x0, y0, x1 - x0, y1 - y0, 10, _mood.visorDeep);
+    uint16_t segInk, segGlow, segHi;
+    mouthLedInk(segInk, segGlow, segHi);
+    _canvas.fillRoundRect(x0, y0, x1 - x0, y1 - y0, 10, VISOR_DEEP);
     _canvas.drawRoundRect(x0, y0, x1 - x0, y1 - y0, 10, segInk);
     const int troughH = y1 - y0 - pad * 2;
     const int innerW = x1 - x0 - pad * 2;
     const int segW = (innerW - gap * (segs - 1)) / segs;
     int sx = x0 + pad;
     float amp = animate ? (_mouthAmpSmooth / 100.0f) : 0.0f;
+    if (_emotion == Emotion::Vibing && animate) amp = powf(amp, 0.48f);
     for (int i = 0; i < segs; i++) {
       float u = (float)i / (segs - 1);
       float env = sinf(u * 3.14159265f);
@@ -519,17 +569,23 @@ private:
       float bow = bowMul * sinf(u * 3.14159265f) * 0.35f;
       int sh = troughH;
       if (animate) {
-        sh = (int)(troughH * (0.35f + 0.65f * amp * env));
-        if (sh < 5) sh = 5;
+        if (_emotion == Emotion::Vibing) {
+          sh = (int)(troughH * (0.08f + 0.92f * amp * env));
+        } else {
+          sh = (int)(troughH * (0.28f + 0.72f * amp * env));
+        }
+        if (sh < 4) sh = 4;
       } else {
         sh = (int)(troughH * (0.50f + 0.50f * env + bow));
       }
       if (sh > troughH) sh = troughH;
       int sy = y0 + pad + (troughH - sh) / 2;
-      _canvas.fillRoundRect(sx - 1, sy - 1, segW + 2, sh + 2, 4, _mood.inkGlow);
+      _canvas.fillRoundRect(sx - 1, sy - 1, segW + 2, sh + 2, 4, segGlow);
       _canvas.fillRoundRect(sx, sy, segW, sh, 3, segInk);
-      if (!animate && i % 2 == 0) {
-        _canvas.drawFastHLine(sx + 1, sy + 1, segW - 2, _mood.inkBright);
+      if (animate && _emotion == Emotion::Vibing && amp > 0.25f) {
+        _canvas.drawFastHLine(sx + 1, sy + 1, segW - 2, segHi);
+      } else if (!animate && i % 2 == 0) {
+        _canvas.drawFastHLine(sx + 1, sy + 1, segW - 2, segHi);
       }
       sx += segW + gap;
     }
@@ -546,6 +602,7 @@ private:
       case Emotion::Love: bow = 0.28f; break;
       case Emotion::Sleepy: segs = 6; bow = -0.08f; break;
       case Emotion::Surprised: segs = 8; bow = 0.05f; break;
+      case Emotion::Vibing: segs = 7; bow = 0.30f; break;
       default: break;
     }
     drawLedMouth(animate, bow, segs);
@@ -878,13 +935,162 @@ private:
   }
 
   void drawMouthGrid(const MouthCfg &m) {
-    drawLedMouthForEmotion(_emotion, _talking || _singing, m);
+    const bool anim = _talking || _singing;
+    if (!anim && (_emotion == Emotion::Angry || _emotion == Emotion::Neutral ||
+                  _emotion == Emotion::Thinking || _emotion == Emotion::Confused)) {
+      drawMouthGridProcedural(m);
+      return;
+    }
+    drawLedMouthForEmotion(_emotion, anim, m);
+  }
+
+  void drawHappyClosedEye(int cx, int cy, int r) {
+    const uint16_t ink = accentInk();
+    for (int w = 0; w < 2; w++) {
+      for (int i = 0; i < 14; i++) {
+        float t0 = i / 14.0f, t1 = (i + 1) / 14.0f;
+        float a0 = 3.14159265f * (0.12f + t0 * 0.76f);
+        float a1 = 3.14159265f * (0.12f + t1 * 0.76f);
+        int x0 = cx + (int)(cosf(a0) * r * 0.82f);
+        int y0 = cy + (int)(sinf(a0) * r * 0.34f) + 6 + w;
+        int x1 = cx + (int)(cosf(a1) * r * 0.82f);
+        int y1 = cy + (int)(sinf(a1) * r * 0.34f) + 6 + w;
+        _canvas.drawLine(x0, y0, x1, y1, ink);
+      }
+    }
+  }
+
+  void drawMusicNoteGlyph(int x, int y, int headR, bool flagged) {
+    const uint16_t col = accentInk();
+    _canvas.fillCircle(x, y, headR, col);
+    const int stemH = headR * 4;
+    _canvas.drawFastVLine(x + headR, y - stemH + headR, stemH, col);
+    if (flagged) {
+      _canvas.fillTriangle(x + headR, y - stemH + headR,
+                           x + headR + headR * 2, y - stemH + headR + headR,
+                           x + headR, y - stemH + headR + headR * 2, col);
+    }
+  }
+
+  void drawVibingNotes(int dy) {
+    const float amp = _mouthAmpSmooth / 100.0f;
+    const uint32_t now = millis();
+    const uint32_t spawnMs = (uint32_t)fmaxf(140.0f, 320.0f - amp * 180.0f);
+    if (now - _lastNoteSpawn >= spawnMs) {
+      _lastNoteSpawn = now;
+      for (int i = 0; i < kVibingNotes; i++) {
+        if (_noteY[i] < -30.0f) {
+          _noteX[i] = 118.0f + random(0, 85);
+          _noteY[i] = 122.0f + dy + random(0, 12);
+          _noteVy[i] = -1.4f - amp * 2.2f - random(0, 8) * 0.12f;
+          _noteVx[i] = (random(0, 2) ? 1.0f : -1.0f) * (0.5f + random(0, 10) * 0.07f);
+          _noteKind[i] = (uint8_t)random(0, 2);
+          break;
+        }
+      }
+    }
+    for (int i = 0; i < kVibingNotes; i++) {
+      if (_noteY[i] < -35.0f || _noteY[i] > 210.0f) continue;
+      _noteX[i] += _noteVx[i];
+      _noteY[i] += _noteVy[i];
+      int headR = 4 + (int)(amp * 3.0f);
+      if (headR > 7) headR = 7;
+      drawMusicNoteGlyph((int)_noteX[i], (int)_noteY[i], headR, _noteKind[i] != 0);
+    }
+  }
+
+  // Double buffer (LovyanGFX): the whole face is composed off-screen in _canvas
+  // (PSRAM sprite) and blitted in ONE opaque pushSprite. A single write per pixel
+  // at a fixed position fully overwrites the previous frame, so there is no erase
+  // step, no chroma key, hence no flicker and no motion trails. The settings gear
+  // sits in the dead zone to the right of the sprite; we clip it out of the blit
+  // so the opaque face never blackens it (it is repainted on top afterwards).
+  void pushFaceSprite() {
+    const int gearCx = (_faceScreenW <= 250) ? 227 : 303;
+    const int gearLeft = gearCx - 16;
+    if (_showGear) _gfx.setClipRect(0, 0, gearLeft, _gfx.height());
+    if (_faceScreenW < FACE_DESIGN_W) {
+      const float zoom = (float)_faceScreenW / (float)FACE_DESIGN_W;
+      _canvas.pushRotateZoom(_faceScreenW * 0.5f + FACE_OFFSET_X,
+                             FACE_H * 0.5f + FACE_OFFSET_Y, 0.0f, zoom, zoom);
+    } else {
+      _canvas.pushSprite(FACE_OFFSET_X, FACE_OFFSET_Y);
+    }
+    if (_showGear) _gfx.clearClipRect();
+  }
+
+  void advanceSpecHistory() {
+    for (int x = 0; x < kSpecCols - 1; x++) {
+      for (int y = 0; y < kSpecRows; y++) {
+        _specHist[x][y] = _specHist[x + 1][y];
+      }
+    }
+    for (int y = 0; y < kSpecRows; y++) {
+      _specHist[kSpecCols - 1][y] = 0;
+    }
+    for (int b = 0; b < kVibingBands; b++) {
+      uint8_t v = (uint8_t)fminf(255.0f, _vibingBands[b]);
+      int center = b * kSpecRows / kVibingBands;
+      for (int dy = -1; dy <= 1; dy++) {
+        int row = center + dy;
+        if (row < 0 || row >= kSpecRows) continue;
+        uint8_t scaled = (uint8_t)((float)v * (dy == 0 ? 1.0f : 0.55f));
+        if (scaled > _specHist[kSpecCols - 1][row]) {
+          _specHist[kSpecCols - 1][row] = scaled;
+        }
+      }
+    }
+  }
+
+  void drawVibingSpectrogramMouth(int dy) {
+    const int x0 = 78, x1 = 242, y0 = 138 + dy, y1 = 172 + dy;
+    const int pad = 4;
+    uint16_t segInk, segGlow, segHi;
+    mouthLedInk(segInk, segGlow, segHi);
+    _canvas.fillRoundRect(x0, y0, x1 - x0, y1 - y0, 10, VISOR_DEEP);
+    _canvas.drawRoundRect(x0, y0, x1 - x0, y1 - y0, 10, segInk);
+
+    const int innerW = x1 - x0 - pad * 2;
+    const int innerH = y1 - y0 - pad * 2;
+    const int cellW = innerW / kSpecCols;
+    const int cellH = innerH / kSpecRows;
+    const int ox = x0 + pad;
+    const int oy = y0 + pad;
+
+    for (int cx = 0; cx < kSpecCols; cx++) {
+      for (int row = 0; row < kSpecRows; row++) {
+        uint8_t v = _specHist[cx][row];
+        if (v < 10) continue;
+        float t = v / 255.0f;
+        uint16_t col = lerp565(VISOR_DEEP, lerp565(segGlow, segHi, t), 0.35f + t * 0.65f);
+        int px = ox + cx * cellW;
+        int ph = (int)(cellH * t * 1.15f);
+        if (ph < 2) ph = 2;
+        if (ph > innerH) ph = innerH;
+        int py = oy + innerH - ph;
+        _canvas.fillRect(px + 1, py, cellW - 2, ph, col);
+      }
+    }
+    _canvas.drawRoundRect(x0, y0, x1 - x0, y1 - y0, 10, segInk);
+  }
+
+  void drawVibingFace() {
+    const int bob = (int)(_vibingBobY + 0.5f);
+    _canvas.fillSprite(BG);
+    advanceSpecHistory();
+    drawCapsule(bob);
+    _canvas.setClipRect(VISOR_CLIP_X, VISOR_CLIP_Y + bob, VISOR_CLIP_W, VISOR_CLIP_H);
+    drawHappyClosedEye(EYE_L, EYE_Y + bob, EYE_RAD);
+    drawHappyClosedEye(EYE_R, EYE_Y + bob, EYE_RAD);
+    _canvas.clearClipRect();
+    drawVibingSpectrogramMouth(bob);
+    drawVibingNotes(bob);
   }
 
   void drawCompactMouth() {
     const int cx = 160, cy = 154, hw = 28, hh = 17;
     const uint16_t mInk = accentInk();
-    _canvas.fillRoundRect(cx - hw, cy - hh, hw * 2, hh * 2, 6, _mood.visorDeep);
+    _canvas.fillRoundRect(cx - hw, cy - hh, hw * 2, hh * 2, 6, VISOR_DEEP);
     _canvas.drawRoundRect(cx - hw, cy - hh, hw * 2, hh * 2, 6, mInk);
     for (int i = 0; i < 6; i++) {
       int x = cx - hw + 6 + i * ((hw * 2 - 12) / 5);
@@ -894,7 +1100,7 @@ private:
 
   void drawOMouth() {
     const uint16_t mInk = accentInk();
-    _canvas.drawCircle(CXC, 154, 16, _mood.inkGlow);
+    _canvas.drawCircle(CXC, 154, 16, INK_GLOW);
     _canvas.drawCircle(CXC, 154, 14, mInk);
     _canvas.drawCircle(CXC, 154, 13, mInk);
   }
@@ -919,14 +1125,13 @@ private:
     uint16_t tint = base.eyeTint ? base.eyeTint : EYE;
 
     if (wink) {
-      _canvas.fillCircle(cx, cy, r + 4, _mood.eyeGlow);
+      _canvas.fillCircle(cx, cy, r + 2, EYE_GLOW);
       _canvas.fillCircle(cx, cy, r, tint);
       drawWinkLine(cx, cy, r);
       return;
     }
 
-    _canvas.fillCircle(cx, cy, r + 5, _mood.eyeGlow);
-    _canvas.fillCircle(cx, cy, r + 2, lerp565(_mood.eyeGlow, _mood.inkBright, 0.45f));
+    _canvas.fillCircle(cx, cy, r + 2, EYE_GLOW);
     _canvas.fillCircle(cx, cy, r, tint);
 
     float top = base.topLid, bot = base.botLid;
@@ -953,6 +1158,13 @@ private:
   }
 
   void draw() {
+    if (_emotion == Emotion::Vibing) {
+      drawVibingFace();
+      pushFaceSprite();
+      if (_showGear) drawGearOnScreen();
+      return;
+    }
+
     Preset p = preset();
     _canvas.fillSprite(BG);
 
@@ -961,8 +1173,8 @@ private:
     float browTilt = sinf(t * 3.0f + _browPhase * 0.7f) * 0.6f;
 
     drawCapsule();
-    drawBrows(p, browDy, browTilt);
 
+    _canvas.setClipRect(VISOR_CLIP_X, VISOR_CLIP_Y, VISOR_CLIP_W, VISOR_CLIP_H);
     float blink = _blinkAmt;
     if (p.winkRight) {
       drawEyeSide(true, p, blink);
@@ -974,6 +1186,9 @@ private:
       drawEyeSide(true, p, blink);
       drawEyeSide(false, p, blink);
     }
+    _canvas.clearClipRect();
+
+    drawBrows(p, browDy, browTilt);
 
     if (p.tear) drawTear(EYE_L, EYE_Y, p.eyeR);
 
@@ -981,12 +1196,7 @@ private:
     else if (p.mouthKind == MouthKind::O) drawOMouth();
     else drawMouthGrid(p.mouth);
 
-    if (_faceScreenW < FACE_DESIGN_W) {
-      const float zoom = (float)_faceScreenW / (float)FACE_DESIGN_W;
-      _canvas.pushRotateZoom(_faceScreenW * 0.5f + FACE_OFFSET_X, FACE_H * 0.5f + FACE_OFFSET_Y, 0.0f, zoom, zoom);
-    } else {
-      _canvas.pushSprite(FACE_OFFSET_X, FACE_OFFSET_Y);
-    }
+    pushFaceSprite();
     if (_showGear) drawGearOnScreen();
   }
 };

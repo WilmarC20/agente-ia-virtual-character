@@ -1,6 +1,4 @@
-// On-screen settings: a touch-driven menu (opened from the gear icon) plus the
-// persisted user preferences behind it. Stored in NVS (Preferences) so they survive
-// reboots. Renders directly to the display (the face sprite is paused while open).
+// On-screen settings: touch menu (gear icon) + NVS persistence.
 #pragma once
 
 #include <Preferences.h>
@@ -9,29 +7,41 @@
 #include "touch.h"
 #include "es8311.h"
 
-// Wake phrases the user can pick on the device. Labels MUST match the server keys in
-// main.py WAKE_PRESETS — the device sends the label, the server matches against it.
-// A 2.8" screen has no keyboard, so this is a preset picker, not free text.
 static const char *const WAKE_PRESET_LABELS[] = {
     "hola asistente", "che robot", "ey bender", "hola bender",
 };
 static constexpr int WAKE_PRESET_COUNT = sizeof(WAKE_PRESET_LABELS) / sizeof(WAKE_PRESET_LABELS[0]);
 
 struct AppSettings {
-  uint8_t volume = TTS_VOLUME_PERCENT;  // 0..100, stepped by 10
-  bool voiceWake = true;                // PC-side "Hola asistente" listener on/off
-  uint8_t phraseIdx = 0;                // index into WAKE_PRESET_LABELS
+  uint8_t volume = TTS_VOLUME_PERCENT;
+  bool voiceWake = true;
+#if ENABLE_WAKEWORD
+  bool hiEspWake = false;
+#endif
+  uint8_t phraseIdx = 0;
+  bool idleRemarks = ENABLE_IDLE_REMARKS;
+  uint8_t vibingMic = 150;  // gain % (50–300), gesto música / mic ambiente
 };
 
 inline void loadSettings(AppSettings &s) {
   Preferences p;
-  p.begin("agente", true);              // read-only
+  p.begin("agente", true);
   s.volume = p.getUChar("vol", s.volume);
   s.voiceWake = p.getBool("voice", s.voiceWake);
+#if ENABLE_WAKEWORD
+  // Hi ESP (ESP-SR) defaults OFF: running WakeNet shares the I2S bus and leaves the
+  // mic at half rate after TTS (2nd recording came out accelerated). Touch + PC-side
+  // "Hola asistente" still wake the device. Re-enable manually only if you accept that.
+  s.hiEspWake = p.getBool("hiesp", false);
+#endif
   s.phraseIdx = p.getUChar("phrase", s.phraseIdx);
+  s.idleRemarks = p.getBool("idle", s.idleRemarks);
+  s.vibingMic = p.getUChar("vmic", s.vibingMic);
   p.end();
   if (s.volume > 100) s.volume = 100;
   if (s.phraseIdx >= WAKE_PRESET_COUNT) s.phraseIdx = 0;
+  if (s.vibingMic < 50) s.vibingMic = 50;
+  if (s.vibingMic > 300) s.vibingMic = 300;
 }
 
 inline void saveSettings(const AppSettings &s) {
@@ -39,17 +49,28 @@ inline void saveSettings(const AppSettings &s) {
   p.begin("agente", false);
   p.putUChar("vol", s.volume);
   p.putBool("voice", s.voiceWake);
+#if ENABLE_WAKEWORD
+  p.putBool("hiesp", s.hiEspWake);
+#endif
   p.putUChar("phrase", s.phraseIdx);
+  p.putBool("idle", s.idleRemarks);
+  p.putUChar("vmic", s.vibingMic);
   p.end();
+}
+
+inline void applySettingsGlobals(const AppSettings &s, uint8_t &wakePhraseIdx,
+                                 bool &voiceWakeEnabled, bool &idleRemarksEnabled) {
+  wakePhraseIdx = s.phraseIdx;
+  voiceWakeEnabled = s.voiceWake;
+  idleRemarksEnabled = s.idleRemarks;
 }
 
 class SettingsScreen {
 public:
-  // Runs the modal menu: blocks, handling touch, until the user taps "Guardar".
-  // Mutates s and applies volume live; persists on exit. Returns when closed.
   void run(lgfx::LGFX_Device &gfx, AppSettings &s, ES8311 &codec) {
     const int W = gfx.width(), H = gfx.height();
-    touchWaitRelease(W, H);   // if we got here via long-press, wait for that finger to lift
+    layoutFor(W, H);
+    touchWaitRelease(W, H);
     bool dirty = true;
     uint32_t lastAct = 0;
 
@@ -60,15 +81,23 @@ public:
       if (touchReadPoint(W, H, sx, sy) && millis() - lastAct > 220) {
         lastAct = millis();
         if (hit(volMinus, sx, sy)) {
-          if (s.volume >= 10) s.volume -= 10;
+          if (s.volume > 0) s.volume--;
           codec.setPlaybackVolumePercent(s.volume);
           dirty = true;
         } else if (hit(volPlus, sx, sy)) {
-          if (s.volume <= 90) s.volume += 10;
+          if (s.volume < 100) s.volume++;
           codec.setPlaybackVolumePercent(s.volume);
           dirty = true;
         } else if (hit(voiceToggle, sx, sy)) {
           s.voiceWake = !s.voiceWake;
+          dirty = true;
+#if ENABLE_WAKEWORD
+        } else if (hit(hiEspToggle, sx, sy)) {
+          s.hiEspWake = !s.hiEspWake;
+          dirty = true;
+#endif
+        } else if (hit(idleToggle, sx, sy)) {
+          s.idleRemarks = !s.idleRemarks;
           dirty = true;
         } else if (hit(phraseBtn, sx, sy)) {
           s.phraseIdx = (s.phraseIdx + 1) % WAKE_PRESET_COUNT;
@@ -81,29 +110,43 @@ public:
     }
 
     saveSettings(s);
-    touchWaitRelease(W, H);   // don't let the closing tap leak into the main loop
+    touchWaitRelease(W, H);
   }
 
 private:
   struct Rect { int x, y, w, h; };
-  // Layout for a 320x240 landscape screen.
-  Rect volMinus{150, 44, 40, 36};
-  Rect volPlus{250, 44, 40, 36};
-  Rect voiceToggle{168, 96, 138, 36};
-  Rect phraseBtn{198, 150, 108, 36};
-  Rect saveBtn{50, 198, 220, 36};
+  Rect volMinus{}, volPlus{}, voiceToggle{}, hiEspToggle{}, idleToggle{}, phraseBtn{}, saveBtn{};
 
-  static constexpr uint16_t BG = 0x18E3;     // dark slate
-  static constexpr uint16_t LINE = 0x4208;   // separators
-  static constexpr uint16_t BTN = 0x3A6E;    // neutral button
-  static constexpr uint16_t GREEN = 0x05E0;  // on / save
-  static constexpr uint16_t RED = 0xC080;    // off
+  static constexpr uint16_t BG = 0x18E3;
+  static constexpr uint16_t LINE = 0x4208;
+  static constexpr uint16_t BTN = 0x3A6E;
+  static constexpr uint16_t GREEN = 0x05E0;
+  static constexpr uint16_t RED = 0xC080;
+
+  void layoutFor(int W, int H) {
+    if (W <= 250) {
+      volMinus = {16, 48, 44, 32};
+      volPlus = {W - 60, 48, 44, 32};
+      voiceToggle = {W - 116, 86, 108, 28};
+      hiEspToggle = {W - 116, 120, 108, 28};
+      idleToggle = {W - 116, 154, 108, 28};
+      phraseBtn = {W - 96, 188, 84, 28};
+      saveBtn = {16, H - 44, W - 32, 36};
+    } else {
+      volMinus = {150, 38, 40, 32};
+      volPlus = {250, 38, 40, 32};
+      voiceToggle = {168, 78, 138, 30};
+      hiEspToggle = {168, 114, 138, 30};
+      idleToggle = {168, 150, 138, 30};
+      phraseBtn = {198, 186, 108, 30};
+      saveBtn = {50, 222, 220, 32};
+    }
+  }
 
   static bool hit(const Rect &r, int x, int y) {
     return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
   }
 
-  // Centre text manually (textWidth/fontHeight) to avoid relying on text-datum enums.
   void button(lgfx::LGFX_Device &gfx, const Rect &r, const char *txt, uint16_t col) {
     gfx.fillRoundRect(r.x, r.y, r.w, r.h, 7, col);
     gfx.setFont(&fonts::DejaVu18);
@@ -122,17 +165,16 @@ private:
 
   void draw(lgfx::LGFX_Device &gfx, const AppSettings &s) {
     const int W = gfx.width();
+    const bool portrait = W <= 250;
     gfx.fillScreen(BG);
 
     gfx.setFont(&fonts::DejaVu18);
     gfx.setTextColor(TFT_WHITE, BG);
-    gfx.setTextDatum(textdatum_t::top_left);
     gfx.setCursor(12, 8);
     gfx.print("Configuracion");
     gfx.drawFastHLine(0, 36, W, LINE);
 
-    // Volume
-    label(gfx, 12, 52, "Volumen");
+    label(gfx, 12, portrait ? 54 : 46, "Volumen");
     button(gfx, volMinus, "-", BTN);
     button(gfx, volPlus, "+", BTN);
     gfx.setFont(&fonts::DejaVu18);
@@ -140,22 +182,29 @@ private:
     char vbuf[8];
     snprintf(vbuf, sizeof(vbuf), "%d%%", s.volume);
     int cxv = (volMinus.x + volMinus.w + volPlus.x) / 2;
-    gfx.setCursor(cxv - gfx.textWidth(vbuf) / 2, volMinus.y + 8);
+    gfx.setCursor(cxv - gfx.textWidth(vbuf) / 2, volMinus.y + 6);
     gfx.print(vbuf);
 
-    // Voice wake
-    label(gfx, 12, 104, "Voz (gatillo)");
-    button(gfx, voiceToggle, s.voiceWake ? "ACTIVADA" : "APAGADA", s.voiceWake ? GREEN : RED);
+    label(gfx, 12, portrait ? 92 : 84, "Gatillo voz");
+    button(gfx, voiceToggle, s.voiceWake ? "ON" : "OFF", s.voiceWake ? GREEN : RED);
 
-    // Wake phrase
-    label(gfx, 12, 150, "Palabra:");
-    button(gfx, phraseBtn, "Cambiar", BTN);
+#if ENABLE_WAKEWORD
+    label(gfx, 12, portrait ? 126 : 120, "Hi ESP");
+    button(gfx, hiEspToggle, s.hiEspWake ? "ON" : "OFF", s.hiEspWake ? GREEN : RED);
+#endif
+
+    label(gfx, 12, portrait ? 160 : 156, "Idle auto");
+    button(gfx, idleToggle, s.idleRemarks ? "ON" : "OFF", s.idleRemarks ? GREEN : RED);
+
+    label(gfx, 12, portrait ? 194 : 192, "Frase:");
+    button(gfx, phraseBtn, ">>", BTN);
     gfx.setFont(&fonts::DejaVu12);
     gfx.setTextColor(TFT_YELLOW, BG);
-    gfx.setCursor(12, 174);
-    gfx.print(WAKE_PRESET_LABELS[s.phraseIdx]);
+    gfx.setCursor(portrait ? 12 : 60, portrait ? 218 : 196);
+    String phrase = WAKE_PRESET_LABELS[s.phraseIdx];
+    if (portrait && phrase.length() > 18) phrase = phrase.substring(0, 15) + "...";
+    gfx.print(phrase);
 
-    // Save & exit
     button(gfx, saveBtn, "Guardar y salir", GREEN);
   }
 };
