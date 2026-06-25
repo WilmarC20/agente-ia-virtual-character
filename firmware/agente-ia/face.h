@@ -1,12 +1,5 @@
-// Bender face renderer (LovyanGFX) — faithful to the reference sheet:
-// WHITE background, BLACK line-art. The visor is a black-filled capsule with
-// concentric black rim rings; the eyes are WHITE holes (the background showing
-// through) with black square pupils, reshaped per emotion. The mouth is a black
-// outlined teeth grid (white teeth = background) that bows/pinches per emotion
-// and ripples with a sine wave while speaking. SURPRISED keeps the capsule visor + "O".
-//
-// Double-buffered in a PSRAM sprite (no flicker), repainted only on change.
-// Landscape (rotation 1) chosen on purpose: the wide visor needs the width.
+// Capsule visor face (LovyanGFX). Dark CRT/LED aesthetic: glow, scanlines,
+// lit eyes with catchlight pupils, Bender-style LED segment mouth at neutral.
 #pragma once
 
 #include <Arduino.h>
@@ -41,85 +34,142 @@ public:
   void begin() {
     _canvas.setPsram(true);
     _canvas.setColorDepth(16);
-    _canvas.createSprite(_gfx.width(), FACE_H);
-    _gfx.fillScreen(TFT_BLACK);   // text strip below the face
+    if (!_canvas.createSprite(FACE_DESIGN_W, FACE_H)) {
+      Serial.println("FACE: createSprite failed");
+    }
+    _canvas.setPivot(FACE_DESIGN_W * 0.5f, FACE_H * 0.5f);
+    _faceScreenW = _gfx.width();
+    _gfx.fillScreen(TFT_BLACK);
+    _browPhase = random(0, 628) / 100.0f;
+    _nextBlinkAt = millis() + 2800 + random(3700);
   }
 
   void setEmotion(Emotion e) {
     if (e != _emotion) {
-      if (_emotion == Emotion::Thinking) { _gazeX = 0; _nextGazeAt = millis() + 1500; }
       _emotion = e;
+      _gazeX = _gazeY = 0;
+      _gazeTx = _gazeTy = 0;
+      _nextGazeAt = millis() + 700 + random(1800);
       _dirty = true;
     }
   }
 
-  // Idle "bored" mood: half-mast lids and slower saccades. Driven by the .ino from the
-  // time since the last interaction — kept here so the .ino stays out of rendering.
   void setBored(bool b) { if (b != _bored) { _bored = b; _dirty = true; } }
-
-  // Show the settings gear in the top-right corner (tappable while idle).
   void setShowGear(bool v) { if (v != _showGear) { _showGear = v; _dirty = true; } }
-  // Force a full repaint, e.g. after the settings menu painted over the screen.
   void redraw() { _dirty = true; }
-  // Screen-space hit test for the gear (sprite is pushed at 0,0).
-  static bool gearHit(int sx, int sy) { return sx >= 282 && sy <= 40; }
+
+  static bool gearHit(int sx, int sy, int screenW) {
+    if (screenW <= 250) {
+      const int gx = 227, gy = 16;
+      int dx = sx - gx, dy = sy - gy;
+      return (sx >= 196 && sy <= 64) || ((dx * dx + dy * dy) <= (20 * 20));
+    }
+    int dx = sx - 303, dy = sy - 16;
+    return (sx >= 262 && sy <= 64) || ((dx * dx + dy * dy) <= (20 * 20));
+  }
 
   void setTalking(bool talking) {
     if (talking != _talking) {
       _talking = talking;
-      if (talking) _gazeX = 0;                       // face forward while speaking
-      else { _mouthAmp = 0; _nextGazeAt = millis() + 1200; }
+      if (talking) { _gazeX = _gazeY = 0; }
+      else { _mouthAmp = 0; _mouthAmpTarget = 0; _mouthAmpSmooth = 0; _singing = false; _nextGazeAt = millis() + 1200; }
       _dirty = true;
     }
   }
   bool isTalking() const { return _talking; }
 
-  void setMouthAmplitude(uint8_t level) {
-    _mouthAmp = level > 100 ? 100 : level;
-    if (_talking) _dirty = true;
-  }
-
-  // Drives all idle micro-movement. No delay() — everything is millis()-gated and only
-  // flips _dirty when something actually changes, so a still idle face costs ~0 CPU and
-  // the I2S/codec audio loop is never blocked.
-  void update() {
-    uint32_t now = millis();
-
-    // Mechanical blink: independent, every 8-12 s, 120 ms, lids cover 100%. Not while talking.
-    if (!_talking && now >= _nextBlinkAt) {
-      _blinking = true;
-      _blinkUntil = now + 120;
-      _nextBlinkAt = now + 8000 + random(4000);
+  void setSinging(bool singing) {
+    if (singing != _singing) {
+      _singing = singing;
+      if (singing) _mouthAmp = 100;
       _dirty = true;
     }
-    if (_blinking && now >= _blinkUntil) { _blinking = false; _dirty = true; }
+  }
+  bool isSinging() const { return _singing; }
 
-    // Eye movement when not talking and not mid-blink.
-    if (!_talking && !_blinking) {
+  void setMouthAmplitude(uint8_t level) {
+    _mouthAmpTarget = level > 100 ? 100 : level;
+    if (_talking || _singing) _dirty = true;
+  }
+
+  void smoothMouthAmp() {
+    if (_singing) {
+      _mouthAmpSmooth = 100.0f;
+      _mouthAmp = 100;
+      return;
+    }
+    if (!_talking) {
+      _mouthAmpSmooth = 0.0f;
+      _mouthAmpTarget = 0;
+      _mouthAmp = 0;
+      return;
+    }
+    float target = (float)_mouthAmpTarget;
+    float gap = fabsf(target - _mouthAmpSmooth);
+    float rate = (target > _mouthAmpSmooth)
+      ? (0.88f + fminf(0.1f, gap * 0.009f))
+      : (0.55f + fminf(0.4f, gap * 0.014f));
+    _mouthAmpSmooth += (target - _mouthAmpSmooth) * rate;
+    if (_mouthAmpSmooth < 0.06f) _mouthAmpSmooth = 0.0f;
+    _mouthAmp = (uint8_t)(_mouthAmpSmooth + 0.5f);
+  }
+
+  void update() {
+    uint32_t now = millis();
+    bool changed = false;
+
+    if (!_talking && !_singing && now >= _nextBlinkAt && now >= _blinkEndAt) {
+      _blinkEndAt = now + 110 + random(90);
+      _nextBlinkAt = _blinkEndAt + blinkDelayMs();
+      changed = true;
+    }
+    float blink = 0;
+    if (now < _blinkEndAt) {
+      float u = (_blinkEndAt - now) / 200.0f;
+      float bell = 1.0f - fminf(1.0f, fabsf(u - 0.5f) * 2.0f);
+      blink = fminf(1.0f, bell * 1.2f);
+      if (blink != _blinkAmt) changed = true;
+    } else if (_blinkAmt > 0) {
+      changed = true;
+    }
+    _blinkAmt = blink;
+
+    if (!_talking && !_singing && _blinkAmt < 0.05f) {
       if (_emotion == Emotion::Thinking) {
-        // Concentrated "searching": dart left<->right quickly (see note: askBrain blocks).
-        int g = ((now / 320) % 2) ? GAZE_OFF : -GAZE_OFF;
-        if (g != _gazeX) { _gazeX = g; _dirty = true; }
+        int g = ((now / 320) % 2) ? 10 : -10;
+        if (g != (int)_gazeTx) { _gazeTx = g; _gazeTy = -3; changed = true; }
       } else if (now >= _nextGazeAt) {
-        // Random saccade: centre / left / right. Slower cadence when bored.
-        static const int8_t look[3] = {0, -GAZE_OFF, GAZE_OFF};
-        int g = look[random(3)];
-        if (g != _gazeX) { _gazeX = g; _dirty = true; }
-        _nextGazeAt = now + (_bored ? 5000 : 3000) + random(_bored ? 4000 : 3000);
+        int amp = gazeAmp();
+        _gazeTx = random(-amp, amp + 1);
+        _gazeTy = random(-(amp / 4), amp / 4 + 1);
+        _nextGazeAt = now + 850 + random(2300);
+        changed = true;
+      }
+      float nx = _gazeX + (_gazeTx - _gazeX) * 0.18f;
+      float ny = _gazeY + (_gazeTy - _gazeY) * 0.14f;
+      if (fabsf(nx - _gazeX) > 0.3f || fabsf(ny - _gazeY) > 0.3f) {
+        _gazeX = nx; _gazeY = ny;
+        changed = true;
       }
     }
 
-    if (_talking) _dirty = true;
+    if (_talking || _singing) {
+      smoothMouthAmp();
+      _dirty = true;
+    } else if (changed) _dirty = true;
+
     if (_dirty) { draw(); _dirty = false; }
   }
 
-  // Status text lives in a dark strip below the white face (keeps colour cues readable).
   void showText(const String &text, uint16_t color = TFT_WHITE) {
-    int y = FACE_H + 4;
+    int y = FACE_OFFSET_Y + FACE_H + 2;
     _gfx.fillRect(0, y, _gfx.width(), _gfx.height() - y, TFT_BLACK);
+    if (text.length() == 0) return;
+    int tx = 8 + FACE_OFFSET_X;
+    if (tx < 2) tx = 2;
     _gfx.setTextColor(color, TFT_BLACK);
     _gfx.setFont(&fonts::DejaVu18);
-    _gfx.setCursor(8, y + 4);
+    _gfx.setCursor(tx, y + 4);
     _gfx.setTextWrap(true);
     _gfx.print(text);
   }
@@ -137,232 +187,706 @@ private:
   lgfx::LGFX_Device &_gfx;
   lgfx::LGFX_Sprite _canvas;
   Emotion _emotion = Emotion::Sleepy;
-  bool _dirty = true, _blinking = false, _talking = false, _showGear = false, _bored = false;
-  uint8_t _mouthAmp = 0;
-  uint32_t _blinkUntil = 0, _nextBlinkAt = 5000;
-  int _gazeX = 0;                 // lateral eye offset (saccade), applied to eyes + pupils
-  uint32_t _nextGazeAt = 4000;    // when the next idle saccade fires
+  bool _dirty = true, _talking = false, _singing = false, _showGear = false, _bored = false;
+  uint8_t _mouthAmp = 0, _mouthAmpTarget = 0;
+  float _mouthAmpSmooth = 0;
+  uint32_t _blinkEndAt = 0, _nextBlinkAt = 5000, _nextGazeAt = 4000;
+  int _faceScreenW = FACE_DESIGN_W;
+  float _blinkAmt = 0, _gazeX = 0, _gazeY = 0, _gazeTx = 0, _gazeTy = 0, _browPhase = 0;
 
+  static constexpr int FACE_DESIGN_W = 320;
   static constexpr int FACE_H = 200;
-  static constexpr uint16_t BG = 0xFFFF;   // white background
-  static constexpr uint16_t INK = 0x0000;  // black line-art (visor body, pupils, grid)
-  // Colour accents — the face stays line-art, colour only marks an emotion at a glance.
-  static constexpr uint16_t RED = 0xF800;  // love: heart eyes
-  static constexpr uint16_t BLUE = 0x041F; // sad: tear
-  static constexpr uint16_t GEAR = 0x5C9F; // settings gear icon (blue, "tap me")
+  // Panel has dead space on its right edge; shift the whole face left so it
+  // sits centered inside the visible area.
+  static constexpr int FACE_OFFSET_X = -20;
+  // The 200px-tall face used to sit at the top of the 240px screen, leaving a
+  // big black gap below. Push it down so the face is vertically centered; the
+  // status text still fits just below the sprite (no overlap, no flicker).
+  static constexpr int FACE_OFFSET_Y = 12;
+  static constexpr int EYE_L = 100, EYE_R = 220, EYE_Y = 68, EYE_RAD = 34;
   static constexpr int CXC = 160;
-  static constexpr int GAZE_OFF = 10;      // how far the eyes dart left/right (px)
+  static constexpr float MOUTH_H_MUL = 1.22f;
 
-  // Black capsule visor with concentric rim rings (white gaps = background).
-  void drawCapsule(int x, int y, int w, int h) {
-    int r = h / 2;
-    _canvas.fillRoundRect(x + 9, y + 9, w - 18, h - 18, r - 9, INK);  // black interior
-    _canvas.drawRoundRect(x + 5, y + 5, w - 10, h - 10, r - 5, INK);  // inner ring
-    _canvas.drawRoundRect(x, y, w, h, r, INK);                        // outer ring
-  }
+  // Dark theme: black page, glowing visor panel, lit eyes + LED-segment mouth.
+  static constexpr uint16_t BG = 0x0000;
+  static constexpr uint16_t VISOR = 0x10A2;
+  static constexpr uint16_t VISOR_DEEP = 0x0841;
+  static constexpr uint16_t SCANLINE = 0x0821;
+  static constexpr uint16_t INK = 0x07FF;
+  static constexpr uint16_t INK_GLOW = 0x0318;
+  static constexpr uint16_t INK_BRIGHT = 0x57FF;
+  static constexpr uint16_t EYE = 0xDEFB;       // warm white (not flat 0xFFFF)
+  static constexpr uint16_t EYE_GLOW = 0x2945;
+  static constexpr uint16_t PUP = 0x0000;
+  static constexpr uint16_t HILITE = 0xFFFF;
+  static constexpr uint16_t RED = 0xE800;      // love hearts
+  static constexpr uint16_t BLUE = 0x2D5F;      // sad tear
+  static constexpr uint16_t PURPLE = 0x780F;    // dizzy spiral
+  static constexpr uint16_t EYE_LOVE = 0xFFDF;  // warm white
+  static constexpr uint16_t EYE_EXCITED = 0xFFF7;
+  static constexpr uint16_t GEAR = 0x5C9F;
 
-  void drawSquarePupil(int px, int py, int s = 9) { _canvas.fillRect(px - s, py - s, s * 2, s * 2, INK); }
+  enum class Brow { Flat, Arch, Angry, Sad, Raise, Asym };
+  enum class LidAng { None, AngryIn, SadOut };
+  enum class Pupil { Square, Heart, Spiral, X };
+  enum class MouthKind { Grid, Compact, O };
 
-  // Love: a small red heart instead of the square pupil (two lobes + a point).
-  void drawHeartPupil(int px, int py) {
-    _canvas.fillCircle(px - 5, py - 3, 6, RED);
-    _canvas.fillCircle(px + 5, py - 3, 6, RED);
-    _canvas.fillTriangle(px - 11, py - 1, px + 11, py - 1, px, py + 12, RED);
-  }
+  struct MouthCfg {
+    int x0, x1, gap, teeth, rows;
+    float bow, pinch, tilt, glitch;
+  };
 
-  // Dizzy: knocked-out "X" eyes (thick diagonal cross) instead of a pupil.
-  void drawXPupil(int px, int py) {
-    for (int i = -1; i <= 1; i++) {
-      _canvas.drawLine(px - 9, py - 9 + i, px + 9, py + 9 + i, INK);
-      _canvas.drawLine(px - 9, py + 9 + i, px + 9, py - 9 + i, INK);
+  struct Preset {
+    Brow brow;
+    LidAng lidAng;
+    Pupil pupil;
+    MouthKind mouthKind;
+    MouthCfg mouth;
+    float topLid, botLid, topLidL, topLidR, botLidL, botLidR;
+    int eyeR, pupilS, pupilOffX, pupilOffY;
+    uint16_t eyeTint;
+    bool tear, winkRight, winkLeft;
+  };
+
+  int gazeAmp() const {
+    switch (_emotion) {
+      case Emotion::Sleepy: return 2;
+      case Emotion::Thinking: return 10;
+      case Emotion::Happy: case Emotion::Excited: return 7;
+      case Emotion::Angry: return 4;
+      default: return 6;
     }
   }
 
-  // WHITE eye hole inside the black visor, reshaped per emotion; the pupil follows the
-  // visible white band so the black square never spills into the visor. Distinct shape
-  // for each of the 12 emotions; colour only on love (heart) and is added in drawAccents.
-  void drawEye(int cx, int cy, bool isLeft) {
-    cx += _gazeX;                        // lateral gaze (saccade): eyes AND pupils move
-    const int ew = 110, eh = 68;
-    const int x = cx - ew / 2, y = cy - eh / 2;
-
-    if (_blinking) {                     // mechanical blink: lid covers 100% of the eye
-      _canvas.fillRect(x + 6, cy - 1, ew - 12, 3, 0x528A);  // thin closed-lid crease
-      return;
+  uint32_t blinkDelayMs() const {
+    switch (_emotion) {
+      case Emotion::Sleepy: return 1200 + random(1400);
+      case Emotion::Thinking: return 2600 + random(2600);
+      case Emotion::Happy: case Emotion::Excited: return 2200 + random(2000);
+      case Emotion::Angry: return 3400 + random(3600);
+      default: return 2800 + random(3700);
     }
+  }
 
-    if (_emotion == Emotion::Cool && !isLeft) {     // wink: shallow curved white line
-      for (int i = -1; i <= 1; i++) {
-        _canvas.drawLine(x + 14, cy + 2 + i, cx, cy + 7 + i, BG);
-        _canvas.drawLine(cx, cy + 7 + i, x + ew - 14, cy + 2 + i, BG);
-      }
-      return;
-    }
-
-    _canvas.fillRoundRect(x, y, ew, eh, 16, BG);
-
-    const int cut = (int)(eh * 0.42f);   // how deep an angled lid bites in
-    int pupilY = cy, pupilX = cx;
+  Preset preset() const {
+    Preset p{};
+    p.eyeR = EYE_RAD;
+    p.pupil = Pupil::Square;
+    p.pupilS = 6;
+    p.mouthKind = MouthKind::Grid;
+    p.mouth = {88, 232, 19, 4, 3, 2, 0, 0, 0};
+    p.brow = Brow::Flat;
+    p.lidAng = LidAng::None;
+    p.topLidL = p.topLidR = -1;
 
     switch (_emotion) {
-      case Emotion::Angry: {               // both brows furrow down toward the centre
-        int inY = y + cut;
-        if (isLeft) _canvas.fillTriangle(x, y - 2, x + ew + 2, y - 2, x + ew + 2, inY, INK);
-        else        _canvas.fillTriangle(x + ew, y - 2, x - 2, y - 2, x - 2, inY, INK);
-        pupilY = cy + cut / 4;
+      case Emotion::Happy:
+        p.brow = Brow::Arch; p.topLid = 0.08f; p.botLid = 0.22f;
+        p.mouth = {82, 238, 23, 7, 3, 9, 0, 0, 0};
         break;
-      }
-      case Emotion::Confused: {            // asymmetric: left brow furrows, right rises
-        if (isLeft) {
-          _canvas.fillTriangle(x, y - 2, x + ew + 2, y - 2, x + ew + 2, y + cut, INK);
-          pupilY = cy + cut / 4;
-        } else {
-          _canvas.fillRect(x, y, ew, (int)(eh * 0.22f), INK);  // slight raised top lid
-          pupilY = cy - 5;
-        }
+      case Emotion::Sad:
+        p.brow = Brow::Sad; p.lidAng = LidAng::SadOut; p.topLid = 0.05f; p.tear = true;
+        p.mouth = {100, 220, 16, 8, 3, -11, 0, 0, 0};
         break;
-      }
-      case Emotion::Sad: {                 // inner-bottom lid up (droop), outer stays low
-        int inY = y + eh - cut;
-        if (isLeft) _canvas.fillTriangle(x, y + eh + 2, x + ew + 2, y + eh + 2, x + ew + 2, inY, INK);
-        else        _canvas.fillTriangle(x + ew, y + eh + 2, x - 2, y + eh + 2, x - 2, inY, INK);
-        pupilY = cy - cut / 4;
+      case Emotion::Angry:
+        p.brow = Brow::Angry; p.lidAng = LidAng::AngryIn; p.topLid = p.botLid = 0.38f;
+        p.mouth = {88, 232, 17, 6, 3, -4, 0.5f, 0, 0};
         break;
-      }
-      case Emotion::Happy:                 // squint smile: lower lid up
-      case Emotion::Love: {                // love uses the same squint + heart pupil
-        int lid = (int)(eh * 0.26f);
-        _canvas.fillRect(x, y + eh - lid, ew, lid + 1, INK);
-        pupilY = cy - lid / 2;
+      case Emotion::Surprised:
+        p.brow = Brow::Raise; p.eyeR = 38; p.pupilS = 7; p.mouthKind = MouthKind::Compact;
         break;
-      }
-      case Emotion::Excited:               // wide eyes (fully open) — read together with
-        pupilY = cy;                       // the big grin; bigger pupil below
+      case Emotion::Thinking:
+        p.brow = Brow::Asym; p.topLid = 0.18f; p.pupilOffX = 8; p.pupilOffY = -5;
+        p.mouth = {96, 224, 17, 8, 3, 0, 0, 0, 0};
         break;
-      case Emotion::Sleepy: {              // heavy upper lid, half closed
-        int lid = (int)(eh * 0.50f);
-        _canvas.fillRect(x, y, ew, lid, INK);
-        pupilY = y + lid + (eh - lid) / 2;
+      case Emotion::Sleepy:
+        p.topLid = 0.55f;
+        p.mouth = {96, 224, 15, 8, 3, -5, 0, 0, 0};
         break;
-      }
-      case Emotion::Thinking:              // concentrated: slight squint + eyes up a touch
-        _canvas.fillRect(x, y, ew, (int)(eh * 0.20f), INK);
-        pupilY = cy - 3;                   // (horizontal "searching" comes from the gaze dart)
+      case Emotion::Love:
+        p.brow = Brow::Arch; p.eyeR = 36; p.botLid = 0.12f;
+        p.pupil = Pupil::Heart; p.pupilS = 15; p.eyeTint = EYE_LOVE;
+        p.mouth = {84, 236, 21, 7, 3, 7, 0, 0, 0};
         break;
-      case Emotion::Dizzy:                 // X eyes, no square pupil
-        drawXPupil(cx, cy);
-        return;
-      default: break;                      // Neutral, Surprised, Cool(open eye)
+      case Emotion::Excited:
+        p.brow = Brow::Raise; p.eyeR = 37; p.pupilS = 8; p.eyeTint = EYE_EXCITED;
+        p.mouth = {78, 242, 25, 8, 3, 11, 0, 0, 0};
+        break;
+      case Emotion::Cool:
+        p.brow = Brow::Arch; p.winkRight = true; p.topLid = 0.1f;
+        p.mouth = {88, 232, 19, 7, 3, 3, 0, 0, 8};
+        break;
+      case Emotion::Confused:
+        p.brow = Brow::Asym; p.topLidL = 0.28f; p.topLidR = 0.1f;
+        p.mouth = {92, 228, 18, 6, 3, 0, 0.25f, 7, 0};
+        break;
+      case Emotion::Dizzy:
+        p.pupil = Pupil::Spiral;
+        p.mouth = {88, 232, 19, 6, 3, 0, 0, 0, 5};
+        break;
+      default: // Neutral
+        p.topLid = 0.12f;
+        p.mouth = {88, 232, 19, 4, 3, 2, 0, 0, 0};
+        break;
     }
-
-    if (_bored) {                          // tired half-mast lids over the resting face
-      int lid = (int)(eh * 0.45f);
-      _canvas.fillRect(x, y, ew, lid, INK);
-      if (pupilY < y + lid + 8) pupilY = y + lid + 8;
-    }
-
-    if (_emotion == Emotion::Love)         drawHeartPupil(pupilX, pupilY);
-    else if (_emotion == Emotion::Excited) drawSquarePupil(pupilX, pupilY, 11);  // big-eyed
-    else                                   drawSquarePupil(pupilX, pupilY);
+    return p;
   }
 
-  // Vertical offset of the mouth outline at column position t (0..1), per emotion.
-  float mouthOffset(float t, float c, float bow, float tilt, bool dz, float wave, float phase, int x) {
-    float d = bow * c + tilt * (t - 0.5f) + wave * sinf(x * 0.20f + phase);
-    if (dz) d += 4.0f * sinf(x * 0.15f + phase * 0.5f);  // woozy ripple at rest
+  void drawVisorScanlines() {
+    for (int y = 36; y < 100; y += 3) {
+      _canvas.drawFastHLine(40, y, 240, SCANLINE);
+    }
+  }
+
+  void drawCapsule() {
+    _canvas.fillRoundRect(36, 32, 248, 72, 36, VISOR);
+    _canvas.fillRoundRect(44, 38, 232, 60, 30, VISOR_DEEP);
+    drawVisorScanlines();
+    // Soft outer glow (layered frames — pinu-bot / CRT-style displays)
+    _canvas.drawRoundRect(21, 17, 278, 102, 50, INK_GLOW);
+    _canvas.drawRoundRect(23, 19, 274, 98, 49, INK_GLOW);
+    _canvas.drawRoundRect(24, 20, 272, 96, 48, INK);
+    _canvas.drawLine(32, 24, 72, 24, INK_BRIGHT);  // glass highlight
+  }
+
+  void drawBrows(const Preset &p, float yOff, float tilt) {
+    struct Pair { int a, b; };
+    const Pair pairs[2] = {{62, 136}, {184, 258}};
+    for (const auto &pr : pairs) {
+      int a = pr.a, b = pr.b;
+      int y0 = 46 + (int)yOff, y1 = 46 + (int)yOff;
+      switch (p.brow) {
+        case Brow::Angry:
+          _canvas.drawLine(a, 48 + (int)yOff, b, (b < 200 ? 58 : 48) + (int)yOff + (int)tilt, INK);
+          continue;
+        case Brow::Sad:
+          _canvas.drawLine(a, 58 + (int)yOff, b, (b < 200 ? 46 : 58) + (int)yOff + (int)tilt, INK);
+          continue;
+        case Brow::Raise:
+          _canvas.drawLine(a - 4, 34 + (int)yOff, b + 4, 34 + (int)yOff + (int)tilt, INK);
+          continue;
+        case Brow::Arch: {
+          int cx = (a + b) / 2;
+          for (int i = 0; i < 8; i++) {
+            float t0 = i / 8.0f, t1 = (i + 1) / 8.0f;
+            int x0 = a + (int)((b - a) * t0), x1 = a + (int)((b - a) * t1);
+            int ya = y0 + (int)(-(1 - (2 * fabsf(t0 - 0.5f))) * 8);
+            int yb = y0 + (int)(-(1 - (2 * fabsf(t1 - 0.5f))) * 8);
+            _canvas.drawLine(x0, ya, x1, yb + (int)tilt, INK);
+          }
+          continue;
+        }
+        case Brow::Asym:
+          if (a < 150) _canvas.drawLine(a, 48 + (int)yOff, b, 40 + (int)yOff + (int)tilt, INK);
+          else _canvas.drawLine(a, 58 + (int)yOff, b, 50 + (int)yOff - (int)tilt, INK);
+          continue;
+        default:
+          _canvas.drawLine(a, y0, b, y1 + (int)tilt, INK);
+      }
+    }
+  }
+
+  void drawLidMask(int cx, int cy, int r, float top, float bot, LidAng ang) {
+    if (ang == LidAng::AngryIn) {
+      bool inner = cx > CXC;
+      if (!inner) _canvas.fillTriangle(cx - r, cy - r, cx + r + 2, cy - r, cx + r + 2, cy - r + (int)(r * 0.55f), VISOR);
+      else _canvas.fillTriangle(cx + r, cy - r, cx - r - 2, cy - r, cx - r - 2, cy - r + (int)(r * 0.55f), VISOR);
+    } else if (ang == LidAng::SadOut) {
+      bool outer = cx < CXC;
+      if (outer) _canvas.fillTriangle(cx - r, cy + r, cx + r, cy + r, cx + r, cy + r - (int)(r * 0.5f), VISOR);
+      else _canvas.fillTriangle(cx + r, cy + r, cx - r, cy + r, cx - r, cy + r - (int)(r * 0.5f), VISOR);
+    }
+    if (top > 0) _canvas.fillRect(cx - r - 1, cy - r - 1, r * 2 + 2, (int)(r * 2 * top) + 1, VISOR);
+    if (bot > 0) {
+      int h = (int)(r * 2 * bot);
+      _canvas.fillRect(cx - r - 1, cy + r - h, r * 2 + 2, h + 1, VISOR);
+    }
+  }
+
+  void drawWinkLine(int cx, int cy, int r) {
+    for (int i = -2; i <= 2; i++) {
+      _canvas.drawLine(cx - r + 8, cy + 2 + i, cx, cy + (int)(r * 0.35f) + i, PUP);
+      _canvas.drawLine(cx, cy + (int)(r * 0.35f) + i, cx + r - 8, cy + 2 + i, PUP);
+    }
+  }
+
+  void drawSquarePupil(int px, int py, int s) {
+    _canvas.fillCircle(px, py, s, PUP);
+    if (s >= 3) _canvas.fillCircle(px - s / 3, py - s / 3, s / 3, HILITE);
+  }
+
+  // Bender-style LED segment mouth (glow bars, not wireframe grid).
+  void drawLedMouth(bool animate) {
+    const int x0 = 78, x1 = 242, y0 = 138, y1 = 172;
+    const int segs = 7, gap = 3, pad = 5;
+    _canvas.fillRoundRect(x0, y0, x1 - x0, y1 - y0, 10, VISOR_DEEP);
+    _canvas.drawRoundRect(x0, y0, x1 - x0, y1 - y0, 10, INK);
+    const int troughH = y1 - y0 - pad * 2;
+    const int innerW = x1 - x0 - pad * 2;
+    const int segW = (innerW - gap * (segs - 1)) / segs;
+    int sx = x0 + pad;
+    float amp = animate ? (_mouthAmpSmooth / 100.0f) : 0.0f;
+    for (int i = 0; i < segs; i++) {
+      float u = (float)i / (segs - 1);
+      float env = sinf(u * 3.14159265f);
+      env = env * env;
+      int sh = troughH;
+      if (animate) {
+        sh = (int)(troughH * (0.35f + 0.65f * amp * env));
+        if (sh < 5) sh = 5;
+      } else {
+        sh = (int)(troughH * (0.55f + 0.45f * env));
+      }
+      int sy = y0 + pad + (troughH - sh) / 2;
+      _canvas.fillRoundRect(sx - 1, sy - 1, segW + 2, sh + 2, 4, INK_GLOW);
+      _canvas.fillRoundRect(sx, sy, segW, sh, 3, INK);
+      if (!animate && i % 2 == 0) {
+        _canvas.drawFastHLine(sx + 1, sy + 1, segW - 2, INK_BRIGHT);
+      }
+      sx += segW + gap;
+    }
+  }
+
+  void drawHeartPupil(int px, int py, int s) {
+    int hs = (int)(s * 1.08f);
+    _canvas.fillCircle(px - hs / 3, py - hs / 6, hs / 2 + 1, RED);
+    _canvas.fillCircle(px + hs / 3, py - hs / 6, hs / 2 + 1, RED);
+    _canvas.fillTriangle(px - hs, py, px + hs, py, px, py + hs, RED);
+  }
+
+  void drawSpiralPupil(int cx, int cy) {
+    uint32_t t = millis();
+    int px0 = cx, py0 = cy;
+    for (int i = 1; i <= 40; i++) {
+      float a = i / 40.0f * 2.2f * 2 * PI + t * 0.004f;
+      int rad = 2 + (int)(i * 0.35f);
+      int px = cx + (int)(cosf(a) * rad);
+      int py = cy + (int)(sinf(a) * rad);
+      _canvas.drawLine(px0, py0, px, py, PURPLE);
+      px0 = px; py0 = py;
+    }
+  }
+
+  void drawXPupil(int px, int py) {
+    for (int i = -1; i <= 1; i++) {
+      _canvas.drawLine(px - 10, py - 10 + i, px + 10, py + 10 + i, PUP);
+      _canvas.drawLine(px - 10, py + 10 + i, px + 10, py - 10 + i, PUP);
+    }
+  }
+
+  void drawTear(int cx, int cy, int r) {
+    int tx = cx - 6, ty = cy + r + 4;
+    _canvas.fillCircle(tx, ty + 22, 8, BLUE);
+    _canvas.fillTriangle(tx, ty - 14, tx - 10, ty + 4, tx + 10, ty + 4, BLUE);
+    _canvas.fillTriangle(tx, ty - 14, tx - 10, ty + 10, tx + 10, ty + 10, BLUE);
+    _canvas.fillCircle(tx - 3, ty + 6, 3, HILITE);
+  }
+
+  float mouthOffset(float u, float c, const MouthCfg &m, int x) const {
+    float d = m.bow * c + m.tilt * (u - 0.5f);
+    if (m.glitch) d += m.glitch * sinf(x * 0.35f) * (u > 0.3f && u < 0.7f ? 1.0f : 0.4f);
     return d;
   }
 
-  // Black teeth lattice on white: rounded outline + 2 interior rows + vertical dividers.
-  // Bows into a smile/frown, pinches when gritted, tilts for cool/confused, ripples with
-  // audio while speaking. White "teeth" = background between the black lines.
-  void drawTeethMouth() {
-    const int mx0 = 100, mx1 = 220, WD = mx1 - mx0;
-    const int myc = 158, gap = 17, teeth = 6;
+  float mouthTalkEnvelope(float u) const {
+    float s = sinf(u * 3.14159265f);
+    return s * s * s + 0.1f * s * s;
+  }
 
-    float phase = millis() / 80.0f;
-    float wave = _talking ? (_mouthAmp / 100.0f) * 8.0f : 0.0f;
-    float bow = 0.0f, pinch = 0.0f, tilt = 0.0f;
-    bool dz = false;
-    if (!_talking) {
-      switch (_emotion) {
-        case Emotion::Happy: case Emotion::Love: bow = -7.0f; break;
-        case Emotion::Excited:                   bow = -10.0f; break;
-        case Emotion::Sad:                       bow = 7.0f; break;
-        case Emotion::Sleepy:                    bow = 4.0f; break;
-        case Emotion::Angry:                     pinch = 0.5f; break;
-        case Emotion::Confused:                  pinch = 0.3f; tilt = 9.0f; break;
-        case Emotion::Cool:                      tilt = 7.0f; break;   // smirk
-        case Emotion::Dizzy:                     dz = true; break;
-        default: break;
+  void mouthShapeAt(int x, const MouthCfg &m, int my, int w, int &outTop, int &outBot) const {
+    float u = (float)(x - m.x0) / w;
+    float c = 1.0f - (2 * u - 1) * (2 * u - 1);
+    float edge = sqrtf(c < 0 ? 0 : c);
+    float half = m.gap * MOUTH_H_MUL * (0.5f + 0.5f * edge) * (1.0f - m.pinch * c);
+    int dy = (int)mouthOffset(u, c, m, x);
+    outTop = my - (int)half + dy;
+    outBot = my + (int)half + dy;
+  }
+
+  struct MouthPt { int x, y; };
+
+  // Boca neutral editada en gestures-preview.html (JSON v3, mirror L+R + inferior).
+  struct MouthNorm {
+    float u, t;
+  };
+  static constexpr MouthNorm kMouthA = {0.5f, 0.1079f};
+  static constexpr MouthNorm kMouthC = {0.0f, 0.4249f};
+  static constexpr MouthNorm kMouthF = {0.1795f, 0.4268f};
+  static constexpr MouthNorm kMouthH = {0.5f, 0.2259f};
+  static constexpr MouthNorm kMouthJ = {0.0f, 0.3585f};
+  static constexpr MouthNorm kMouthL = {0.4583f, 0.5f};
+  static constexpr float kMouthVertU = 0.4583f;
+
+  void mouthPtFromNorm(const MouthCfg &m, int my, MouthNorm n, MouthPt &out) const {
+    const int w = m.x1 - m.x0;
+    const int x = m.x0 + (int)(n.u * w + 0.5f);
+    int topY, botY;
+    mouthShapeAt(x, m, my, w, topY, botY);
+    out.x = x;
+    out.y = topY + (int)((botY - topY) * n.t + 0.5f);
+  }
+
+  int mouthMidYAt(int x, const MouthCfg &m, int my, int w) const {
+    int topY, botY;
+    mouthShapeAt(x, m, my, w, topY, botY);
+    return (topY + botY) / 2;
+  }
+
+  int mirrorBelowY(int y, int x, const MouthCfg &m, int my, int w) const {
+    int mid = mouthMidYAt(x, m, my, w);
+    return mid + (mid - y);
+  }
+
+  static constexpr float kMouthTalkNeutral = 0.34f;
+  static constexpr float kMouthTalkAmpCenter = 0.38f;
+  static constexpr float kMouthTalkAmpScale = 1.62f;
+  static constexpr float kMouthTalkOpenMax = 13.0f;
+  static constexpr float kMouthTalkCloseMax = 8.0f;
+  static constexpr float kMouthTalkSpreadGain = 0.92f;
+
+  float mouthOpenFactor() const {
+    if (_singing) return 0.72f + 0.28f * sinf(millis() * 0.05f);
+    if (!_talking) return kMouthTalkNeutral;
+    float amp = _mouthAmpSmooth / 100.0f;
+    float open = kMouthTalkNeutral + (amp - kMouthTalkAmpCenter) * kMouthTalkAmpScale;
+    if (open < 0.0f) open = 0.0f;
+    if (open > 1.0f) open = 1.0f;
+    return open;
+  }
+
+  float mouthSpreadDelta(float openFactor) const {
+    float delta = openFactor - kMouthTalkNeutral;
+    float gain = (delta >= 0.0f) ? kMouthTalkOpenMax : kMouthTalkCloseMax;
+    return delta * gain * kMouthTalkSpreadGain;
+  }
+
+  int clampInnerLineY(int y, int x, bool isUpper, const MouthCfg &m, int my, int w) const {
+    int topY, botY;
+    mouthShapeAt(x, m, my, w, topY, botY);
+    int mid = (topY + botY) / 2;
+    const int margin = 5;
+    if (isUpper) {
+      if (y < topY + margin) y = topY + margin;
+      if (y > mid - 2) y = mid - 2;
+    } else {
+      if (y > botY - margin) y = botY - margin;
+      if (y < mid + 2) y = mid + 2;
+    }
+    return y;
+  }
+
+  int talkSpreadY(int x, int y, bool isUpper, const MouthCfg &m, int my, int w, float openFactor) const {
+    float u = (float)(x - m.x0) / (float)w;
+    float d = mouthSpreadDelta(openFactor) * sinf(u * 3.14159265f);
+    int ny = isUpper ? (int)(y - d + 0.5f) : (int)(y + d + 0.5f);
+    return clampInnerLineY(ny, x, isUpper, m, my, w);
+  }
+
+  static MouthPt catmullPt(const MouthPt &p0, const MouthPt &p1, const MouthPt &p2, const MouthPt &p3, float t) {
+    float t2 = t * t, t3 = t2 * t;
+    MouthPt q;
+    q.x = (int)(0.5f * ((2.0f * p1.x) + (-p0.x + p2.x) * t +
+      (2.0f * p0.x - 5.0f * p1.x + 4.0f * p2.x - p3.x) * t2 +
+      (-p0.x + 3.0f * p1.x - 3.0f * p2.x + p3.x) * t3) + 0.5f);
+    q.y = (int)(0.5f * ((2.0f * p1.y) + (-p0.y + p2.y) * t +
+      (2.0f * p0.y - 5.0f * p1.y + 4.0f * p2.y - p3.y) * t2 +
+      (-p0.y + 3.0f * p1.y - 3.0f * p2.y + p3.y) * t3) + 0.5f);
+    return q;
+  }
+
+  void drawSpline(const MouthPt *pts, int n, int steps = 8) {
+    if (n < 2) return;
+    int x0 = pts[0].x, y0 = pts[0].y;
+    for (int i = 0; i < n - 1; i++) {
+      MouthPt p0 = pts[i > 0 ? i - 1 : 0];
+      MouthPt p1 = pts[i];
+      MouthPt p2 = pts[i + 1];
+      MouthPt p3 = pts[i + 2 < n ? i + 2 : n - 1];
+      for (int s = 1; s <= steps; s++) {
+        MouthPt q = catmullPt(p0, p1, p2, p3, s / (float)steps);
+        _canvas.drawLine(x0, y0, q.x, q.y, INK);
+        x0 = q.x;
+        y0 = q.y;
       }
     }
+  }
 
-    int pT = 0, pB = 0, pH1 = 0, pH2 = 0;
-    for (int x = mx0; x <= mx1; x++) {
-      float t = (float)(x - mx0) / WD;
-      float c = 1.0f - (2 * t - 1) * (2 * t - 1);
-      float edge = sqrtf(c < 0 ? 0 : c);
-      float half = gap * (0.5f + 0.5f * edge) * (1.0f - pinch * c);
-      int dy = (int)mouthOffset(t, c, bow, tilt, dz, wave, phase, x);
-      int topY = myc - (int)half + dy, botY = myc + (int)half + dy;
-      int h1 = topY + (botY - topY) / 3, h2 = topY + 2 * (botY - topY) / 3;
-      if (x == mx0 || x == mx1) {
-        _canvas.drawLine(x, topY, x, botY, INK);          // rounded end caps
+  void drawSideBulb(int xEdge, int yLine, int anchorY, bool isUpper, bool isLeft) {
+    int cx = isLeft ? xEdge + 4 : xEdge - 4;
+    int cy = isUpper ? anchorY + 2 : anchorY - 2;
+    int xStart = isLeft ? xEdge + 4 : xEdge - 4;
+    int px0 = xStart, py0 = yLine;
+    const int segs = 6;
+    for (int s = 1; s <= segs; s++) {
+      float t = s / (float)segs;
+      float u = 1.0f - t;
+      int px = (int)(u * u * xStart + 2 * u * t * cx + t * t * xEdge + 0.5f);
+      int py = (int)(u * u * yLine + 2 * u * t * cy + t * t * anchorY + 0.5f);
+      _canvas.drawLine(px0, py0, px, py, INK);
+      px0 = px;
+      py0 = py;
+    }
+  }
+
+  void drawMouthGridCustom(const MouthCfg &m) {
+    const int my = 154;
+    const int w = m.x1 - m.x0;
+    const float openFactor = mouthOpenFactor();
+
+    MouthPt F, H, J, L;
+    mouthPtFromNorm(m, my, kMouthF, F);
+    mouthPtFromNorm(m, my, kMouthH, H);
+    mouthPtFromNorm(m, my, kMouthJ, J);
+    mouthPtFromNorm(m, my, kMouthL, L);
+
+    MouthPt K = {m.x1, J.y};
+    MouthPt G = {m.x0 + (int)((1.0f - kMouthF.u) * w + 0.5f), F.y};
+    MouthPt Lr = {m.x0 + (int)((1.0f - kMouthVertU) * w + 0.5f), L.y};
+
+    int shapeLtop, shapeLbot, shapeRtop, shapeRbot;
+    mouthShapeAt(m.x0, m, my, w, shapeLtop, shapeLbot);
+    mouthShapeAt(m.x1, m, my, w, shapeRtop, shapeRbot);
+
+    _canvas.drawLine(m.x0, shapeLtop, m.x0, shapeLbot, INK);
+    _canvas.drawLine(m.x1, shapeRtop, m.x1, shapeRbot, INK);
+    int pT = shapeLtop, pB = shapeLbot;
+    for (int x = m.x0 + 1; x <= m.x1; x++) {
+      int topY, botY;
+      mouthShapeAt(x, m, my, w, topY, botY);
+      _canvas.drawLine(x - 1, pT, x, topY, INK);
+      _canvas.drawLine(x - 1, pB, x, botY, INK);
+      pT = topY;
+      pB = botY;
+    }
+
+    const int xVertL = L.x;
+    const int xVertR = Lr.x;
+    for (int i = 1; i < m.teeth; i++) {
+      int x = m.x0 + (w * i) / m.teeth;
+      if (abs(x - xVertL) < 3 || abs(x - xVertR) < 3) continue;
+      int topY, botY;
+      mouthShapeAt(x, m, my, w, topY, botY);
+      _canvas.drawLine(x, topY, x, botY, INK);
+    }
+    for (int vx : {xVertL, xVertR}) {
+      int topY, botY;
+      mouthShapeAt(vx, m, my, w, topY, botY);
+      _canvas.drawLine(vx, topY, vx, botY, INK);
+    }
+
+    const int xIL = m.x0 + 5;
+    const int xIR = m.x1 - 5;
+    int yJl = talkSpreadY(xIL, J.y, true, m, my, w, openFactor);
+    int yKr = talkSpreadY(xIR, K.y, true, m, my, w, openFactor);
+    int yFl = talkSpreadY(F.x, F.y, true, m, my, w, openFactor);
+    int yHl = talkSpreadY(H.x, H.y, true, m, my, w, openFactor);
+    int yGr = talkSpreadY(G.x, G.y, true, m, my, w, openFactor);
+    int yIl = mirrorBelowY(yHl, H.x, m, my, w);
+
+    MouthPt upper[5] = {
+      {xIL, yJl},
+      {F.x, yFl},
+      {H.x, yHl},
+      {G.x, yGr},
+      {xIR, yKr},
+    };
+    MouthPt lower[5] = {
+      {xIL, talkSpreadY(xIL, mirrorBelowY(yJl, xIL, m, my, w), false, m, my, w, openFactor)},
+      {F.x, talkSpreadY(F.x, mirrorBelowY(yFl, F.x, m, my, w), false, m, my, w, openFactor)},
+      {H.x, talkSpreadY(H.x, yIl, false, m, my, w, openFactor)},
+      {G.x, talkSpreadY(G.x, mirrorBelowY(yGr, G.x, m, my, w), false, m, my, w, openFactor)},
+      {xIR, talkSpreadY(xIR, mirrorBelowY(yKr, xIR, m, my, w), false, m, my, w, openFactor)},
+    };
+
+    drawSpline(upper, 5, 8);
+    drawSpline(lower, 5, 8);
+
+    int anchorTopL = shapeLtop + 6;
+    int anchorBotL = shapeLbot - 6;
+    int anchorTopR = shapeRtop + 6;
+    int anchorBotR = shapeRbot - 6;
+    drawSideBulb(m.x0, upper[0].y, anchorTopL, true, true);
+    drawSideBulb(m.x0, lower[0].y, anchorBotL, false, true);
+    drawSideBulb(m.x1, upper[4].y, anchorTopR, true, false);
+    drawSideBulb(m.x1, lower[4].y, anchorBotR, false, false);
+  }
+
+  int mouthRowYAt(int x, const MouthCfg &m, int my, int w, int rowDiv, int rows,
+                  float talkOpen, bool animMouth) const {
+    int topY, botY;
+    mouthShapeAt(x, m, my, w, topY, botY);
+    float u = (float)(x - m.x0) / w;
+    float env = animMouth ? mouthTalkEnvelope(u) : 0;
+    int openDy = (int)lroundf(talkOpen * env);
+    float rowFrac = (float)rowDiv / rows;
+    int baseH = topY + (botY - topY) * rowDiv / rows;
+    int rowShift = (rowFrac < 0.5f) ? -openDy : openDy;
+    return baseH + rowShift;
+  }
+
+  void drawMouthGridProcedural(const MouthCfg &m) {
+    const int my = 154;
+    const int w = m.x1 - m.x0;
+    float talkOpen = 0;
+    if (_singing) {
+      talkOpen = 3.0f + 2.0f * sinf(millis() * 0.05f);
+    } else if (_talking) {
+      float a = _mouthAmpSmooth / 100.0f;
+      a = a * (2.0f - a);
+      talkOpen = 0.2f + a * 3.2f;
+    }
+    const bool animMouth = _talking || _singing;
+    static const int kInnerRows = 2;
+    static const int kInnerDiv[2] = {1, 2};
+    const int gridRows = 3;
+
+    int pT = 0, pB = 0;
+    for (int x = m.x0; x <= m.x1; x++) {
+      int topY, botY;
+      mouthShapeAt(x, m, my, w, topY, botY);
+      if (x == m.x0 || x == m.x1) {
+        _canvas.drawLine(x, topY, x, botY, INK);
       } else {
         _canvas.drawLine(x - 1, pT, x, topY, INK);
-        _canvas.drawLine(x - 1, pT + 1, x, topY + 1, INK);
         _canvas.drawLine(x - 1, pB, x, botY, INK);
-        _canvas.drawLine(x - 1, pB - 1, x, botY - 1, INK);
-        _canvas.drawLine(x - 1, pH1, x, h1, INK);         // upper interior row
-        _canvas.drawLine(x - 1, pH2, x, h2, INK);         // lower interior row
       }
-      pT = topY; pB = botY; pH1 = h1; pH2 = h2;
+      pT = topY;
+      pB = botY;
     }
-    for (int i = 1; i < teeth; i++) {     // vertical tooth dividers (ride the wave)
-      int x = mx0 + (WD * i) / teeth;
-      float t = (float)(x - mx0) / WD, c = 1.0f - (2 * t - 1) * (2 * t - 1);
-      float half = gap * (0.5f + 0.5f * sqrtf(c < 0 ? 0 : c)) * (1.0f - pinch * c);
-      int dy = (int)mouthOffset(t, c, bow, tilt, dz, wave, phase, x);
-      _canvas.drawLine(x, myc - (int)half + dy, x, myc + (int)half + dy, INK);
+
+    for (int i = 1; i < m.teeth; i++) {
+      int x = m.x0 + (w * i) / m.teeth;
+      int topY, botY;
+      mouthShapeAt(x, m, my, w, topY, botY);
+      _canvas.drawLine(x, topY, x, botY, INK);
+    }
+
+    for (int ri = 0; ri < kInnerRows; ri++) {
+      int lx = m.x0;
+      int ly = mouthRowYAt(lx, m, my, w, kInnerDiv[ri], gridRows, talkOpen, animMouth);
+      for (int x = m.x0 + 1; x <= m.x1; x++) {
+        int hy = mouthRowYAt(x, m, my, w, kInnerDiv[ri], gridRows, talkOpen, animMouth);
+        _canvas.drawLine(lx, ly, x, hy, INK);
+        lx = x;
+        ly = hy;
+      }
     }
   }
 
-  // Colour cues drawn on top — kept minimal so the face stays line-art.
-  void drawAccents() {
-    if (_talking) return;
-    if (_emotion == Emotion::Sad) {       // a blue tear falling under the left eye
-      int tx = CXC - 62, ty = 122;
-      _canvas.fillTriangle(tx - 5, ty, tx + 5, ty, tx, ty - 10, BLUE);
-      _canvas.fillCircle(tx, ty + 2, 5, BLUE);
+  void drawMouthGrid(const MouthCfg &m) {
+    if (_emotion == Emotion::Neutral) {
+      drawLedMouth(_talking || _singing);
+      return;
+    }
+    drawMouthGridProcedural(m);
+  }
+
+  void drawCompactMouth() {
+    const int cx = 160, cy = 154, hw = 28, hh = 17;
+    _canvas.drawRoundRect(cx - hw, cy - hh, hw * 2, hh * 2, 6, INK);
+    for (int row = 1; row < 3; row++) {
+      int y = cy - hh + (hh * 2 * row) / 3;
+      _canvas.drawLine(cx - hw + 4, y, cx + hw - 4, y, INK);
+    }
+    for (int col = 1; col < 4; col++) {
+      int x = cx - hw + (hw * 2 * col) / 4;
+      _canvas.drawLine(x, cy - hh + 4, x, cy + hh - 4, INK);
     }
   }
 
-  // Small open "O" mouth (line-art) — the surprised cue, same style as the rest.
   void drawOMouth() {
-    _canvas.drawCircle(CXC, 152, 15, INK);
-    _canvas.drawCircle(CXC, 152, 14, INK);
+    _canvas.drawCircle(CXC, 154, 15, INK);
+    _canvas.drawCircle(CXC, 154, 14, INK);
   }
 
-  // Settings gear in the top-right corner (8 teeth + hub + hole).
-  void drawGear() {
-    const int cx = 303, cy = 16, r = 9;
+  // Drawn straight onto the screen (not the shifted sprite) so it stays pinned
+  // to the top-right corner regardless of FACE_OFFSET_X.
+  void drawGearOnScreen() {
+    const int cx = (_faceScreenW <= 250) ? 227 : 303;
+    const int cy = 16, r = 9;
     static const int8_t dx[8] = {11, 8, 0, -8, -11, -8, 0, 8};
     static const int8_t dy[8] = {0, 8, 11, 8, 0, -8, -11, -8};
-    for (int i = 0; i < 8; i++) _canvas.fillRect(cx + dx[i] - 3, cy + dy[i] - 3, 6, 6, GEAR);
-    _canvas.fillCircle(cx, cy, r, GEAR);
-    _canvas.fillCircle(cx, cy, 4, BG);   // hub hole
+    for (int i = 0; i < 8; i++) _gfx.fillRect(cx + dx[i] - 3, cy + dy[i] - 3, 6, 6, GEAR);
+    _gfx.fillCircle(cx, cy, r, GEAR);
+    _gfx.fillCircle(cx, cy, 4, BG);
+  }
+
+  void drawEyeSide(bool left, const Preset &base, float blink) {
+    int cx = left ? EYE_L : EYE_R;
+    int cy = EYE_Y;
+    int r = base.eyeR;
+    bool wink = (left && base.winkLeft) || (!left && base.winkRight);
+    uint16_t tint = base.eyeTint ? base.eyeTint : EYE;
+
+    if (wink) {
+      _canvas.fillCircle(cx, cy, r + 4, EYE_GLOW);
+      _canvas.fillCircle(cx, cy, r, tint);
+      drawWinkLine(cx, cy, r);
+      return;
+    }
+
+    _canvas.fillCircle(cx, cy, r + 5, EYE_GLOW);
+    _canvas.fillCircle(cx, cy, r + 2, 0x52AA);
+    _canvas.fillCircle(cx, cy, r, tint);
+
+    float top = base.topLid, bot = base.botLid;
+    if (left && base.topLidL >= 0) top = base.topLidL;
+    if (!left && base.topLidR >= 0) top = base.topLidR;
+    if (left && base.botLidL >= 0) bot = base.botLidL;
+    if (!left && base.botLidR >= 0) bot = base.botLidR;
+
+    if (!wink) {
+      top = fmaxf(top, blink * 0.9f);
+      bot = fmaxf(bot, blink * 0.9f);
+    }
+    if (_bored) top = fmaxf(top, 0.45f);
+
+    drawLidMask(cx, cy, r, top, bot, base.lidAng);
+
+    if (base.pupil == Pupil::Spiral) { drawSpiralPupil(cx, cy); return; }
+    if (base.pupil == Pupil::X) { drawXPupil(cx, cy); return; }
+
+    int px = cx + (int)_gazeX + base.pupilOffX;
+    int py = cy + (int)_gazeY + base.pupilOffY;
+    if (base.pupil == Pupil::Heart) drawHeartPupil(px, py, base.pupilS);
+    else drawSquarePupil(px, py, base.pupilS);
   }
 
   void draw() {
+    Preset p = preset();
     _canvas.fillSprite(BG);
-    drawCapsule(22, 22, 276, 92);          // SURPRISED now uses the same capsule visor
-    drawEye(CXC - 62, 66, true);
-    drawEye(CXC + 62, 66, false);
-    if (_emotion == Emotion::Surprised) drawOMouth();
-    else drawTeethMouth();
-    drawAccents();
-    if (_showGear) drawGear();
-    _canvas.pushSprite(0, 0);
+
+    float t = millis() * 0.001f;
+    float browDy = sinf(t * 4.0f + _browPhase) * 0.8f;
+    float browTilt = sinf(t * 3.0f + _browPhase * 0.7f) * 0.6f;
+
+    drawCapsule();
+    drawBrows(p, browDy, browTilt);
+
+    float blink = _blinkAmt;
+    if (p.winkRight) {
+      drawEyeSide(true, p, blink);
+      drawEyeSide(false, p, 0);
+    } else if (p.winkLeft) {
+      drawEyeSide(true, p, 0);
+      drawEyeSide(false, p, blink);
+    } else {
+      drawEyeSide(true, p, blink);
+      drawEyeSide(false, p, blink);
+    }
+
+    if (p.tear) drawTear(EYE_L, EYE_Y, p.eyeR);
+
+    if (p.mouthKind == MouthKind::Compact) drawCompactMouth();
+    else if (p.mouthKind == MouthKind::O) drawOMouth();
+    else drawMouthGrid(p.mouth);
+
+    if (_faceScreenW < FACE_DESIGN_W) {
+      const float zoom = (float)_faceScreenW / (float)FACE_DESIGN_W;
+      _canvas.pushRotateZoom(_faceScreenW * 0.5f + FACE_OFFSET_X, FACE_H * 0.5f + FACE_OFFSET_Y, 0.0f, zoom, zoom);
+    } else {
+      _canvas.pushSprite(FACE_OFFSET_X, FACE_OFFSET_Y);
+    }
+    if (_showGear) drawGearOnScreen();
   }
 };
