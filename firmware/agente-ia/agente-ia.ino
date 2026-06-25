@@ -6,7 +6,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include <ESP_I2S.h>
+#include <esp_timer.h>
 
 #include "config.h"
 #if ENABLE_WAKEWORD
@@ -22,6 +22,8 @@
 #include "es8311.h"
 #include "touch.h"
 #include "settings.h"
+#include "music_screen.h"
+#include "web_admin.h"
 #include "audio_recorder.h"
 #include "audio_output.h"
 #include "sound_fx.h"
@@ -34,6 +36,7 @@ I2SClass i2s;
 AudioRecorder recorder;
 AppSettings g_settings;
 SettingsScreen g_settingsScreen;
+WebAdmin g_webAdmin;
 uint8_t g_wakePhraseIdx = 0;    // index into WAKE_PRESET_LABELS, sent to /wake-check
 
 enum class State { Sleeping, Listening, Thinking };
@@ -43,13 +46,17 @@ uint32_t emotionHoldUntil = 0;
 uint32_t wakeIgnoreUntil = 0;
 uint32_t lastActivityMs = 0;    // last interaction; drives proactive idle remarks
 bool g_wakeNetRunning = false;  // true only while on-device WakeNet is actively feeding
-bool g_voiceWakeEnabled = true; // PC-side "Hola asistente" listener; toggled from Settings
+bool g_voiceWakeEnabled = true; // PC-side wake phrase listener; toggled from Settings
+bool g_idleRemarksEnabled = ENABLE_IDLE_REMARKS;
+// Clip ya grabado con wake+comando en la misma frase (evita segunda escucha).
+static uint8_t *g_pendingWakeWav = nullptr;
+static size_t g_pendingWakeSize = 0;
+static uint32_t wakeRejectUntil = 0;  // cooldown tras falso positivo de wake
 
-#if WAKE_MODE_PC
-#define WAKE_HINT "Di \"Hola asistente\" o toca"
-#else
-#define WAKE_HINT "Di \"Hi ESP\" o toca la pantalla"
-#endif
+void updateWakeHint() {
+  // Idle prompt removed by request — keep the bottom area clean (black).
+  face.showText("");
+}
 
 #if ENABLE_WAKEWORD
 // WakeNet input format: which stereo slot carries the mic. Set at boot by
@@ -100,6 +107,30 @@ void onSrEvent(sr_event_t event, int command_id, int phrase_id) {
 }
 #endif
 
+#if ENABLE_WAKEWORD
+void syncWakeNetFromSettings() {
+  if (g_settings.hiEspWake) {
+    if (!g_wakeNetRunning) {
+      g_srInputFormat = detectMicInputFormat(i2s);
+      ESP_SR.onEvent(onSrEvent);
+      static const sr_cmd_t srCommands[] = {};
+      if (ESP_SR.begin(i2s, srCommands, 0, SR_CHANNELS_STEREO, SR_MODE_WAKEWORD, g_srInputFormat)) {
+        g_wakeNetRunning = true;
+        Serial.printf("WakeNet started, input=%s\n", g_srInputFormat);
+      } else {
+        Serial.println("WakeNet start failed");
+      }
+    }
+  } else if (g_wakeNetRunning) {
+    ESP_SR.end();
+    g_wakeNetRunning = false;
+    Serial.println("WakeNet stopped");
+  }
+}
+#else
+void syncWakeNetFromSettings() {}
+#endif
+
 bool touchPressed() {
   Wire.beginTransmission(FT6336_I2C_ADDR);
   Wire.write(0x02);
@@ -130,21 +161,10 @@ bool verifyMicRx(I2SClass &i2s) {
   return e == ESP_OK || e == ESP_ERR_TIMEOUT;
 }
 
-// After mono-TX playback, restore the mic bus with a CLEAN driver re-init so the
-// I2SClass internal state (sample rate, slot, transform, channel handles) matches
-// the known-good boot config. Raw channel reconfig left I2SClass out of sync and the
-// 2nd capture saw "channel not enabled". i2s.end()/begin() itself never hung — the
-// post-TTS hang was the EXTRA ESP_SR.end()/begin() rebuild, which we no longer do:
-// ESP_SR reads through the I2SClass object, so resume() alone picks up the fresh
-// handle. ESP_SR is paused here (speak() paused it), so there's no concurrent read.
+// Checkpoint audio-2x-ok: end/begin + MCLK×384; solo configureClock (sin codec.begin).
 bool restoreMicBusAfterPlayback(I2SClass &i2s) {
   Serial.println("I2S restore for mic...");
 
-  // i2s.end() disables each channel THEN deletes it, but bails (I2S_ERROR_CHECK_RETURN
-  // returns on any error) if the disable fails — and here both channels are already
-  // disabled (preparePlayback/endPlayback), so i2s_del_channel never runs and the I2S
-  // port LEAKS. The ESP32-S3 has only 2 ports, so it died on the 3rd conversation.
-  // Re-enable both first so end() can disable+delete cleanly and free the port.
   if (i2s.txChan() && !g_i2sTxRunning) {
     safeChanEnable(i2s.txChan());
     g_i2sTxRunning = true;
@@ -164,7 +184,7 @@ bool restoreMicBusAfterPlayback(I2SClass &i2s) {
     g_i2sRxRunning = false;
     return false;
   }
-  g_i2sTxRunning = true;   // begin() enables both channels
+  g_i2sTxRunning = true;
   g_i2sRxRunning = true;
 
   applyI2sStdClock(i2s, AUDIO_SAMPLE_RATE, (i2s_mclk_multiple_t)I2S_MCLK_MULTIPLE);
@@ -194,16 +214,401 @@ void resumeWakeListener() {
 
 bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,
               bool &sing, bool &doSpeak, String &soundEffect);
-void speak(const String &text, bool sing);
-bool checkWakePhrase(const uint8_t *wav, size_t size);
+void speak(const String &text, bool sing, const String &emotion = "happy");
+void playMusic(const String &videoId, const String &title);
+bool checkWakePhrase(const uint8_t *wav, size_t size, String *commandOut = nullptr);
 void proactiveIdleRemark();
 void openSettings();
+
+String g_musicVideoId;
+String g_musicTitle;
+String g_musicNowTitle;
+String g_musicNowVideoId;
+volatile bool g_musicPlayPending = false;
+volatile bool g_musicPlaying = false;
+volatile bool g_musicStreaming = false;
+volatile bool g_musicStopRequested = false;
+static TaskHandle_t g_musicTaskHandle = nullptr;
+
+struct MusicTaskArgs {
+  String videoId;
+  String title;
+};
+
+static void playMusicTask(void *arg) {
+  auto *a = static_cast<MusicTaskArgs *>(arg);
+  playMusic(a->videoId, a->title);
+  delete a;
+  g_musicTaskHandle = nullptr;
+  vTaskDelete(nullptr);
+}
+
+static void startMusicAsync() {
+  if (g_musicTaskHandle) return;
+  auto *a = new MusicTaskArgs{g_musicVideoId, g_musicTitle};
+  xTaskCreatePinnedToCore(playMusicTask, "music", 32768, a, 5, &g_musicTaskHandle, 1);
+}
+
+void queueMusicPlay(const String &videoId, const String &title) {
+  if (g_musicTaskHandle) {
+    requestMusicStop();
+  }
+  g_musicVideoId = videoId;
+  g_musicTitle = title.length() > 0 ? title : videoId;
+  g_musicNowTitle = g_musicTitle;
+  g_musicPlayPending = true;
+  Serial.printf("Music queued: %s (%s)\n", g_musicVideoId.c_str(), g_musicTitle.c_str());
+  face.setEmotion(Emotion::Happy);
+  MusicScreen::drawNowPlaying(gfx, String("En cola: ") + g_musicTitle, g_settings.volume);
+  face.update();
+}
+
+void requestMusicStop() {
+  g_musicStopRequested = true;
+  g_musicPlayPending = false;
+}
+
+namespace {
+
+constexpr size_t kWavHdrBytes = 44;
+constexpr size_t kAgntPrefixBytes = 11;  // magic(4) + ver(1) + rsv(2) + json_len(4)
+
+struct AudioStreamHeader {
+  bool agnt = false;
+  bool error = false;
+  uint8_t prefix[11];
+  size_t prefixGot = 0;
+  uint32_t jsonLeft = 0;
+  char jsonAcc[768];
+  size_t jsonGot = 0;
+  size_t wavLeft = kWavHdrBytes;
+
+  void reset(bool useAgnt, bool rawPcm = false) {
+    agnt = useAgnt;
+    error = false;
+    prefixGot = 0;
+    jsonLeft = 0;
+    jsonGot = 0;
+    wavLeft = rawPcm ? 0 : kWavHdrBytes;
+  }
+
+  bool feed(const uint8_t *data, size_t n, size_t &pcmOff, size_t &pcmLen, String *emotionOut) {
+    pcmOff = 0;
+    pcmLen = 0;
+    size_t i = 0;
+
+    while (i < n) {
+      if (!agnt) {
+        if (wavLeft > 0) {
+          size_t skip = min(wavLeft, n - i);
+          wavLeft -= skip;
+          i += skip;
+          continue;
+        }
+        pcmOff = i;
+        pcmLen = n - i;
+        return true;
+      }
+
+      if (prefixGot < kAgntPrefixBytes) {
+        prefix[prefixGot++] = data[i++];
+        if (prefixGot == 4 && memcmp(prefix, "AGNT", 4) != 0) {
+          error = true;
+          return false;
+        }
+        if (prefixGot == kAgntPrefixBytes) {
+          jsonLeft = ((uint32_t)prefix[7] << 24) | ((uint32_t)prefix[8] << 16) |
+                     ((uint32_t)prefix[9] << 8) | (uint32_t)prefix[10];
+          if (jsonLeft == 0 || jsonLeft >= sizeof(jsonAcc)) {
+            error = true;
+            return false;
+          }
+        }
+        continue;
+      }
+
+      if (jsonLeft > 0) {
+        jsonAcc[jsonGot++] = (char)data[i++];
+        jsonLeft--;
+        if (jsonLeft == 0 && emotionOut) {
+          JsonDocument meta;
+          if (!deserializeJson(meta, jsonAcc, jsonGot)) {
+            const char *em = meta["emotion"] | "happy";
+            *emotionOut = em;
+          }
+        }
+        continue;
+      }
+
+      if (wavLeft > 0) {
+        size_t skip = min(wavLeft, n - i);
+        wavLeft -= skip;
+        i += skip;
+        continue;
+      }
+
+      pcmOff = i;
+      pcmLen = n - i;
+      return true;
+    }
+    return true;
+  }
+};
+
+static uint8_t pcmToMouthLevel(const int16_t *samples, size_t nSamples) {
+  if (nSamples == 0) return 0;
+  int64_t sumSq = 0;
+  int32_t peak = 0;
+  for (size_t j = 0; j < nSamples; j++) {
+    int32_t s = samples[j];
+    int32_t a = s < 0 ? -s : s;
+    if (a > peak) peak = a;
+    sumSq += (int64_t)s * s;
+  }
+  float rms = sqrtf((float)sumSq / (float)nSamples);
+  if (rms < 160.0f && peak < 650) return 0;
+
+  float pk = sqrtf((float)peak);
+  float rm = sqrtf(rms);
+  float pkN = (pk - 5.5f) / 40.0f;
+  float rmN = (rm - 9.0f) / 36.0f;
+  if (pkN < 0.0f) pkN = 0.0f;
+  if (rmN < 0.0f) rmN = 0.0f;
+  if (pkN > 1.0f) pkN = 1.0f;
+  if (rmN > 1.0f) rmN = 1.0f;
+
+  float mix = pkN * 0.8f + rmN * 0.2f;
+  float levelF = powf(mix, 0.58f) * 100.0f;
+  int32_t level = (int32_t)(levelF + 0.5f);
+  if (level < 0) level = 0;
+  if (level > 100) level = 100;
+  return (uint8_t)level;
+}
+
+size_t playHttpPcmStream(HTTPClient &http, WiFiClient *stream, int remaining, bool agntHeader,
+                         bool singingMode, String *streamEmotion, bool rawPcm = false,
+                         const String *titleOnFirstPcm = nullptr, bool enjoyMusic = false) {
+  static uint8_t netBuf[16384];
+  static uint8_t playBuf[8192];
+  static constexpr size_t kRingCap = 393216;  // ~12 s @ 16 kHz mono en PSRAM
+  static uint8_t *ring = nullptr;
+  static size_t ringCap = 0;
+  if (!ring) {
+    ring = (uint8_t *)heap_caps_malloc(kRingCap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!ring) ring = (uint8_t *)heap_caps_malloc(kRingCap, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    ringCap = ring ? kRingCap : 0;
+  }
+  if (!ring) return 0;
+
+  size_t ringHead = 0, ringTail = 0, ringCount = 0;
+  auto ringFree = [&]() -> size_t { return ringCap - ringCount; };
+  auto ringPush = [&](const uint8_t *data, size_t n) -> bool {
+    if (n > ringFree()) return false;
+    size_t first = min(n, ringCap - ringTail);
+    memcpy(ring + ringTail, data, first);
+    if (n > first) memcpy(ring, data + first, n - first);
+    ringTail = (ringTail + n) % ringCap;
+    ringCount += n;
+    return true;
+  };
+  auto ringPop = [&](uint8_t *out, size_t max) -> size_t {
+    size_t n = min(max, ringCount);
+    size_t first = min(n, ringCap - ringHead);
+    memcpy(out, ring + ringHead, first);
+    if (n > first) memcpy(out + first, ring, n - first);
+    ringHead = (ringHead + n) % ringCap;
+    ringCount -= n;
+    return n;
+  };
+
+  AudioStreamHeader hdr;
+  hdr.reset(agntHeader, rawPcm);
+  size_t pcmWritten = 0;
+  bool showedTitle = false;
+  bool primed = false;
+  uint32_t lastMouthUpdate = 0;
+  uint8_t pcmCarry = 0;
+  bool hasCarry = false;
+  size_t fadePos = 0;
+  static constexpr size_t kFadeSamples = 2400;  // ~150 ms @ 16 kHz
+  static constexpr size_t kPrimeBytes = 65536;    // ~2 s antes de sonar
+  static constexpr size_t kLowWater = 49152;      // ~1.5 s mínimo
+  static constexpr size_t kHighWater = 262144;   // ~8 s objetivo
+  static constexpr size_t kIoChunk = 2048;       // ~64 ms por tick I2S
+  static constexpr uint32_t kMouthFrameMs = 16;
+
+  auto applyFadeIn = [&](int16_t *samples, size_t count) {
+    for (size_t i = 0; i < count && fadePos < kFadeSamples; i++, fadePos++) {
+      const float g = (float)fadePos / (float)kFadeSamples;
+      samples[i] = (int16_t)(samples[i] * g);
+    }
+  };
+
+  auto writePcmAligned = [&](const uint8_t *p, size_t len, bool useFade, bool blockI2s) -> size_t {
+    if (len == 0) return 0;
+    size_t written = 0;
+    if (hasCarry) {
+      uint8_t pair[2] = {pcmCarry, p[0]};
+      int16_t *s = (int16_t *)pair;
+      if (useFade) applyFadeIn(s, 1);
+      written += playMonoPcm16(i2s, pair, 2, blockI2s);
+      p += 1;
+      len -= 1;
+      hasCarry = false;
+    }
+    if (len & 1u) {
+      pcmCarry = p[len - 1];
+      hasCarry = true;
+      len -= 1;
+    }
+    if (len >= 2) {
+      if (useFade) {
+        int16_t *samples = (int16_t *)p;
+        applyFadeIn(samples, len / 2);
+      }
+      written += playMonoPcm16(i2s, p, len, blockI2s);
+    }
+    return written;
+  };
+
+  auto pumpNetwork = [&]() -> bool {
+    if (!http.connected() && stream->available() == 0) return false;
+    if (g_musicStopRequested) return false;
+    size_t avail = stream->available();
+    if (avail == 0) return false;
+
+    size_t n = stream->readBytes(netBuf, min(avail, sizeof(netBuf)));
+    if (n == 0) return false;
+    if (remaining > 0) remaining -= (int)n;
+    if (hdr.error) return false;
+
+    size_t pcmOff = 0, pcmLen = 0;
+    if (!hdr.feed(netBuf, n, pcmOff, pcmLen, streamEmotion)) {
+      Serial.printf("Audio stream: invalid AGNT header (jsonLeft=%lu jsonGot=%u)\n",
+                    (unsigned long)hdr.jsonLeft, (unsigned)hdr.jsonGot);
+      hdr.error = true;
+      return false;
+    }
+    if (pcmLen == 0) return true;
+
+    if (titleOnFirstPcm && !showedTitle) {
+      MusicScreen::drawTitle(gfx, *titleOnFirstPcm);
+      face.setTalking(true);
+      if (singingMode) {
+        face.setSinging(true);
+        face.setEmotion(Emotion::Happy);
+      }
+      face.update();
+      showedTitle = true;
+    }
+    if (!singingMode && !enjoyMusic && pcmLen >= 2) {
+      const int16_t *samples = (const int16_t *)(netBuf + pcmOff);
+      face.setMouthAmplitude(pcmToMouthLevel(samples, pcmLen / 2));
+    }
+
+    size_t pushed = 0;
+    while (pushed < pcmLen) {
+      size_t chunk = min(pcmLen - pushed, ringFree());
+      if (chunk == 0) break;
+      ringPush(netBuf + pcmOff + pushed, chunk);
+      pushed += chunk;
+    }
+    return true;
+  };
+
+  auto pumpNetworkBurst = [&]() -> bool {
+    bool got = false;
+    for (int i = 0; i < 12 && ringFree() >= kIoChunk; i++) {
+      if (pumpNetwork()) got = true;
+      else break;
+    }
+    return got;
+  };
+
+  auto playFromRing = [&](bool useFade) {
+    while (ringCount >= kIoChunk && !g_musicStopRequested) {
+      size_t n = ringPop(playBuf, min(sizeof(playBuf), ringCount));
+      if (n > 0) pcmWritten += writePcmAligned(playBuf, n, useFade, true);
+    }
+    if (ringCount >= 2 && !g_musicStopRequested) {
+      size_t n = ringPop(playBuf, ringCount & ~1u);
+      if (n > 0) pcmWritten += writePcmAligned(playBuf, n, useFade, true);
+    }
+  };
+
+  while (http.connected() && (remaining > 0 || remaining == -1)) {
+    if (g_musicStopRequested) break;
+
+    if (enjoyMusic && primed && ringCount < kHighWater) pumpNetworkBurst();
+
+    while (ringCount < kLowWater && pumpNetwork()) {}
+
+    if (!primed) {
+      while (ringCount < kPrimeBytes && pumpNetwork()) {}
+      if (ringCount < kPrimeBytes && stream->available() == 0 && !stream->connected()) break;
+      if (ringCount < kPrimeBytes && stream->available() == 0) {
+        g_webAdmin.loop();
+        if (!enjoyMusic) face.update();
+        delay(1);
+        if (!stream->connected() && stream->available() == 0) break;
+        continue;
+      }
+      primed = true;
+    }
+
+    if (ringCount == 0) {
+      if (primed) {
+        for (int retry = 0; retry < 32 && ringCount == 0; retry++) {
+          pumpNetwork();
+          if (ringCount > 0) break;
+          delay(1);
+        }
+        if (ringCount == 0) {
+          if (!stream->connected() && stream->available() == 0) break;
+          continue;
+        }
+      }
+      if (!pumpNetwork()) {
+        if (!stream->connected() && stream->available() == 0) break;
+        g_webAdmin.loop();
+        delay(1);
+        continue;
+      }
+      if (ringCount == 0) continue;
+    }
+
+    if (enjoyMusic) {
+      while (ringCount < kLowWater && pumpNetwork()) {}
+      playFromRing(false);
+    } else {
+      size_t n = ringPop(playBuf, min(sizeof(playBuf), ringCount));
+      if (n > 0) pcmWritten += writePcmAligned(playBuf, n, true, true);
+    }
+
+    g_webAdmin.loop();
+    if (!enjoyMusic && millis() - lastMouthUpdate > kMouthFrameMs) {
+      face.update();
+      lastMouthUpdate = millis();
+    }
+  }
+
+  // Vaciar ring al final
+  while (ringCount > 0) {
+    size_t n = ringPop(playBuf, min(sizeof(playBuf), ringCount));
+    if (n > 0) pcmWritten += writePcmAligned(playBuf, n, !enjoyMusic, true);
+  }
+  if (hasCarry) hasCarry = false;
+
+  return pcmWritten;
+}
+
+}  // namespace
 
 void setup() {
   Serial.begin(115200);
 
   gfx.init();
-  gfx.setRotation(1);
+  gfx.setRotation(DISPLAY_ROTATION);
   gfx.setBrightness(200);
   face.begin();
   face.setEmotion(Emotion::Sleepy);
@@ -245,12 +650,17 @@ void setup() {
 
   // User preferences (volume / voice-wake / wake phrase) persisted in NVS.
   loadSettings(g_settings);
+  applySettingsGlobals(g_settings, g_wakePhraseIdx, g_voiceWakeEnabled, g_idleRemarksEnabled);
   codec.setPlaybackVolumePercent(g_settings.volume);
-  g_voiceWakeEnabled = g_settings.voiceWake;
-  g_wakePhraseIdx = g_settings.phraseIdx;
+  syncWakeNetFromSettings();
+  g_webAdmin.begin(g_settings, codec, g_wakePhraseIdx, g_voiceWakeEnabled, g_idleRemarksEnabled);
   face.setShowGear(true);
-  Serial.printf("Settings: vol=%u%% voiceWake=%d phrase='%s'\n",
-                g_settings.volume, g_settings.voiceWake, WAKE_PRESET_LABELS[g_wakePhraseIdx]);
+  Serial.printf("Settings: vol=%u%% voiceWake=%d phrase='%s' idle=%d\n",
+                g_settings.volume, g_settings.voiceWake, WAKE_PRESET_LABELS[g_wakePhraseIdx],
+                g_idleRemarksEnabled);
+#if ENABLE_WAKEWORD
+  Serial.printf("  hiEspWake=%d wakeNet=%d\n", g_settings.hiEspWake, g_wakeNetRunning);
+#endif
 
   if (initSoundFx()) {
     face.showText("Sonidos OK");
@@ -260,30 +670,27 @@ void setup() {
     delay(600);
   }
 
-#if ENABLE_WAKEWORD && !WAKE_MODE_PC
-  // On-device WakeNet ("Hi ESP"). Disabled while WAKE_MODE_PC is on so it doesn't
-  // fight the PC-wake recorder for the I2S bus. Kept here to RETAKE later.
-  g_srInputFormat = detectMicInputFormat(i2s);
-  ESP_SR.onEvent(onSrEvent);
-  if (!ESP_SR.begin(i2s, srCommands, 0, SR_CHANNELS_STEREO, SR_MODE_WAKEWORD, g_srInputFormat)) {
-    Serial.println("ESP_SR init failed! Check partition scheme: ESP SR 16M");
-    face.showText("Error: WakeNet no inicio", TFT_RED);
-  } else {
-    g_wakeNetRunning = true;
-    Serial.printf("WakeNet ready (Hi ESP), input=%s\n", g_srInputFormat);
-  }
-#endif
-
-  face.showText(WAKE_HINT);
-#if WAKE_MODE_PC
-  Serial.println("Ready - PC wake (\"Hola asistente\") + touch");
-#else
-  Serial.println("Ready - WakeNet + touch");
-#endif
+  updateWakeHint();
+  Serial.println("Ready - web admin + touch");
   lastActivityMs = millis();
 }
 
 void loop() {
+  // Mientras hay tarea de música, ella dibuja la UI (prefetch); durante el stream
+  // solo STOP/volumen desde aquí — evita dos hilos tocando SPI (rayas en pantalla).
+  if (g_musicTaskHandle) {
+    g_webAdmin.loop();
+    if (g_musicStreaming) {
+      static uint32_t lastTouchMs = 0;
+      if (millis() - lastTouchMs >= 80) {
+        lastTouchMs = millis();
+        MusicScreen::pollTouch(gfx, g_settings, codec);
+      }
+    }
+    vTaskDelay(2);
+    return;
+  }
+
   face.update();
 
   switch (state) {
@@ -299,20 +706,25 @@ void loop() {
       static bool pressing = false, longHandled = false;
       static uint32_t pressStart = 0;
       static int pressX = 0, pressY = 0;
+      static int lastX = 0, lastY = 0;
       int tx, ty;
       bool down = touchReadPoint(gfx.width(), gfx.height(), tx, ty);
       if (down || pressing) {
         if (down && !pressing) {
           pressing = true; longHandled = false; pressStart = millis();
           pressX = tx; pressY = ty;
-          Serial.printf("tap screen=(%d,%d) gearHit=%d\n", tx, ty, Face::gearHit(tx, ty));
-        } else if (down && !longHandled && millis() - pressStart > 700) {
-          longHandled = true;
-          openSettings();                  // long-press anywhere -> settings
-        } else if (!down) {                // finger released
+          lastX = tx; lastY = ty;
+          Serial.printf("tap screen=(%d,%d) gearHit=%d\n", tx, ty, Face::gearHit(tx, ty, gfx.width()));
+        } else if (down) {
+          lastX = tx; lastY = ty;
+          if (!longHandled && millis() - pressStart > 700) {
+            longHandled = true;
+            openSettings();                // long-press anywhere -> settings
+          }
+        } else {                           // finger released
           pressing = false;
           if (!longHandled) {              // short tap
-            if (Face::gearHit(pressX, pressY)) {
+            if (Face::gearHit(pressX, pressY, gfx.width()) || Face::gearHit(lastX, lastY, gfx.width())) {
               openSettings();
             } else {
               face.clearMicLevel();
@@ -323,15 +735,10 @@ void loop() {
         break;   // a finger is interacting: skip the voice wake gate this iteration
       }
 
-#if WAKE_MODE_PC
-      // PC-side wake WITHOUT starving touch. The energy gate runs only every
-      // WAKE_PROBE_INTERVAL_MS (the loop is otherwise free for the per-loop touch poll),
-      // and the expensive record + /wake-check only fires when the mic peak crosses
-      // WAKE_LISTEN_PEAK. Touch beats the probe at every step: it aborts the record
-      // mid-chunk and is rechecked before the HTTP. Turning g_voiceWakeEnabled off
-      // (Settings) skips all of this, so touch is then instant.
+      // PC-side wake phrase via /wake-check (gated by g_voiceWakeEnabled).
       static uint32_t lastWakeProbe = 0;
       if (g_voiceWakeEnabled && millis() >= wakeIgnoreUntil &&
+          millis() >= wakeRejectUntil &&
           millis() - lastWakeProbe >= WAKE_PROBE_INTERVAL_MS) {
         lastWakeProbe = millis();
         static uint32_t lastPeakLog = 0;
@@ -347,7 +754,7 @@ void loop() {
         }
         if (peak >= WAKE_LISTEN_PEAK && !touchPressed()) {
           Serial.printf("wake-listen: peak=%u -> probing\n", peak);
-          Recording probe = recorder.record(i2s, nullptr, 500, true, touchPressed);
+          Recording probe = recorder.record(i2s, nullptr, WAKE_PROBE_NO_VOICE_MS, true, touchPressed);
           if (touchPressed()) {           // touched during/after the probe -> wake by touch
             if (probe.wav) free(probe.wav);
             face.clearMicLevel();
@@ -355,48 +762,74 @@ void loop() {
             break;
           }
           if (probe.wav) {
-            bool wake = checkWakePhrase(probe.wav, probe.size);
-            free(probe.wav);
+            String inlineCmd;
+            bool wake = checkWakePhrase(probe.wav, probe.size, &inlineCmd);
             if (wake) {
-              Serial.println("PC wake detected (Hola asistente)");
+              if (inlineCmd.length() >= 3) {
+                g_pendingWakeWav = probe.wav;
+                g_pendingWakeSize = probe.size;
+                probe.wav = nullptr;
+                Serial.printf("PC wake+command: %s\n", inlineCmd.c_str());
+              } else {
+                free(probe.wav);
+                Serial.println("PC wake detected (Hola asistente)");
+              }
               face.clearMicLevel();
               state = State::Listening;
               break;
             }
+            free(probe.wav);
+            wakeRejectUntil = millis() + WAKE_REJECT_COOLDOWN_MS;
+            Serial.println("wake-check: no wake phrase — cooldown");
           }
+        }
+      }
+
+#if ENABLE_WAKEWORD
+      if (wakeDetected) {
+        wakeDetected = false;
+        if (g_settings.hiEspWake && millis() >= wakeIgnoreUntil) {
+          face.clearMicLevel();
+          state = State::Listening;
         }
       }
 #endif
 
-#if ENABLE_WAKEWORD && !WAKE_MODE_PC
-      if (wakeDetected && millis() < wakeIgnoreUntil) {
-        wakeDetected = false;
-      } else if (wakeDetected) {
-        wakeDetected = false;
-        face.clearMicLevel();
-        state = State::Listening;
-      }
-#endif
-
       // Proactive: after a while idle, say something on its own.
-      if (millis() - lastActivityMs > IDLE_REMARK_MS && millis() >= wakeIgnoreUntil) {
+      if (g_idleRemarksEnabled && millis() - lastActivityMs > IDLE_REMARK_MS &&
+          millis() >= wakeIgnoreUntil) {
         proactiveIdleRemark();
-        lastActivityMs = millis() + random(0, 60000);  // vary the next one
+        lastActivityMs = millis() + random(0, 60000);
       }
       break;
     }
 
     case State::Listening: {
-      face.setEmotion(Emotion::Surprised);
-      face.update();
-      face.showText("Te escucho...", TFT_GREEN);
+      Recording rec;
+      const bool usePendingWake = (g_pendingWakeWav != nullptr);
+
+      if (usePendingWake) {
+        rec.wav = g_pendingWakeWav;
+        rec.size = g_pendingWakeSize;
+        g_pendingWakeWav = nullptr;
+        g_pendingWakeSize = 0;
+        face.setEmotion(Emotion::Thinking);
+        face.showText("Pensando...", TFT_YELLOW);
+        face.update();
+      } else {
+        face.setEmotion(Emotion::Surprised);
+        face.update();
+        face.showText("Te escucho...", TFT_GREEN);
+      }
 
       pauseWakeListener();
-      Recording rec = recorder.record(i2s, onMicLevel);
-      face.clearMicLevel();
+      if (!usePendingWake) {
+        rec = recorder.record(i2s, onMicLevel);
+        face.clearMicLevel();
+      }
 
       if (!rec.wav) {
-        face.showText("No escuche nada. " WAKE_HINT);
+        face.showText("No escuché nada. Toca la pantalla.");
         face.setEmotion(Emotion::Neutral);
         resumeWakeListener();
         lastActivityMs = millis();
@@ -405,9 +838,11 @@ void loop() {
       }
 
       state = State::Thinking;
-      face.setEmotion(Emotion::Thinking);
-      face.update();
-      face.showText("Pensando...", TFT_YELLOW);
+      if (!usePendingWake) {
+        face.setEmotion(Emotion::Thinking);
+        face.update();
+        face.showText("Pensando...", TFT_YELLOW);
+      }
 
       String emotion, reply, soundEffect;
       bool sing = false;
@@ -429,9 +864,12 @@ void loop() {
         }
         face.update();
         if (doSpeak && reply.length() > 0) {
-          speak(reply, sing);
+          speak(reply, sing, emotion);
         } else {
-          Serial.println("Face only — no TTS");
+          Serial.println("Silent ignore — no TTS");
+          emotionHoldUntil = 0;
+          face.setEmotion(Emotion::Neutral);
+          updateWakeHint();
         }
       } else {
         face.setEmotion(Emotion::Sad);
@@ -451,14 +889,26 @@ void loop() {
   if (emotionHoldUntil && millis() > emotionHoldUntil) {
     emotionHoldUntil = 0;
     face.setEmotion(Emotion::Neutral);
-    face.showText(WAKE_HINT);
+    updateWakeHint();
   }
 
+  if (g_musicPlayPending && !g_musicTaskHandle) {
+    g_musicPlayPending = false;
+    startMusicAsync();
+    lastActivityMs = millis();
+    state = State::Sleeping;
+  }
+
+  g_webAdmin.loop();
   delay(10);
 }
 
-void speak(const String &text, bool sing) {
+void speak(const String &text, bool sing, const String &emotion) {
   pauseWakeListener();
+
+#if !ENABLE_SINGING
+  sing = false;
+#endif
 
   if (WiFi.status() != WL_CONNECTED) {
     face.showText("WiFi perdido", TFT_RED);
@@ -467,104 +917,254 @@ void speak(const String &text, bool sing) {
     return;
   }
 
-  face.showText("Generando voz...", TFT_CYAN);
+  face.showText(sing ? "Componiendo canción..." : "Generando voz...", TFT_CYAN);
   face.update();
 
-  JsonDocument doc;
-  doc["text"] = text;
-  doc["sing"] = sing;
-  String body;
-  serializeJson(doc, body);
+  bool useRvc = sing;
+  bool triedTtsFallback = false;
 
-  HTTPClient http;
-  http.setReuse(false);
-  http.setConnectTimeout(10000);
-  http.setTimeout(90000);
+  for (;;) {
+    JsonDocument doc;
+    String url;
+    bool agntHeader = false;
+    if (useRvc) {
+      doc["lyrics"] = text;
+      doc["emotion"] = emotion;
+      doc["expand"] = false;
+      url = String(BRAIN_SERVER_URL) + "/agent/sing";
+      agntHeader = true;
+    } else {
+      String ttsText = text;
+      if (ttsText.length() > 300) {
+        ttsText = ttsText.substring(0, 297) + "...";
+      }
+      doc["text"] = ttsText;
+      doc["sing"] = sing;
+      url = String(BRAIN_SERVER_URL) + "/tts";
+    }
+    String body;
+    serializeJson(doc, body);
 
-  String url = String(BRAIN_SERVER_URL) + "/tts";
-  Serial.printf("TTS POST %u chars...\n", text.length());
-  if (!http.begin(url)) {
-    Serial.println("TTS http.begin failed");
-    face.showText("TTS error HTTP", TFT_RED);
+    HTTPClient http;
+    http.setReuse(false);
+    http.setConnectTimeout(15000);
+    http.setTimeout(useRvc ? 180000 : TTS_HTTP_TIMEOUT_MS);
+
+    Serial.printf("%s POST %u chars...\n", useRvc ? "SING" : "TTS", text.length());
+    if (!http.begin(url)) {
+      Serial.println("speak http.begin failed");
+      face.showText("TTS error HTTP", TFT_RED);
+      face.update();
+      resumeWakeListener();
+      return;
+    }
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Connection", "close");
+
+    int code = http.POST(body);
+    Serial.printf("%s POST code=%d len=%d\n", useRvc ? "SING" : "TTS", code, http.getSize());
+
+    if (useRvc && code == 503 && !triedTtsFallback) {
+      http.end();
+      Serial.println("SING 503 — fallback to /tts (sing prosody)");
+      useRvc = false;
+      triedTtsFallback = true;
+      face.showText("Canto sin RVC...", TFT_YELLOW);
+      face.update();
+      continue;
+    }
+
+    if (code != 200) {
+      String err = http.getString();
+      Serial.printf("speak error: %d %s\n", code, err.c_str());
+      face.showText(useRvc ? "Canto falló (" + String(code) + ")" : "TTS falló (" + String(code) + ")",
+                    TFT_RED);
+      face.update();
+      http.end();
+      resumeWakeListener();
+      return;
+    }
+
+    WiFiClient *stream = http.getStreamPtr();
+    int remaining = http.getSize();
+
+    preparePlayback(i2s);
+    if (!g_i2sTxRunning) {
+      Serial.println("speak: TX not ready after preparePlayback");
+      http.end();
+      face.showText("Error audio TX", TFT_RED);
+      endPlayback(i2s);
+      resumeWakeListener();
+      return;
+    }
+
+    face.showText(text);
+    face.setTalking(true);
+    if (sing) {
+      face.setSinging(true);
+      face.setEmotion(Emotion::Happy);
+      face.setMouthAmplitude(100);
+    }
+    face.update();
+    digitalWrite(PIN_SPK_EN, LOW);
+
+    String streamEmotion;
+    size_t pcmWritten = playHttpPcmStream(http, stream, remaining, agntHeader, sing, &streamEmotion);
+    if (sing && streamEmotion.length() > 0) {
+      face.setEmotion(emotionFromString(streamEmotion));
+    }
+
+    delay(50);
+    digitalWrite(PIN_SPK_EN, HIGH);
+    http.end();
+
+    face.setSinging(false);
+    face.setTalking(false);
+    face.update();
+    endPlayback(i2s);
+    Serial.printf("speak played %u bytes PCM sing=%d rvc=%d\n", pcmWritten, sing, useRvc);
+    if (sing && pcmWritten == 0) {
+      Serial.println("WARN: sing stream produced 0 PCM bytes");
+      face.showText("Sin audio de canto", TFT_RED);
+      face.update();
+    }
+    delay(400);
+    wakeIgnoreUntil = millis() + WAKE_COOLDOWN_MS;
+    resumeWakeListener();
+    return;
+  }
+}
+
+static bool waitMusicPrefetchReady(const String &videoId, const String &label) {
+  const unsigned long deadline = millis() + 200000UL;
+  while (millis() < deadline && !g_musicStopRequested) {
+    HTTPClient http;
+    http.setReuse(false);
+    http.setConnectTimeout(5000);
+    http.setTimeout(8000);
+    const String statusUrl =
+        String(BRAIN_SERVER_URL) + "/music/prefetch/status?id=" + videoId;
+    if (http.begin(statusUrl)) {
+      const int code = http.GET();
+      if (code == 200) {
+        http.end();
+        Serial.println("MUSIC prefetch ready");
+        return true;
+      }
+      if (code == 503) {
+        Serial.printf("MUSIC prefetch error: %s\n", http.getString().c_str());
+        http.end();
+        face.showText("Musica: PC sin audio", TFT_RED);
+        face.update();
+        return false;
+      }
+      http.end();
+    }
+    MusicScreen::drawNowPlaying(gfx, String("Esperando PC... ") + label, g_settings.volume);
+    face.update();
+    vTaskDelay(pdMS_TO_TICKS(500));
+  }
+  if (g_musicStopRequested) return false;
+  face.showText("Timeout PC (audio lento)", TFT_RED);
+  face.update();
+  return false;
+}
+
+void playMusic(const String &videoId, const String &title) {
+  pauseWakeListener();
+  g_musicStopRequested = false;
+
+  if (WiFi.status() != WL_CONNECTED) {
+    face.showText("WiFi perdido", TFT_RED);
     face.update();
     resumeWakeListener();
     return;
   }
-  http.addHeader("Content-Type", "application/json");
+
+  const String label = title.length() > 0 ? title : videoId;
+  g_musicNowTitle = label;
+  g_musicNowVideoId = videoId;
+  g_musicPlaying = true;
+
+  face.setEmotion(Emotion::Happy);
+  MusicScreen::drawNowPlaying(gfx, String("Esperando PC... ") + label, g_settings.volume);
+  face.update();
+
+  if (!waitMusicPrefetchReady(videoId, label)) {
+    g_musicPlaying = false;
+    resumeWakeListener();
+    return;
+  }
+
+  HTTPClient http;
+  WiFiClient client;
+  client.setNoDelay(true);
+  client.setTimeout((uint32_t)MUSIC_HTTP_TIMEOUT_MS);
+  http.setReuse(false);
+  http.setConnectTimeout(30000);
+  http.setTimeout((int32_t)MUSIC_HTTP_TIMEOUT_MS);
+  http.useHTTP10(true);
+
+  const String url = String(BRAIN_SERVER_URL) + "/music/play?id=" + videoId;
+  Serial.printf("MUSIC GET %s timeout=%d\n", url.c_str(), (int)MUSIC_HTTP_TIMEOUT_MS);
+  if (!http.begin(client, url)) {
+    face.showText("Musica: error HTTP", TFT_RED);
+    face.update();
+    g_musicPlaying = false;
+    resumeWakeListener();
+    return;
+  }
   http.addHeader("Connection", "close");
 
-  int code = http.POST(body);
-  Serial.printf("TTS POST code=%d\n", code);
-  if (code != 200) {
-    String err = http.getString();
-    Serial.printf("TTS error: %d %s\n", code, err.c_str());
-    face.showText("TTS fallo (" + String(code) + ")", TFT_RED);
+  const int code = http.GET();
+  Serial.printf("MUSIC GET code=%d len=%d\n", code, http.getSize());
+
+  if (code != 200 || g_musicStopRequested) {
+    const String err = http.getString();
+    Serial.printf("music error: %d %s\n", code, err.c_str());
+    String msg;
+    if (g_musicStopRequested) {
+      msg = "Musica detenida";
+    } else if (code == HTTPC_ERROR_READ_TIMEOUT) {
+      msg = "Timeout PC (audio lento)";
+    } else if (code < 0) {
+      msg = "Musica error red (" + String(code) + ")";
+    } else {
+      msg = "Musica fallo (" + String(code) + ")";
+    }
+    face.showText(msg, g_musicStopRequested ? TFT_YELLOW : TFT_RED);
     face.update();
     http.end();
+    g_musicPlaying = false;
     resumeWakeListener();
     return;
   }
 
   WiFiClient *stream = http.getStreamPtr();
-  int remaining = http.getSize();
-  static uint8_t buf[2048];
-  size_t headerSkip = 44;
-  size_t pcmWritten = 0;
-  uint32_t lastMouthUpdate = 0;
+  if (stream) stream->setTimeout((uint32_t)MUSIC_HTTP_TIMEOUT_MS);
+  const int remaining = http.getSize() <= 0 ? -1 : http.getSize();
 
   preparePlayback(i2s);
   if (!g_i2sTxRunning) {
-    Serial.println("TTS: TX not ready after preparePlayback");
     http.end();
     face.showText("Error audio TX", TFT_RED);
     endPlayback(i2s);
+    g_musicPlaying = false;
     resumeWakeListener();
     return;
   }
-  face.showText(text);  // show what it's saying during playback (not "Generando voz...")
-  face.setTalking(true);
+
+  face.setTalking(false);
+  face.setSinging(false);
+  face.setEmotion(Emotion::Happy);
+  MusicScreen::drawNowPlaying(gfx, label, g_settings.volume);
   face.update();
   digitalWrite(PIN_SPK_EN, LOW);
 
-  while (http.connected() && (remaining > 0 || remaining == -1)) {
-    size_t avail = stream->available();
-    if (avail == 0) {
-      if (millis() - lastMouthUpdate > 40) {
-        face.update();
-        lastMouthUpdate = millis();
-      }
-      delay(2);
-      if (!stream->connected() && stream->available() == 0) break;
-      continue;
-    }
-    size_t n = stream->readBytes(buf, min(avail, sizeof(buf)));
-    if (n == 0) break;
-    if (remaining > 0) remaining -= n;
-
-    size_t off = 0;
-    if (headerSkip > 0) {
-      off = min(headerSkip, n);
-      headerSkip -= off;
-    }
-    if (n > off) {
-      // Lip-sync: drive the mouth from this chunk's peak amplitude before playing it.
-      const int16_t *samples = (const int16_t *)(buf + off);
-      size_t nSamples = (n - off) / 2;
-      int32_t peak = 0;
-      for (size_t i = 0; i < nSamples; i++) {
-        int32_t a = abs(samples[i]);
-        if (a > peak) peak = a;
-      }
-      int32_t level = peak / 150;  // ~full-scale TTS peak -> ~100
-      face.setMouthAmplitude((uint8_t)(level > 100 ? 100 : level));
-      pcmWritten += playMonoPcm16(i2s, buf + off, n - off);
-    }
-
-    if (millis() - lastMouthUpdate > 40) {
-      face.update();
-      lastMouthUpdate = millis();
-    }
-  }
+  g_musicStreaming = true;
+  const size_t pcmWritten =
+      playHttpPcmStream(http, stream, remaining, false, false, nullptr, true, nullptr, true);
+  g_musicStreaming = false;
 
   delay(50);
   digitalWrite(PIN_SPK_EN, HIGH);
@@ -573,14 +1173,26 @@ void speak(const String &text, bool sing) {
   face.setTalking(false);
   face.update();
   endPlayback(i2s);
-  Serial.printf("TTS played %u bytes PCM sing=%d\n", pcmWritten, sing);
+  g_musicPlaying = false;
+  Serial.printf("music played %u bytes PCM stop=%d\n", pcmWritten, (int)g_musicStopRequested);
+  if (g_musicStopRequested) {
+    face.showText("Musica detenida", TFT_YELLOW);
+    face.update();
+  } else if (pcmWritten == 0) {
+    face.showText("Sin audio de musica", TFT_RED);
+    face.update();
+  } else if (!label.isEmpty()) {
+    updateWakeHint();
+  }
+  g_musicStopRequested = false;
   delay(400);
   wakeIgnoreUntil = millis() + WAKE_COOLDOWN_MS;
+  resumeWakeListener();
 }
 
 // PC-side wake: POST a short clip to /wake-check; server transcribes it (Whisper)
 // and returns whether it contains the wake phrase ("Hola asistente").
-bool checkWakePhrase(const uint8_t *wav, size_t size) {
+bool checkWakePhrase(const uint8_t *wav, size_t size, String *commandOut) {
   HTTPClient http;
   http.setTimeout(WAKE_CHECK_TIMEOUT_MS);
   if (!http.begin(String(BRAIN_SERVER_URL) + "/wake-check")) return false;
@@ -597,7 +1209,12 @@ bool checkWakePhrase(const uint8_t *wav, size_t size) {
   if (err) return false;
   bool wake = doc["wake"] | false;
   const char *heard = doc["heard"] | "";
-  if (heard[0]) Serial.printf("wake-check heard='%s' wake=%d\n", heard, wake);
+  if (commandOut) *commandOut = doc["command"] | "";
+  if (heard[0]) {
+    Serial.printf("wake-check heard='%s' wake=%d", heard, wake);
+    if (commandOut && commandOut->length() > 0) Serial.printf(" cmd='%s'", commandOut->c_str());
+    Serial.println();
+  }
   return wake;
 }
 
@@ -658,7 +1275,7 @@ void proactiveIdleRemark() {
   face.setEmotion(emotionFromString(emotion));
   face.showText(reply);
   face.update();
-  if (doSpeak) speak(reply, sing);
+  if (doSpeak) speak(reply, sing, emotion);
   emotionHoldUntil = millis() + 8000;
 }
 
@@ -668,16 +1285,20 @@ void openSettings() {
   Serial.println("Settings opened");
   g_settingsScreen.run(gfx, g_settings, codec);
 
-  g_voiceWakeEnabled = g_settings.voiceWake;
-  g_wakePhraseIdx = g_settings.phraseIdx;
+  applySettingsGlobals(g_settings, g_wakePhraseIdx, g_voiceWakeEnabled, g_idleRemarksEnabled);
+  syncWakeNetFromSettings();
   codec.setPlaybackVolumePercent(g_settings.volume);
-  Serial.printf("Settings saved: vol=%u%% voiceWake=%d phrase='%s'\n",
-                g_settings.volume, g_settings.voiceWake, WAKE_PRESET_LABELS[g_wakePhraseIdx]);
+  Serial.printf("Settings saved: vol=%u%% voiceWake=%d phrase='%s' idle=%d\n",
+                g_settings.volume, g_settings.voiceWake, WAKE_PRESET_LABELS[g_wakePhraseIdx],
+                g_idleRemarksEnabled);
+#if ENABLE_WAKEWORD
+  Serial.printf("  hiEspWake=%d\n", g_settings.hiEspWake);
+#endif
 
-  gfx.fillScreen(TFT_BLACK);     // clear the menu before the face repaints
+  gfx.fillScreen(TFT_BLACK);
   face.redraw();
   face.update();
-  face.showText(WAKE_HINT);
+  updateWakeHint();
   lastActivityMs = millis();
   wakeIgnoreUntil = millis() + 500;   // brief grace so we don't probe on the way out
 }
