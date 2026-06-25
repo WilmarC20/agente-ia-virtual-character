@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>agenteIA — pruebas cara y voz</title>
+  <style>
+    :root {
+      --bg: #0a0e14; --panel: #151b24; --accent: #3dd6c6; --accent-dim: #2a9d8f;
+      --text: #e8eef4; --muted: #8b9cb3; --danger: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; font-family: "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(ellipse at 30% 0%, #1a3050 0%, var(--bg) 60%);
+      color: var(--text); padding: 1.25rem;
+    }
+    .wrap { max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+    .sub { color: var(--muted); font-size: .88rem; margin-bottom: 1.2rem; line-height: 1.45; }
+    a { color: var(--accent); }
+    .layout { display: grid; gap: 1rem; grid-template-columns: 1fr 1fr; }
+    @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
+    .panel {
+      background: var(--panel); border: 1px solid #2a3548; border-radius: 12px;
+      padding: 1.1rem; margin-bottom: 1rem;
+    }
+    .panel h2 { font-size: .92rem; margin: 0 0 .75rem; color: var(--accent); }
+    .preview-box {
+      background: #000; border: 1px solid #2a3548; border-radius: 10px;
+      padding: .5rem; text-align: center;
+    }
+    #previewCanvas {
+      display: block; width: 100%; max-width: 320px; height: auto; margin: 0 auto;
+      border-radius: 6px; image-rendering: pixelated;
+    }
+    .preview-label { font-size: .78rem; color: var(--muted); margin-top: .4rem; }
+    .grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: .45rem;
+    }
+    button.face {
+      background: #0d1117; border: 1px solid #334155; color: var(--text);
+      border-radius: 10px; padding: .55rem .35rem; cursor: pointer; font-size: .78rem;
+      transition: border-color .15s, color .15s;
+    }
+    button.face:hover, button.face.active { border-color: var(--accent); color: var(--accent); }
+    button.primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      color: #0a1628; border: none; border-radius: 10px; padding: .75rem 1.2rem;
+      font-size: .95rem; font-weight: 700; cursor: pointer; width: 100%; margin-top: .6rem;
+    }
+    button.ghost, button.secondary {
+      background: transparent; border: 1px solid #334155; color: var(--muted);
+      border-radius: 10px; padding: .55rem 1rem; font-size: .85rem; cursor: pointer;
+    }
+    textarea {
+      width: 100%; min-height: 90px; background: #0d1117; border: 1px solid #334155;
+      border-radius: 8px; color: var(--text); padding: .6rem .75rem; font-size: .95rem;
+      font-family: inherit; resize: vertical;
+    }
+    label { display: block; font-size: .78rem; color: var(--muted); margin: .5rem 0 .3rem; }
+    select {
+      width: 100%; background: #0d1117; border: 1px solid #334155; border-radius: 8px;
+      color: var(--text); padding: .5rem .65rem; font-size: .9rem;
+    }
+    .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-top: .5rem; }
+    .msg {
+      padding: .6rem .8rem; border-radius: 8px; font-size: .85rem; margin-top: .75rem; display: none;
+    }
+    .msg.ok { display: block; background: #0d3328; color: #7dffc8; border: 1px solid #1a6b52; }
+    .msg.err { display: block; background: #3a1515; color: #ffb4b4; border: 1px solid #6b2a2a; }
+    .status { font-size: .8rem; color: var(--muted); margin-top: .5rem; line-height: 1.45; }
+    .toggle-row { display: flex; align-items: center; gap: .5rem; font-size: .85rem; color: var(--muted); }
+    input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); }
+    .mode-tabs { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .mode-tabs button {
+      background: var(--panel); border: 1px solid #334155; color: var(--text);
+      border-radius: 8px; padding: .45rem .9rem; cursor: pointer; font-size: .85rem;
+    }
+    .mode-tabs button.active { border-color: var(--accent); color: var(--accent); }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Pruebas cara y voz</h1>
+  <p class="sub">
+    Vista previa en el navegador (como <a href="/gestures-preview">gestures-preview</a>) y envío al robot en idle.
+    El ESP consulta la cola cada ~2 s. También podés probar en el
+    <strong>panel web del dispositivo</strong> (<code>http://&lt;ip-esp&gt;/test</code>).
+    <a href="/admin">Administración</a>
+  </p>
+
+  <div class="mode-tabs">
+    <button type="button" class="active" id="tabBrain">Cerebro → robot</button>
+    <button type="button" id="tabEspDirect">ESP directo (misma red)</button>
+  </div>
+
+  <div class="layout">
+    <div class="panel">
+      <h2>Vista previa del gesto</h2>
+      <div class="preview-box">
+        <canvas id="previewCanvas" width="320" height="200"></canvas>
+        <p class="preview-label" id="previewLabel">neutral</p>
+      </div>
+      <p class="status">Tema oscuro CRT (como la pantalla del robot). La animación de boca se activa al enviar TTS.</p>
+    </div>
+
+    <div>
+      <div class="panel" id="brainPanel">
+        <h2>Enviar al robot (vía cerebro)</h2>
+        <p class="status" id="espList">ESP detectados: cargando…</p>
+        <div class="row" style="margin-bottom:.75rem">
+          <button type="button" class="primary" id="vibingBtn" style="font-size:1rem;padding:.65rem 1.2rem">🎵 Vibing (notas + mic)</button>
+        </div>
+        <div id="vibingOpts" class="panel" style="padding:.85rem;margin-bottom:.75rem;background:#121a24;border-color:#2a4058">
+          <h2 style="font-size:.88rem;margin:0 0 .6rem">Gesto música — micrófono</h2>
+          <label>Sensibilidad del mic <span id="vibingMicVal" style="color:var(--accent);font-weight:700">150%</span></label>
+          <input type="range" id="vibingMic" min="50" max="300" step="5" value="150" style="width:100%;margin:.35rem 0 .5rem">
+          <p class="status" style="margin:0">50% = poco reactivo · 150% = normal · 300% = muy sensible. Se guarda en el ESP al enviar vibing.</p>
+        </div>
+        <div class="grid" id="faceGrid"></div>
+        <div class="row">
+          <label class="toggle-row"><input type="checkbox" id="bored"> Aburrido</label>
+          <label class="toggle-row">Mantener <input type="number" id="holdMs" value="8000" min="1000" max="120000" step="1000" style="width:88px;background:#0d1117;border:1px solid #334155;color:#e8eef4;border-radius:6px;padding:.3rem;"> ms</label>
+        </div>
+        <div class="msg" id="faceMsg"></div>
+        <label style="margin-top:1rem">Texto para que hable</label>
+        <textarea id="speakText" placeholder="Escribe lo que quieres que diga el robot…"></textarea>
+        <label>Emoción mientras habla</label>
+        <select id="speakEmotion"></select>
+        <button class="primary" id="speakBtn">Enviar TTS al robot</button>
+        <div class="msg" id="speakMsg"></div>
+      </div>
+
+      <div class="panel" id="espDirectPanel" style="display:none">
+        <h2>Enviar directo al ESP</h2>
+        <label>IP del dispositivo</label>
+        <input type="text" id="espIp" placeholder="192.168.0.50" style="width:100%;background:#0d1117;border:1px solid #334155;border-radius:8px;color:#e8eef4;padding:.55rem" />
+        <p class="status">Sin cola: el ESP ejecuta al instante. Requiere estar en la misma WiFi.</p>
+        <button class="primary" id="espFaceBtn" style="margin-top:.6rem">Enviar gesto actual al ESP</button>
+        <button class="primary" id="espSpeakBtn">Hablar texto en el ESP</button>
+        <div class="msg" id="espDirectMsg"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Cola del cerebro</h2>
+        <p class="status" id="queueStatus">—</p>
+        <div class="row">
+          <button class="ghost" id="refreshBtn">Actualizar</button>
+          <button class="ghost" id="clearBtn">Vaciar cola</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/static/face_preview.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let currentEmotion = 'neutral';
+let speakingUntil = 0;
+
+const preview = FacePreview.attachPreview($('previewCanvas'), () => ({
+  speaking: Date.now() < speakingUntil,
+  bored: $('bored').checked,
+}));
+preview.setEmotion('neutral');
+preview.start();
+
+function showMsg(el, text, ok) {
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
+}
+
+function pickEmotion(e, btn) {
+  currentEmotion = e;
+  preview.setEmotion(e);
+  $('previewLabel').textContent = e + ($('bored').checked ? ' · aburrido' : '');
+  document.querySelectorAll('.face').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  if (e === 'vibing') $('vibingBtn').classList.add('active');
+  else $('vibingBtn').classList.remove('active');
+  $('speakEmotion').value = e;
+}
+
+FacePreview.EMOTIONS.forEach(e => {
+  if (e === 'vibing') return;
+  const b = document.createElement('button');
+  b.className = 'face' + (e === 'neutral' ? ' active' : '');
+  b.dataset.emotion = e;
+  b.textContent = e;
+  b.onclick = () => { pickEmotion(e, b); sendFace(e); };
+  $('faceGrid').appendChild(b);
+  const o = document.createElement('option');
+  o.value = e; o.textContent = e;
+  if (e === 'happy') o.selected = true;
+  $('speakEmotion').appendChild(o);
+});
+
+$('bored').onchange = () => preview.setEmotion(currentEmotion);
+
+const vibingMicEl = $('vibingMic');
+const vibingMicVal = $('vibingMicVal');
+const savedVmic = localStorage.getItem('agenteia_vibing_mic');
+if (savedVmic) vibingMicEl.value = savedVmic;
+vibingMicVal.textContent = vibingMicEl.value + '%';
+vibingMicEl.oninput = () => {
+  vibingMicVal.textContent = vibingMicEl.value + '%';
+  localStorage.setItem('agenteia_vibing_mic', vibingMicEl.value);
+};
+
+$('vibingBtn').onclick = () => {
+  if (+$('holdMs').value < 60000) $('holdMs').value = '60000';
+  sendFace('vibing');
+};
+
+async function sendFace(emotion) {
+  const btn = emotion === 'vibing'
+    ? $('vibingBtn')
+    : document.querySelector(`.face[data-emotion="${emotion}"]`);
+  pickEmotion(emotion, btn);
+  const defaultHold = emotion === 'vibing' ? 60000 : 8000;
+  const body = {
+    emotion,
+    bored: $('bored').checked,
+    hold_ms: +$('holdMs').value || defaultHold
+  };
+  if (emotion === 'vibing') body.vibing_mic = +vibingMicEl.value || 150;
+  try {
+    const r = await fetch('/api/dev/face', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    showMsg($('faceMsg'), `Encolado: ${emotion} (cola: ${j.queued})`, true);
+    refreshQueue();
+  } catch (e) {
+    showMsg($('faceMsg'), e.message, false);
+  }
+}
+
+$('speakBtn').onclick = async () => {
+  const text = $('speakText').value.trim();
+  const emotion = $('speakEmotion').value;
+  if (!text) { showMsg($('speakMsg'), 'Escribe algo primero', false); return; }
+  pickEmotion(emotion);
+  speakingUntil = Date.now() + Math.min(12000, text.length * 80);
+  try {
+    const r = await fetch('/api/dev/speak', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text, emotion })
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    showMsg($('speakMsg'), `TTS encolado (cola: ${j.queued})`, true);
+    refreshQueue();
+  } catch (e) {
+    showMsg($('speakMsg'), e.message, false);
+  }
+};
+
+function espIp() {
+  return ($('espIp').value || localStorage.getItem('agenteia_esp_ip') || '').trim();
+}
+
+$('espFaceBtn').onclick = async () => {
+  const ip = espIp();
+  if (!ip) { showMsg($('espDirectMsg'), 'Indica la IP del ESP', false); return; }
+  try {
+    const r = await fetch('/api/admin/device/dev/face', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        ip,
+        emotion: currentEmotion,
+        bored: $('bored').checked,
+        hold_ms: +$('holdMs').value || 8000,
+        ...(currentEmotion === 'vibing' ? { vibing_mic: +vibingMicEl.value || 150 } : {})
+      })
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    showMsg($('espDirectMsg'), `Gesto ${currentEmotion} enviado al ESP`, true);
+  } catch (e) {
+    showMsg($('espDirectMsg'), e.message, false);
+  }
+};
+
+$('espSpeakBtn').onclick = async () => {
+  const ip = espIp();
+  const text = $('speakText').value.trim();
+  const emotion = $('speakEmotion').value;
+  if (!ip) { showMsg($('espDirectMsg'), 'Indica la IP del ESP', false); return; }
+  if (!text) { showMsg($('espDirectMsg'), 'Escribe texto primero', false); return; }
+  pickEmotion(emotion);
+  speakingUntil = Date.now() + Math.min(12000, text.length * 80);
+  try {
+    const r = await fetch('/api/admin/device/dev/speak', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ ip, text, emotion })
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    showMsg($('espDirectMsg'), 'TTS enviado al ESP (puede tardar unos segundos)', true);
+  } catch (e) {
+    showMsg($('espDirectMsg'), e.message, false);
+  }
+};
+
+$('tabBrain').onclick = () => {
+  $('tabBrain').classList.add('active');
+  $('tabEspDirect').classList.remove('active');
+  $('brainPanel').style.display = '';
+  $('espDirectPanel').style.display = 'none';
+};
+$('tabEspDirect').onclick = () => {
+  $('tabEspDirect').classList.add('active');
+  $('tabBrain').classList.remove('active');
+  $('brainPanel').style.display = 'none';
+  $('espDirectPanel').style.display = '';
+};
+
+async function refreshQueue() {
+  try {
+    const j = await (await fetch('/api/dev/status')).json();
+    const q = j.queue || [];
+    $('queueStatus').textContent = q.length
+      ? `${q.length} pendiente(s): ` + q.map(c => c.type === 'face' ? c.emotion : '«' + c.text.slice(0,24) + '»').join(', ')
+      : 'Cola vacía — el robot la consulta en idle.';
+  } catch {
+    $('queueStatus').textContent = 'No se pudo leer la cola';
+  }
+}
+
+async function loadEspDevices() {
+  try {
+    const j = await (await fetch('/api/admin/devices')).json();
+    const devices = j.devices || [];
+    if (!devices.length) {
+      $('espList').textContent = 'Ningún ESP detectado — el robot debe estar en WiFi e idle.';
+      return;
+    }
+    $('espList').innerHTML = devices.map((d, i) =>
+      `<div>${i === 0 ? '● ' : '○ '}${d.last_seen} · <strong>${d.ip}</strong> · ${d.mac || 'MAC —'}</div>`
+    ).join('');
+    const saved = espIp();
+    if (!saved && devices[0].ip) {
+      $('espIp').value = devices[0].ip;
+      localStorage.setItem('agenteia_esp_ip', devices[0].ip);
+    }
+  } catch {
+    $('espList').textContent = 'No se pudo cargar dispositivos';
+  }
+}
+
+$('espIp').onchange = () => {
+  const ip = espIp();
+  if (ip) localStorage.setItem('agenteia_esp_ip', ip);
+};
+$('espIp').value = localStorage.getItem('agenteia_esp_ip') || '';
+
+$('refreshBtn').onclick = () => { refreshQueue(); loadEspDevices(); };
+$('clearBtn').onclick = async () => { await fetch('/api/dev/clear', { method: 'POST' }); refreshQueue(); };
+
+refreshQueue();
+loadEspDevices();
+setInterval(refreshQueue, 4000);
+setInterval(loadEspDevices, 8000);
+</script>
+</body>
+</html>

@@ -50,10 +50,10 @@ public:
     i2s.setTimeout(100);
 
     while (total + chunkSamples <= maxSamples && (int32_t)(deadlineMs - millis()) > 0) {
-      if (abortCheck && abortCheck()) {   // touch wins over a speculative wake probe
+      if (abortCheck && abortCheck()) {
         i2s.setTimeout(1000);
         free(buf);
-        return rec;                       // empty -> caller falls back to touch
+        return rec;
       }
       size_t rawBytes = kCaptureStereo ? chunkSamples * 4 : chunkSamples * 2;
       size_t nbytes = readI2sRx(i2s, reinterpret_cast<char *>(raw), rawBytes, 100);
@@ -152,6 +152,71 @@ public:
       }
     }
     i2s.setTimeout(1000);
+    return (uint32_t)peak;
+  }
+
+  // Vibing: read mic window, split into frequency-ish bands + return peak.
+  uint32_t captureVibingBands(I2SClass &i2s, uint8_t *bands, int nBands, uint32_t ms) {
+    if (!bands || nBands < 1) return 0;
+    static constexpr size_t kMax = 480;
+    int16_t mono[kMax];
+    size_t total = 0;
+    int32_t peak = 0;
+    int16_t raw[256 * 2];
+    uint32_t deadline = millis() + ms;
+    i2s.setTimeout(40);
+    while ((int32_t)(deadline - millis()) > 0 && total < kMax) {
+      size_t want = kCaptureStereo ? 256 * 4 : 256 * 2;
+      size_t n = readI2sRx(i2s, reinterpret_cast<char *>(raw), want, 40);
+      size_t cnt = n / 2;
+      if (cnt == 0) break;
+      if (kCaptureStereo) {
+        for (size_t i = 0; i + 1 < cnt && total < kMax; i += 2) {
+          int16_t s = (abs(raw[i]) >= abs(raw[i + 1])) ? raw[i] : raw[i + 1];
+          mono[total++] = s;
+          int32_t a = abs(s);
+          if (a > peak) peak = a;
+        }
+      } else {
+        for (size_t i = 0; i < cnt && total < kMax; i++) {
+          mono[total++] = raw[i];
+          int32_t a = abs(raw[i]);
+          if (a > peak) peak = a;
+        }
+      }
+    }
+    i2s.setTimeout(1000);
+    if (total < (size_t)nBands * 4) {
+      memset(bands, 0, (size_t)nBands);
+      return (uint32_t)peak;
+    }
+    const size_t per = total / (size_t)nBands;
+    for (int b = 0; b < nBands; b++) {
+      size_t start = (size_t)b * per;
+      size_t end = start + per;
+      if (end > total) end = total;
+      int32_t bp = 0;
+      int64_t sum = 0;
+      int zc = 0;
+      for (size_t i = start; i < end; i++) {
+        int32_t v = mono[i];
+        int32_t av = abs(v);
+        sum += av;
+        if (av > bp) bp = av;
+        if (i > start) {
+          int32_t p = mono[i - 1];
+          if ((v >= 0 && p < 0) || (v < 0 && p >= 0)) zc++;
+        }
+      }
+      size_t n = end - start;
+      float rms = (float)sum / (float)n;
+      float zcr = (float)zc / (float)n;
+      float energy = rms * 0.18f + zcr * 135.0f + bp * 0.08f;
+      int lvl = (int)(powf(energy / 720.0f, 0.58f) * 255.0f);
+      if (lvl > 255) lvl = 255;
+      if (lvl < 0) lvl = 0;
+      bands[b] = (uint8_t)lvl;
+    }
     return (uint32_t)peak;
   }
 
