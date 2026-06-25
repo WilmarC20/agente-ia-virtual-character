@@ -21,7 +21,8 @@ extern String g_musicNowVideoId;
 void syncWakeNetFromSettings();
 
 // Pruebas locales de gesto / TTS (panel /test del ESP).
-void queueDevFace(const String &emotion, bool bored, uint32_t holdMs, uint8_t vibingMic = 0);
+void queueDevFace(const String &emotion, bool bored, uint32_t holdMs, uint8_t vibingMic = 0,
+                  uint16_t vibingFloor = 0xFFFF, uint16_t vibingCeil = 0xFFFF);
 void queueDevSpeak(const String &text, const String &emotion);
 
 class WebAdmin {
@@ -170,8 +171,12 @@ private:
     if (hold < 1000) hold = 1000;
     if (hold > 120000) hold = 120000;
     int vmic = doc["vibing_mic"] | 0;
+    int vflo = doc["vibing_floor"] | -1;
+    int vcei = doc["vibing_ceil"] | -1;
     uint8_t vibingMic = (vmic >= 50 && vmic <= 300) ? (uint8_t)vmic : 0;
-    queueDevFace(emotion, bored, hold, vibingMic);
+    uint16_t vibingFloor = (vflo >= 0 && vflo <= 500) ? (uint16_t)vflo : 0xFFFF;
+    uint16_t vibingCeil = (vcei >= 200 && vcei <= 900) ? (uint16_t)vcei : 0xFFFF;
+    queueDevFace(emotion, bored, hold, vibingMic, vibingFloor, vibingCeil);
     _server.send(200, "application/json", "{\"ok\":true,\"emotion\":\"" + emotion + "\"}");
   }
 

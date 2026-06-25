@@ -28,6 +28,7 @@ CONTROLLABLE = (
 _COMMAND_SERVICE = {"on": "turn_on", "off": "turn_off", "toggle": "toggle"}
 
 _cache: dict = {"ts": 0.0, "data": None}
+_devices_prompt_cache: dict = {"ts": 0.0, "max": 0, "text": ""}
 # Long TTL + a background warmer (in main.py) keep this hot, so /converse never waits
 # on the slow ~4s HA /api/states fetch. Stale-by-a-few-seconds device states are fine.
 _CACHE_TTL = 30.0
@@ -75,8 +76,21 @@ def controllable_devices() -> list[dict]:
 
 def devices_prompt(max_items: int = 60) -> str:
     """Compact device list to inject into the LLM system prompt."""
+    now = time.monotonic()
+    dpc = _devices_prompt_cache
+    if (
+        dpc["text"]
+        and dpc["max"] == max_items
+        and _cache["data"] is not None
+        and now - dpc["ts"] < _CACHE_TTL
+    ):
+        return dpc["text"]
     devs = controllable_devices()[:max_items]
-    return "\n".join(f"- {d['name']} ({d['entity_id']}) = {d['state']}" for d in devs)
+    text = "\n".join(f"- {d['name']} ({d['entity_id']}) = {d['state']}" for d in devs)
+    dpc["ts"] = now
+    dpc["max"] = max_items
+    dpc["text"] = text
+    return text
 
 
 def valid_entity_ids() -> set[str]:
@@ -132,4 +146,5 @@ def execute_actions(actions) -> list[dict]:
             results.append({"entity_id": eid, "ok": False, "error": str(e)})
             log.warning("HA %s -> %s FAILED: %s", service, eid, e)
     _cache["ts"] = 0.0  # bust cache so the next read reflects the change
+    _devices_prompt_cache["text"] = ""
     return results

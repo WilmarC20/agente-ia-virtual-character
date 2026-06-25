@@ -16,6 +16,8 @@ if (-not (Test-Path $py)) {
 
 $env:OMP_NUM_THREADS = "1"
 $env:MKL_NUM_THREADS = "1"
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
 $env:SUNO_CACHE_DIR = Join-Path $PSScriptRoot ".cache-suno"
 $env:XDG_CACHE_HOME = $env:SUNO_CACHE_DIR
 $env:HF_HOME = Join-Path $PSScriptRoot ".hf-cache"
@@ -172,5 +174,47 @@ Write-Host ('Capturas audio: ' + (Join-Path $PSScriptRoot 'debug_audio\last_conv
 if ($env:ENABLE_SINGING -eq "1") {
     Write-Host ('Prueba canto RVC:  http://' + $bindHost + ':8000/sing-test') -ForegroundColor Cyan
 }
+if (-not $env:YTMUSIC_STREAM_OPEN_TIMEOUT) { $env:YTMUSIC_STREAM_OPEN_TIMEOUT = "240" }
+if (-not $env:YTMUSIC_STREAM_URL_TIMEOUT) { $env:YTMUSIC_STREAM_URL_TIMEOUT = "120" }
+if (-not $env:YTMUSIC_TRY_URL_PATH) { $env:YTMUSIC_TRY_URL_PATH = "1" }
+if (-not $env:YTMUSIC_ALLOW_YTDLP_PIPE) { $env:YTMUSIC_ALLOW_YTDLP_PIPE = "1" }
+if (-not $env:YTMUSIC_YTDLP_EJS) { $env:YTMUSIC_YTDLP_EJS = "" }
+if (-not $env:YTMUSIC_REQUIRE_COOKIES) { $env:YTMUSIC_REQUIRE_COOKIES = "0" }
+if (-not $env:YTMUSIC_LIGHT_OPEN) { $env:YTMUSIC_LIGHT_OPEN = "1" }
+# pytubefix suele fallar en videos oficiales; yt-dlp download + EJS warm es más fiable.
+if (-not $env:YTMUSIC_SKIP_PYTUBEFIX) { $env:YTMUSIC_SKIP_PYTUBEFIX = "1" }
+if ($env:YTMUSIC_SKIP_PYTUBEFIX -eq "1") {
+    # Forzar (secrets.local.ps1 puede tener WARM_EJS=0 o ESP_OPEN=60 — rompe la 1ª canción).
+    $env:YTMUSIC_STREAM_START_TIMEOUT = "180"
+    $env:YTMUSIC_PREFETCH_WAIT_SEC = "180"
+    $env:YTMUSIC_ESP_OPEN_TIMEOUT = "180"
+    $env:YTMUSIC_SKIP_EJS_WARM = "0"
+    $env:YTMUSIC_WARM_EJS = "1"
+    $env:YTMUSIC_PCM_PACE = "0"
+} else {
+    if (-not $env:YTMUSIC_ESP_OPEN_TIMEOUT) { $env:YTMUSIC_ESP_OPEN_TIMEOUT = "180" }
+    if (-not $env:YTMUSIC_SKIP_EJS_WARM) { $env:YTMUSIC_SKIP_EJS_WARM = "1" }
+    if (-not $env:YTMUSIC_STREAM_START_TIMEOUT) { $env:YTMUSIC_STREAM_START_TIMEOUT = "120" }
+    if (-not $env:YTMUSIC_PREFETCH_WAIT_SEC) { $env:YTMUSIC_PREFETCH_WAIT_SEC = "120" }
+    if ($env:YOUTUBE_API_KEY -and -not $env:YTMUSIC_WARM_EJS) { $env:YTMUSIC_WARM_EJS = "0" }
+}
+$ejsCheck = & $py -c "import importlib.util; print('yes' if importlib.util.find_spec('yt_dlp_ejs') else 'no')" 2>$null
+$pytubefixCheck = & $py -c "import importlib.util; print('yes' if importlib.util.find_spec('pytubefix') else 'no')" 2>$null
+$ytApi = if ($env:YOUTUBE_API_KEY) { 'activa' } else { 'sin-key' }
+$skipPytube = $env:YTMUSIC_SKIP_PYTUBEFIX -eq "1"
+Write-Host ("Musica: open=" + $env:YTMUSIC_STREAM_OPEN_TIMEOUT + "s esp_open=" + $env:YTMUSIC_ESP_OPEN_TIMEOUT + "s prefetch=" + $env:YTMUSIC_PREFETCH_WAIT_SEC + "s YouTubeAPI=" + $ytApi + " pytubefix=" + $(if ($skipPytube) { 'off' } else { $pytubefixCheck }) + " ejs=" + ($(if ($env:YTMUSIC_YTDLP_EJS) { $env:YTMUSIC_YTDLP_EJS } elseif ($ejsCheck -eq 'yes') { 'local' } else { 'github-auto' }))) -ForegroundColor DarkGray
+if (-not $env:YOUTUBE_API_KEY) {
+    Write-Host "AVISO: sin YOUTUBE_API_KEY — ponela en secrets.local.ps1 (YouTube Data API v3)" -ForegroundColor Yellow
+} else {
+    Write-Host "YouTube Data API v3: busqueda oficial activa" -ForegroundColor Cyan
+}
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    Write-Host "AVISO: Node.js no en PATH — yt-dlp EJS limitado" -ForegroundColor Yellow
+} else {
+    Write-Host ("Musica YT: Node " + (Get-Command node).Source) -ForegroundColor DarkGray
+}
+if ($ejsCheck -ne "yes") {
+    Write-Host "AVISO: primera reproduccion puede tardar ~1 min (yt-dlp descarga EJS)" -ForegroundColor Yellow
+}
 
-& $py -m uvicorn main:app --host $bindHost --port 8000
+& $py -m uvicorn main:app --host $bindHost --port 8000 --timeout-graceful-shutdown 3

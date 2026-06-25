@@ -20,7 +20,9 @@ struct AppSettings {
 #endif
   uint8_t phraseIdx = 0;
   bool idleRemarks = ENABLE_IDLE_REMARKS;
-  uint8_t vibingMic = 150;  // gain % (50–300), gesto música / mic ambiente
+  uint8_t vibingMic = 150;       // gain % (50–300)
+  uint16_t vibingFloor = 100;    // piso ruido 0–500 (raw tras gain)
+  uint16_t vibingCeil = 500;     // techo 200–900 (raw tras gain = barras al máximo)
 };
 
 inline void loadSettings(AppSettings &s) {
@@ -37,11 +39,31 @@ inline void loadSettings(AppSettings &s) {
   s.phraseIdx = p.getUChar("phrase", s.phraseIdx);
   s.idleRemarks = p.getBool("idle", s.idleRemarks);
   s.vibingMic = p.getUChar("vmic", s.vibingMic);
+  {
+    uint16_t flo = p.getUShort("vflo", 0);
+    uint16_t cei = p.getUShort("vcei", 0);
+    if (flo == 0 && cei == 0) {
+      uint8_t flo8 = p.getUChar("vflo", 0);
+      uint8_t cei8 = p.getUChar("vcei", 0);
+      if (flo8 > 0 || cei8 > 0) {
+        flo = (flo8 > 0) ? (uint16_t)flo8 * 5u : 100u;
+        cei = (cei8 > 0) ? (uint16_t)cei8 * 5u : 500u;
+      }
+    }
+    if (flo > 0) s.vibingFloor = flo;
+    if (cei > 0) s.vibingCeil = cei;
+  }
   p.end();
   if (s.volume > 100) s.volume = 100;
   if (s.phraseIdx >= WAKE_PRESET_COUNT) s.phraseIdx = 0;
   if (s.vibingMic < 50) s.vibingMic = 50;
   if (s.vibingMic > 300) s.vibingMic = 300;
+  if (s.vibingFloor > 500) s.vibingFloor = 500;
+  if (s.vibingCeil < 200) s.vibingCeil = 200;
+  if (s.vibingCeil > 900) s.vibingCeil = 900;
+  if (s.vibingFloor >= s.vibingCeil - 40) {
+    s.vibingFloor = (s.vibingCeil > 40) ? (uint16_t)(s.vibingCeil - 40) : 0;
+  }
 }
 
 inline void saveSettings(const AppSettings &s) {
@@ -55,6 +77,8 @@ inline void saveSettings(const AppSettings &s) {
   p.putUChar("phrase", s.phraseIdx);
   p.putBool("idle", s.idleRemarks);
   p.putUChar("vmic", s.vibingMic);
+  p.putUShort("vflo", s.vibingFloor);
+  p.putUShort("vcei", s.vibingCeil);
   p.end();
 }
 

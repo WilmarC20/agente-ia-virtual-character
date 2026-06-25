@@ -223,7 +223,8 @@ void playMusic(const String &videoId, const String &title);
 bool checkWakePhrase(const uint8_t *wav, size_t size, String *commandOut = nullptr);
 void proactiveIdleRemark();
 void pollDevCommand();
-void queueDevFace(const String &emotion, bool bored, uint32_t holdMs, uint8_t vibingMic);
+void queueDevFace(const String &emotion, bool bored, uint32_t holdMs, uint8_t vibingMic,
+                  uint16_t vibingFloor, uint16_t vibingCeil);
 void queueDevSpeak(const String &text, const String &emotion);
 void processDevCommands();
 void openSettings();
@@ -244,14 +245,40 @@ static String g_devFaceEmotion;
 static bool g_devFaceBored = false;
 static uint32_t g_devFaceHoldMs = 8000;
 static uint8_t g_devVibingMic = 0;
+static uint16_t g_devVibingFloor = 0xFFFF;
+static uint16_t g_devVibingCeil = 0xFFFF;
 static String g_devSpeakText;
 static String g_devSpeakEmotion;
 
-void queueDevFace(const String &emotion, bool bored, uint32_t holdMs, uint8_t vibingMic) {
+static void applyVibingMicSettings(uint8_t mic, uint16_t floor, uint16_t ceil) {
+  bool save = false;
+  if (mic >= 50 && mic <= 300) {
+    face.setVibingMicGain(mic);
+    g_settings.vibingMic = mic;
+    save = true;
+  }
+  if (floor != 0xFFFF && floor <= 500) {
+    uint16_t c = (ceil != 0xFFFF && ceil <= 900 && ceil >= 200) ? ceil : g_settings.vibingCeil;
+    face.setVibingRange(floor, c);
+    g_settings.vibingFloor = floor;
+    if (ceil != 0xFFFF && ceil >= 200 && ceil <= 900) g_settings.vibingCeil = ceil;
+    save = true;
+  } else if (ceil != 0xFFFF && ceil >= 200 && ceil <= 900) {
+    face.setVibingRange(g_settings.vibingFloor, ceil);
+    g_settings.vibingCeil = ceil;
+    save = true;
+  }
+  if (save) saveSettings(g_settings);
+}
+
+void queueDevFace(const String &emotion, bool bored, uint32_t holdMs, uint8_t vibingMic,
+                  uint16_t vibingFloor, uint16_t vibingCeil) {
   g_devFaceEmotion = emotion;
   g_devFaceBored = bored;
   g_devFaceHoldMs = holdMs;
   g_devVibingMic = vibingMic;
+  g_devVibingFloor = vibingFloor;
+  g_devVibingCeil = vibingCeil;
   g_devFacePending = true;
 }
 
@@ -266,10 +293,8 @@ void processDevCommands() {
     g_devFacePending = false;
     face.setEmotion(emotionFromString(g_devFaceEmotion));
     face.setBored(g_devFaceBored);
-    if (g_devVibingMic >= 50) {
-      face.setVibingMicGain(g_devVibingMic);
-      g_settings.vibingMic = g_devVibingMic;
-      saveSettings(g_settings);
+    if (g_devVibingMic >= 50 || g_devVibingFloor != 0xFFFF || g_devVibingCeil != 0xFFFF) {
+      applyVibingMicSettings(g_devVibingMic, g_devVibingFloor, g_devVibingCeil);
     }
     emotionHoldUntil = millis() + g_devFaceHoldMs;
     face.showText("");
@@ -713,6 +738,7 @@ void setup() {
   loadSettings(g_settings);
   applySettingsGlobals(g_settings, g_wakePhraseIdx, g_voiceWakeEnabled, g_idleRemarksEnabled);
   face.setVibingMicGain(g_settings.vibingMic);
+  face.setVibingRange(g_settings.vibingFloor, g_settings.vibingCeil);
   codec.setPlaybackVolumePercent(g_settings.volume);
   syncWakeNetFromSettings();
   g_webAdmin.begin(g_settings, codec, g_wakePhraseIdx, g_voiceWakeEnabled, g_idleRemarksEnabled);
@@ -1369,10 +1395,13 @@ void pollDevCommand() {
     face.setBored(cmd["bored"] | false);
     uint32_t hold = cmd["hold_ms"] | (em == "vibing" ? 60000u : 8000u);
     int vmic = cmd["vibing_mic"] | 0;
-    if (vmic >= 50 && vmic <= 300) {
-      face.setVibingMicGain((uint8_t)vmic);
-      g_settings.vibingMic = (uint8_t)vmic;
-      saveSettings(g_settings);
+    int vflo = cmd["vibing_floor"] | -1;
+    int vcei = cmd["vibing_ceil"] | -1;
+    uint8_t mic = (vmic >= 50 && vmic <= 300) ? (uint8_t)vmic : 0;
+    uint16_t flo = (vflo >= 0 && vflo <= 500) ? (uint16_t)vflo : 0xFFFF;
+    uint16_t cei = (vcei >= 200 && vcei <= 900) ? (uint16_t)vcei : 0xFFFF;
+    if (mic || flo != 0xFFFF || cei != 0xFFFF) {
+      applyVibingMicSettings(mic, flo, cei);
     }
     emotionHoldUntil = millis() + hold;
     face.showText("");

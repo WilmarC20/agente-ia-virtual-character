@@ -35,6 +35,8 @@ TTS_RVC_EDGE_TIMEOUT_S = float(os.environ.get("TTS_RVC_EDGE_TIMEOUT_S", "15"))
 EDGE_TIMEOUT_S = float(os.environ.get("EDGE_TTS_TIMEOUT_S", "6"))
 TTS_TOTAL_TIMEOUT_S = float(os.environ.get("TTS_TOTAL_TIMEOUT_S", "28"))
 TTS_MAX_CHARS = int(os.environ.get("TTS_MAX_CHARS", "320"))
+# Respuestas habladas al ESP (fallback si no hay límite por personalidad).
+TTS_SPEAK_MAX_CHARS = int(os.environ.get("TTS_SPEAK_MAX_CHARS", "180"))
 SAPI_TIMEOUT_S = float(os.environ.get("SAPI_TTS_TIMEOUT_S", "20"))
 PIPER_VOICE = os.environ.get("TTS_VOICE", "es_MX-claude-high")
 TTS_SAMPLE_RATE = int(os.environ.get("TTS_SAMPLE_RATE", "16000"))
@@ -77,6 +79,9 @@ def _is_emoji_char(ch: str) -> bool:
 
 def sanitize_speech_text(text: str) -> str:
     """Texto listo para TTS: sin emojis, markdown ni símbolos que se leen mal."""
+    from text_encoding import prepare_spanish_text
+
+    text = prepare_spanish_text(text)
     text = unicodedata.normalize("NFC", text)
     text = "".join(ch for ch in text if not _is_emoji_char(ch))
     text = _EMOJI_RE.sub("", text)
@@ -103,12 +108,38 @@ def sanitize_speech_text(text: str) -> str:
     return text
 
 
-def _normalize_tts_text(text: str) -> str:
+def cap_speech_text(text: str, *, sing: bool = False, max_chars: int | None = None) -> str:
+    """Recorta reply para TTS; límite por personalidad activa si no se pasa max_chars."""
     text = sanitize_speech_text(text)
     text = " ".join(text.replace("\n", " ").replace("\r", " ").split())
-    if len(text) > TTS_MAX_CHARS:
-        text = text[: TTS_MAX_CHARS - 1].rstrip() + "."
-    return text
+    if not text:
+        return text
+    if sing:
+        limit = TTS_MAX_CHARS
+    elif max_chars is not None:
+        limit = max_chars
+    else:
+        try:
+            import server_config as _scfg
+            limit = _scfg.get_speak_max_chars()
+        except Exception:
+            limit = TTS_SPEAK_MAX_CHARS
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    for sep in (". ", "? ", "! ", "; "):
+        idx = cut.rfind(sep)
+        if idx >= max(24, limit // 3):
+            trimmed = cut[: idx + 1].strip()
+            log.info("TTS reply truncated %d -> %d chars (sentence)", len(text), len(trimmed))
+            return trimmed
+    trimmed = cut.rstrip(" ,;:-") + "."
+    log.info("TTS reply truncated %d -> %d chars (hard)", len(text), len(trimmed))
+    return trimmed
+
+
+def _normalize_tts_text(text: str, *, sing: bool = False) -> str:
+    return cap_speech_text(text, sing=sing)
 
 
 def _pcm_to_wav(pcm: np.ndarray, sample_rate: int) -> bytes:
@@ -151,7 +182,7 @@ def _sing_prosody(sing: bool, *, strong: bool = False) -> tuple[str, str, str]:
 
 def _synthesize_sapi(text: str, sing: bool) -> bytes:
     """Windows SAPI via subproceso aislado."""
-    text = _sanitize_for_sapi(_normalize_tts_text(text))
+    text = _sanitize_for_sapi(_normalize_tts_text(text, sing=sing))
     if not text.strip():
         text = "Ok."
     payload = json.dumps({"text": text, "sing": sing}, ensure_ascii=False).encode("utf-8")
@@ -393,7 +424,7 @@ async def _synthesize_edge_rvc_guide(text: str) -> bytes:
     """Guia TTS para RVC: edge-tts (gratis, sin API key) → WAV PCM."""
     import edge_tts
 
-    text = _normalize_tts_text(text)
+    text = _normalize_tts_text(text, sing=False)
     if not text.strip():
         text = "Ok."
     rate = _edge_rate_from_speed_percent()
@@ -421,7 +452,7 @@ def synthesize_rvc_guide_wav(text: str, sing: bool = False) -> bytes:
 
 
 async def synthesize_wav_16k(text: str, sing: bool = False, *, sing_strong: bool = False) -> bytes:
-    text = _normalize_tts_text(text)
+    text = _normalize_tts_text(text, sing=sing)
     if not text.strip():
         text = "Ok."
 

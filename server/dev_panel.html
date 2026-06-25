@@ -116,7 +116,11 @@
           <h2 style="font-size:.88rem;margin:0 0 .6rem">Gesto música — micrófono</h2>
           <label>Sensibilidad del mic <span id="vibingMicVal" style="color:var(--accent);font-weight:700">150%</span></label>
           <input type="range" id="vibingMic" min="50" max="300" step="5" value="150" style="width:100%;margin:.35rem 0 .5rem">
-          <p class="status" style="margin:0">50% = poco reactivo · 150% = normal · 300% = muy sensible. Se guarda en el ESP al enviar vibing.</p>
+          <label>Piso (ruido) <span id="vibingFloorVal" style="color:var(--accent);font-weight:700">100</span></label>
+          <input type="range" id="vibingFloor" min="0" max="500" step="5" value="100" style="width:100%;margin:.35rem 0 .5rem">
+          <label>Techo (máximo) <span id="vibingCeilVal" style="color:var(--accent);font-weight:700">500</span></label>
+          <input type="range" id="vibingCeil" min="200" max="900" step="5" value="500" style="width:100%;margin:.35rem 0 .5rem">
+          <p class="status" style="margin:0">Piso 0–500 · Techo 200–900 (señal tras ganancia). Piso bajo = casi sin filtro; sube el piso para cortar ruido.</p>
         </div>
         <div class="grid" id="faceGrid"></div>
         <div class="row">
@@ -200,13 +204,56 @@ $('bored').onchange = () => preview.setEmotion(currentEmotion);
 
 const vibingMicEl = $('vibingMic');
 const vibingMicVal = $('vibingMicVal');
+const vibingFloorEl = $('vibingFloor');
+const vibingFloorVal = $('vibingFloorVal');
+const vibingCeilEl = $('vibingCeil');
+const vibingCeilVal = $('vibingCeilVal');
 const savedVmic = localStorage.getItem('agenteia_vibing_mic');
+const savedVflo = localStorage.getItem('agenteia_vibing_floor');
+const savedVcei = localStorage.getItem('agenteia_vibing_ceil');
 if (savedVmic) vibingMicEl.value = savedVmic;
+if (savedVflo) {
+  const f = Math.min(500, Math.max(0, +savedVflo));
+  vibingFloorEl.value = String(Math.round(f / 5) * 5);
+} else {
+  vibingFloorEl.value = '100';
+}
+if (savedVcei) {
+  const c = Math.min(900, Math.max(200, +savedVcei));
+  vibingCeilEl.value = String(Math.round(c / 5) * 5);
+} else {
+  vibingCeilEl.value = '500';
+}
 vibingMicVal.textContent = vibingMicEl.value + '%';
+vibingFloorVal.textContent = vibingFloorEl.value;
+vibingCeilVal.textContent = vibingCeilEl.value;
 vibingMicEl.oninput = () => {
   vibingMicVal.textContent = vibingMicEl.value + '%';
   localStorage.setItem('agenteia_vibing_mic', vibingMicEl.value);
 };
+vibingFloorEl.oninput = () => {
+  const f = +vibingFloorEl.value;
+  const c = +vibingCeilEl.value;
+  if (f >= c - 40) vibingFloorEl.value = String(Math.max(0, c - 40));
+  vibingFloorVal.textContent = vibingFloorEl.value;
+  localStorage.setItem('agenteia_vibing_floor', vibingFloorEl.value);
+};
+vibingCeilEl.oninput = () => {
+  const f = +vibingFloorEl.value;
+  const c = +vibingCeilEl.value;
+  if (f >= c - 40) vibingFloorEl.value = String(Math.max(0, c - 40));
+  vibingCeilVal.textContent = vibingCeilEl.value;
+  vibingFloorVal.textContent = vibingFloorEl.value;
+  localStorage.setItem('agenteia_vibing_ceil', vibingCeilEl.value);
+};
+
+function vibingMicBody() {
+  return {
+    vibing_mic: +vibingMicEl.value || 150,
+    vibing_floor: +vibingFloorEl.value,
+    vibing_ceil: +vibingCeilEl.value
+  };
+}
 
 $('vibingBtn').onclick = () => {
   if (+$('holdMs').value < 60000) $('holdMs').value = '60000';
@@ -224,7 +271,7 @@ async function sendFace(emotion) {
     bored: $('bored').checked,
     hold_ms: +$('holdMs').value || defaultHold
   };
-  if (emotion === 'vibing') body.vibing_mic = +vibingMicEl.value || 150;
+  if (emotion === 'vibing') Object.assign(body, vibingMicBody());
   try {
     const r = await fetch('/api/dev/face', {
       method: 'POST',
@@ -277,7 +324,7 @@ $('espFaceBtn').onclick = async () => {
         emotion: currentEmotion,
         bored: $('bored').checked,
         hold_ms: +$('holdMs').value || 8000,
-        ...(currentEmotion === 'vibing' ? { vibing_mic: +vibingMicEl.value || 150 } : {})
+        ...(currentEmotion === 'vibing' ? vibingMicBody() : {})
       })
     });
     const j = await r.json();

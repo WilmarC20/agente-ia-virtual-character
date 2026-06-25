@@ -5,4 +5,4 @@
 #define WIFI_PASSWORD "your-wifi-password"
 
 // Brain server (server/main.py running on your PC)
-#define BRAIN_SERVER_URL "http://192.168.1.100:8000"
+#define BRAIN_SERVER_URL "http://192.168.0.103:8000"

@@ -6,10 +6,11 @@
 #include <driver/i2s_common.h>
 #include "config.h"
 #include "es8311.h"
+#include "settings.h"
 
 extern ES8311 codec;
+extern AppSettings g_settings;
 
-// Implementado en agente-ia.ino (i2s.end/begin + ESP_SR rebegin).
 bool restoreMicBusAfterPlayback(I2SClass &i2s);
 
 static bool g_i2sTxRunning = false;
@@ -92,9 +93,13 @@ inline void prepareCapture(I2SClass &i2s) {
   drainI2sRx(i2s, I2S_DRAIN_MS);
 }
 
-// TTS: RX off, TX mono on, MCLK x384.
-inline void preparePlayback(I2SClass &i2s) {
-  codec.setPlaybackVolumePercent(TTS_VOLUME_PERCENT);
+// TTS: RX off, TX mono on, MCLK x384 (checkpoint audio-2x-ok).
+inline void preparePlayback(I2SClass &i2s, bool muteDac = false) {
+  if (muteDac) {
+    codec.setDacVolume(0);
+  } else {
+    codec.setPlaybackVolumePercent(g_settings.volume);
+  }
 
   if (i2s.rxChan() != nullptr) {
     safeChanDisable(i2s.rxChan());
@@ -117,10 +122,21 @@ inline void preparePlayback(I2SClass &i2s) {
   Serial.printf("TTS TX mono running=%d\n", g_i2sTxRunning);
 }
 
-inline size_t playMonoPcm16(I2SClass &i2s, const uint8_t *data, size_t bytes) {
+inline size_t playMonoPcm16(I2SClass &i2s, const uint8_t *data, size_t bytes, bool blockComplete = true) {
   bytes &= ~1u;
   if (bytes < 2 || !g_i2sTxRunning) return 0;
-  return i2s.write(data, bytes);
+  if (!blockComplete) return i2s.write(data, bytes);
+
+  size_t total = 0;
+  while (total < bytes) {
+    size_t n = i2s.write(data + total, bytes - total);
+    if (n == 0) {
+      delay(1);
+      continue;
+    }
+    total += n;
+  }
+  return total;
 }
 
 inline void endPlayback(I2SClass &i2s) {
