@@ -24,6 +24,10 @@
 #include "settings.h"
 #include "music_screen.h"
 #include "web_admin.h"
+
+static void addBrainDeviceHeaders(HTTPClient &http) {
+  http.addHeader("X-Device-MAC", WiFi.macAddress());
+}
 #include "audio_recorder.h"
 #include "audio_output.h"
 #include "sound_fx.h"
@@ -144,11 +148,11 @@ void onMicLevel(uint32_t rms) {
   face.drawMicLevel(rms);
 }
 
-void pauseWakeListener() {
+void pauseWakeListener(bool settle = true) {
 #if ENABLE_WAKEWORD
   if (g_wakeNetRunning) {
     ESP_SR.pause();
-    delay(SR_PAUSE_SETTLE_MS);
+    if (settle) delay(SR_PAUSE_SETTLE_MS);
   }
 #endif
 }
@@ -218,6 +222,10 @@ void speak(const String &text, bool sing, const String &emotion = "happy");
 void playMusic(const String &videoId, const String &title);
 bool checkWakePhrase(const uint8_t *wav, size_t size, String *commandOut = nullptr);
 void proactiveIdleRemark();
+void pollDevCommand();
+void queueDevFace(const String &emotion, bool bored, uint32_t holdMs, uint8_t vibingMic);
+void queueDevSpeak(const String &text, const String &emotion);
+void processDevCommands();
 void openSettings();
 
 String g_musicVideoId;
@@ -229,6 +237,59 @@ volatile bool g_musicPlaying = false;
 volatile bool g_musicStreaming = false;
 volatile bool g_musicStopRequested = false;
 static TaskHandle_t g_musicTaskHandle = nullptr;
+
+static volatile bool g_devFacePending = false;
+static volatile bool g_devSpeakPending = false;
+static String g_devFaceEmotion;
+static bool g_devFaceBored = false;
+static uint32_t g_devFaceHoldMs = 8000;
+static uint8_t g_devVibingMic = 0;
+static String g_devSpeakText;
+static String g_devSpeakEmotion;
+
+void queueDevFace(const String &emotion, bool bored, uint32_t holdMs, uint8_t vibingMic) {
+  g_devFaceEmotion = emotion;
+  g_devFaceBored = bored;
+  g_devFaceHoldMs = holdMs;
+  g_devVibingMic = vibingMic;
+  g_devFacePending = true;
+}
+
+void queueDevSpeak(const String &text, const String &emotion) {
+  g_devSpeakText = text;
+  g_devSpeakEmotion = emotion;
+  g_devSpeakPending = true;
+}
+
+void processDevCommands() {
+  if (g_devFacePending) {
+    g_devFacePending = false;
+    face.setEmotion(emotionFromString(g_devFaceEmotion));
+    face.setBored(g_devFaceBored);
+    if (g_devVibingMic >= 50) {
+      face.setVibingMicGain(g_devVibingMic);
+      g_settings.vibingMic = g_devVibingMic;
+      saveSettings(g_settings);
+    }
+    emotionHoldUntil = millis() + g_devFaceHoldMs;
+    face.showText("");
+    face.update();
+    lastActivityMs = millis();
+    Serial.printf("local dev face: %s bored=%d\n", g_devFaceEmotion.c_str(), g_devFaceBored);
+  }
+  if (g_devSpeakPending && state == State::Sleeping && !g_musicTaskHandle) {
+    g_devSpeakPending = false;
+    String text = g_devSpeakText;
+    String em = g_devSpeakEmotion;
+    face.setEmotion(emotionFromString(em));
+    face.showText(text);
+    face.update();
+    Serial.printf("local dev speak [%s]: %s\n", em.c_str(), text.c_str());
+    speak(text, false, em);
+    emotionHoldUntil = millis() + 8000;
+    lastActivityMs = millis();
+  }
+}
 
 struct MusicTaskArgs {
   String videoId;
@@ -586,7 +647,7 @@ size_t playHttpPcmStream(HTTPClient &http, WiFiClient *stream, int remaining, bo
     }
 
     g_webAdmin.loop();
-    if (!enjoyMusic && millis() - lastMouthUpdate > kMouthFrameMs) {
+    if (millis() - lastMouthUpdate > kMouthFrameMs) {
       face.update();
       lastMouthUpdate = millis();
     }
@@ -611,7 +672,7 @@ void setup() {
   gfx.setRotation(DISPLAY_ROTATION);
   gfx.setBrightness(200);
   face.begin();
-  face.setEmotion(Emotion::Sleepy);
+  face.setEmotion(Emotion::Neutral);
   face.update();
   face.showText("Conectando WiFi...");
 
@@ -651,6 +712,7 @@ void setup() {
   // User preferences (volume / voice-wake / wake phrase) persisted in NVS.
   loadSettings(g_settings);
   applySettingsGlobals(g_settings, g_wakePhraseIdx, g_voiceWakeEnabled, g_idleRemarksEnabled);
+  face.setVibingMicGain(g_settings.vibingMic);
   codec.setPlaybackVolumePercent(g_settings.volume);
   syncWakeNetFromSettings();
   g_webAdmin.begin(g_settings, codec, g_wakePhraseIdx, g_voiceWakeEnabled, g_idleRemarksEnabled);
@@ -693,11 +755,25 @@ void loop() {
 
   face.update();
 
+  processDevCommands();
+
   switch (state) {
     case State::Sleeping: {
       // Bored mood after 20 s idle (half-lids + slower saccades). Signed cast guards
       // against lastActivityMs being parked in the future by the idle-remark logic.
-      face.setBored((int32_t)(millis() - lastActivityMs) > 20000);
+      face.setBored(!face.isVibing() && (int32_t)(millis() - lastActivityMs) > 20000);
+
+      // Gesto vibing: espectrograma en boca según micrófono ambiente.
+      static uint32_t lastVibingMic = 0;
+      if (face.isVibing() && millis() - lastVibingMic > 25) {
+        lastVibingMic = millis();
+        uint8_t bands[12];
+        pauseWakeListener(false);
+        uint32_t peak = recorder.captureVibingBands(i2s, bands, 12, 45);
+        resumeWakeListener();
+        face.setVibingSpectrum(bands, 12, peak);
+        lastActivityMs = millis();
+      }
 
       // Touch: a SHORT tap on the gear opens Settings, a short tap anywhere else wakes.
       // A LONG press (>700 ms) ANYWHERE also opens Settings — a mapping-independent
@@ -737,7 +813,7 @@ void loop() {
 
       // PC-side wake phrase via /wake-check (gated by g_voiceWakeEnabled).
       static uint32_t lastWakeProbe = 0;
-      if (g_voiceWakeEnabled && millis() >= wakeIgnoreUntil &&
+      if (!face.isVibing() && g_voiceWakeEnabled && millis() >= wakeIgnoreUntil &&
           millis() >= wakeRejectUntil &&
           millis() - lastWakeProbe >= WAKE_PROBE_INTERVAL_MS) {
         lastWakeProbe = millis();
@@ -747,7 +823,7 @@ void loop() {
           Serial.printf("wake-listen ambient peak=%u (umbral %u)\n", peak, WAKE_LISTEN_PEAK);
           lastPeakLog = millis();
         }
-        if (peak >= STARTLE_PEAK && millis() > emotionHoldUntil) {
+        if (peak >= STARTLE_PEAK && millis() > emotionHoldUntil && !face.isVibing()) {
           face.setEmotion(Emotion::Surprised);  // glance at a sudden loud sound
           face.update();
           emotionHoldUntil = millis() + 900;
@@ -794,6 +870,9 @@ void loop() {
         }
       }
 #endif
+
+      // Dev commands from PC (/dev panel): preview faces or speak test lines.
+      pollDevCommand();
 
       // Proactive: after a while idle, say something on its own.
       if (g_idleRemarksEnabled && millis() - lastActivityMs > IDLE_REMARK_MS &&
@@ -960,6 +1039,7 @@ void speak(const String &text, bool sing, const String &emotion) {
     }
     http.addHeader("Content-Type", "application/json");
     http.addHeader("Connection", "close");
+    addBrainDeviceHeaders(http);
 
     int code = http.POST(body);
     Serial.printf("%s POST code=%d len=%d\n", useRvc ? "SING" : "TTS", code, http.getSize());
@@ -1045,6 +1125,7 @@ static bool waitMusicPrefetchReady(const String &videoId, const String &label) {
     const String statusUrl =
         String(BRAIN_SERVER_URL) + "/music/prefetch/status?id=" + videoId;
     if (http.begin(statusUrl)) {
+      addBrainDeviceHeaders(http);
       const int code = http.GET();
       if (code == 200) {
         http.end();
@@ -1115,6 +1196,7 @@ void playMusic(const String &videoId, const String &title) {
     return;
   }
   http.addHeader("Connection", "close");
+  addBrainDeviceHeaders(http);
 
   const int code = http.GET();
   Serial.printf("MUSIC GET code=%d len=%d\n", code, http.getSize());
@@ -1198,6 +1280,7 @@ bool checkWakePhrase(const uint8_t *wav, size_t size, String *commandOut) {
   if (!http.begin(String(BRAIN_SERVER_URL) + "/wake-check")) return false;
   http.addHeader("Content-Type", "audio/wav");
   http.addHeader("X-Wake-Phrase", WAKE_PRESET_LABELS[g_wakePhraseIdx]);  // user's chosen phrase
+  addBrainDeviceHeaders(http);
   int code = http.POST((uint8_t *)wav, size);
   if (code != 200) {
     http.end();
@@ -1224,6 +1307,7 @@ bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,
   http.setTimeout(60000);
   http.begin(String(BRAIN_SERVER_URL) + "/converse");
   http.addHeader("Content-Type", "audio/wav");
+  addBrainDeviceHeaders(http);
 
   int code = http.POST((uint8_t *)wav, size);
   if (code != 200) {
@@ -1248,6 +1332,68 @@ bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,
   return true;
 }
 
+// Pull one dev command queued from the PC panel (/dev): preview face or speak text.
+void pollDevCommand() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (state != State::Sleeping) return;
+
+  static uint32_t lastPoll = 0;
+  if (millis() - lastPoll < 2000) return;
+  lastPoll = millis();
+
+  HTTPClient http;
+  http.setTimeout(4000);
+  if (!http.begin(String(BRAIN_SERVER_URL) + "/api/dev/poll")) return;
+  addBrainDeviceHeaders(http);
+  int code = http.GET();
+  if (code != 200) {
+    http.end();
+    return;
+  }
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, http.getString());
+  http.end();
+  if (err || doc["cmd"].isNull()) return;
+
+  JsonObject cmd = doc["cmd"];
+  const char *type = cmd["type"];
+  if (!type) return;
+
+  lastActivityMs = millis();
+
+  if (strcmp(type, "face") == 0) {
+    String em = cmd["emotion"] | "neutral";
+    em.toLowerCase();
+    face.setEmotion(emotionFromString(em));
+    face.setBored(cmd["bored"] | false);
+    uint32_t hold = cmd["hold_ms"] | (em == "vibing" ? 60000u : 8000u);
+    int vmic = cmd["vibing_mic"] | 0;
+    if (vmic >= 50 && vmic <= 300) {
+      face.setVibingMicGain((uint8_t)vmic);
+      g_settings.vibingMic = (uint8_t)vmic;
+      saveSettings(g_settings);
+    }
+    emotionHoldUntil = millis() + hold;
+    face.showText("");
+    face.update();
+    Serial.printf("dev face: %s bored=%d hold=%ums\n", em.c_str(), (bool)cmd["bored"], hold);
+    return;
+  }
+
+  if (strcmp(type, "speak") == 0) {
+    String text = cmd["text"] | "";
+    String em = cmd["emotion"] | "happy";
+    if (text.length() == 0) return;
+    face.setEmotion(emotionFromString(em));
+    face.showText(text);
+    face.update();
+    Serial.printf("dev speak [%s]: %s\n", em.c_str(), text.c_str());
+    speak(text, false, em);
+    emotionHoldUntil = millis() + 8000;
+  }
+}
+
 // Spontaneous remark: ask the server for an in-character line and say it unprompted.
 void proactiveIdleRemark() {
   if (WiFi.status() != WL_CONNECTED) return;
@@ -1255,6 +1401,7 @@ void proactiveIdleRemark() {
   http.setTimeout(60000);
   if (!http.begin(String(BRAIN_SERVER_URL) + "/idle")) return;
   http.addHeader("Content-Type", "application/json");
+  addBrainDeviceHeaders(http);
   int code = http.POST("{}");
   if (code != 200) {
     http.end();
