@@ -211,8 +211,8 @@ public:
       size_t n = end - start;
       float rms = (float)sum / (float)n;
       float zcr = (float)zc / (float)n;
-      float energy = rms * 0.18f + zcr * 135.0f + bp * 0.08f;
-      int lvl = (int)(powf(energy / 720.0f, 0.58f) * 255.0f);
+      float energy = rms * 0.20f + zcr * 145.0f + bp * 0.09f;
+      int lvl = (int)(powf(energy / 520.0f, 0.54f) * 255.0f);
       if (lvl > 255) lvl = 255;
       if (lvl < 0) lvl = 0;
       bands[b] = (uint8_t)lvl;

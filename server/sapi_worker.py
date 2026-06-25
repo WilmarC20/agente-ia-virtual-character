@@ -58,7 +58,9 @@ def _sanitize(text: str) -> str:
 
 
 def synthesize(text: str, sing: bool) -> bytes:
-    text = _sanitize(text)
+    from text_encoding import prepare_spanish_text
+
+    text = prepare_spanish_text(_sanitize(text))
     if not text:
         text = "Ok."
     rate = _tts_sapi_rate(sing)
@@ -76,9 +78,17 @@ def synthesize(text: str, sing: bool) -> bytes:
 
         ps = f"""Add-Type -AssemblyName System.Speech
 $s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$pick = $null
 foreach ($v in $s.GetInstalledVoices()) {{
-  if ($v.VoiceInfo.Culture.Name -like 'es*') {{ $s.SelectVoice($v.VoiceInfo.Name); break }}
+  $c = $v.VoiceInfo.Culture.Name
+  if ($c -eq 'es-MX' -or $c -eq 'es-ES') {{ $pick = $v.VoiceInfo.Name; break }}
 }}
+if (-not $pick) {{
+  foreach ($v in $s.GetInstalledVoices()) {{
+    if ($v.VoiceInfo.Culture.Name -like 'es*') {{ $pick = $v.VoiceInfo.Name; break }}
+  }}
+}}
+if ($pick) {{ $s.SelectVoice($pick) }}
 $s.Rate = {rate}
 $s.SetOutputToWaveFile('{wav_str}')
 $texto = [System.IO.File]::ReadAllText('{txt_str}', [System.Text.Encoding]::UTF8)

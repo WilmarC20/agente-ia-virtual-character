@@ -1148,16 +1148,23 @@ TTS_RVC_PROTECT = float(os.environ.get("TTS_RVC_PROTECT", "0.33"))
 
 
 def _bender_http_rvc(guide_wav: bytes, *, timeout: float = 60.0) -> bytes:
-    """POST WAV de guia a bender_server.py /rvc y devuelve WAV con voz Bender.
+    """POST WAV de guia a bender_server.py /rvc y devuelve WAV con voz RVC.
     Usa urllib stdlib -- sin dependencias extra.
     """
+    import urllib.parse
     import urllib.request
     try:
         import server_config as _scfg
         _p = _scfg.get_bender_rvc_params()
     except Exception:
-        _p = {"pitch": 10, "index_rate": 1.0, "protect": 0.33}
-    url = BENDER_SERVER_URL + f"/rvc?pitch={_p['pitch']}&index_rate={_p['index_rate']}&protect={_p['protect']}"
+        _p = {"model": "bender", "pitch": 10, "index_rate": 1.0, "protect": 0.33}
+    qs = urllib.parse.urlencode({
+        "model": _p.get("model", "bender"),
+        "pitch": int(_p["pitch"]),
+        "index_rate": float(_p["index_rate"]),
+        "protect": float(_p["protect"]),
+    })
+    url = BENDER_SERVER_URL + "/rvc?" + qs
     req = urllib.request.Request(url, data=guide_wav, method="POST")
     req.add_header("Content-Type", "audio/wav")
     try:
@@ -1188,7 +1195,17 @@ async def render_tts_with_rvc(guide_wav: bytes, *, timeout: float | None = None)
     rvc_timeout = timeout or float(os.environ.get("TTS_RVC_TIMEOUT_S", "180"))
     if TTS_RVC_ENGINE == "bender_http":
         guide, guide_sr = _read_wav_bytes(guide_wav)
-        log.info("TTS guide: %.1fs @ %d Hz (bender_http RVC)", len(guide) / guide_sr, guide_sr)
+        try:
+            import server_config as _scfg
+            _model = _scfg.get_rvc_voice_model()
+        except Exception:
+            _model = "bender"
+        log.info(
+            "TTS guide: %.1fs @ %d Hz (bender_http RVC model=%s)",
+            len(guide) / guide_sr,
+            guide_sr,
+            _model,
+        )
         _save_debug_wav("last_tts_guide.wav", guide, guide_sr)
         wav_bytes = await asyncio.to_thread(_bender_http_rvc, guide_wav, timeout=rvc_timeout)
         converted, conv_sr = _read_wav_bytes(wav_bytes)
