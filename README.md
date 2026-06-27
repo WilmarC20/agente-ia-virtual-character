@@ -1,14 +1,28 @@
 <!-- Language / Idioma: -->
 **[Español](#-español) · [English](#-english)**
 
+<p align="center">
+  <img src="docs/images/hero.png" alt="agenteIA — cabeza robot 3D con pantalla ESP32-S3 en el banco de trabajo" width="900">
+</p>
+
+<p align="center">
+  <em>Voz · Domótica · Claude · Cursor · (todavía sin ojos — ESP-CAM en camino)</em>
+</p>
+
 ---
 
 # 🇪🇸 Español
 
 # agenteIA — Personaje virtual con emociones
 
-Una placa ESP32-S3 con pantalla de 2.8" es la cara y los oídos de un personaje
-virtual. Una PC en la red local corre el cerebro (Whisper + Ollama + TTS).
+Cabeza impresa en 3D con pantalla de 2.8": **12 caras**, voz y actitud de Bender.
+Una placa ESP32-S3 es la cara y los oídos; una PC en la red local corre el cerebro
+(Whisper + Ollama + TTS). También avisa en voz alta cuando **Cursor** o **Claude**
+se traba, piden permiso o te cortan el rate limit.
+
+<p align="center">
+  <img src="docs/images/emociones.png" alt="Cuatro emociones del personaje: neutral, enojado, mareado y neutral" width="420">
+</p>
 
 ```
 ESP32-S3 (cara + oídos)               PC (cerebro)
@@ -57,15 +71,23 @@ duración en `HA_TOKEN`. Si no lo configurás, el agente funciona igual sin dom�
    WakeNet; sin ella la placa entra en boot-loop con *Can not find model in partition table*).
 5. Copiá `secrets.example.h` → `secrets.h` (WiFi + URL del servidor).
 
+## Hooks de desarrollo (Cursor / Claude)
+
+`POST /api/dev/notify` en el servidor: el robot habla y cambia de cara cuando el IDE
+pide permiso, un agente termina, una tool falla o Anthropic te corta el rate limit.
+Ideal para laburar con Cursor minimizado y que Bender te grite *"volvé al teclado"*.
+
 ## Estado
 
 - [x] Cerebro: WAV -> Whisper -> Ollama -> `{emotion, reply}`
-- [x] Cara: 7 emociones con parpadeo
+- [x] Cara: **12 emociones** con parpadeo y lip-sync
 - [x] Micrófono ES8311 validado en hardware
 - [x] Despertar por toque de pantalla
 - [x] Voz de respuesta por el parlante (TTS)
-- [x] Lip-sync: boca animada según la amplitud del audio
+- [x] Domótica opcional (Home Assistant)
+- [x] Notificaciones Cursor / Claude → voz + emoción
 - [ ] Wake word por voz estable ("Hi ESP")
+- [ ] Visión (ESP-CAM — roadmap)
 
 ---
 
@@ -73,8 +95,14 @@ duración en `HA_TOKEN`. Si no lo configurás, el agente funciona igual sin dom�
 
 # agenteIA — Virtual Character with Emotions
 
-An ESP32-S3 board with a 2.8" display is the face and ears of a virtual
-character. A PC on the local network runs the brain (Whisper + Ollama + TTS).
+A 3D-printed head with a 2.8" display: **12 faces**, voice, and Bender attitude.
+An ESP32-S3 board is the face and ears; a PC on the local network runs the brain
+(Whisper + Ollama + TTS). It also speaks up when **Cursor** or **Claude** stalls,
+asks for approval, or hits a rate limit.
+
+<p align="center">
+  <img src="docs/images/emociones.png" alt="Four character emotions: neutral, angry, dizzy, neutral" width="420">
+</p>
 
 ```
 ESP32-S3 (face + ears)                PC (brain)
@@ -123,15 +151,23 @@ Optional. The agent can read and control Home Assistant devices by voice
    WakeNet; without it the board boot-loops with *Can not find model in partition table*).
 5. Copy `secrets.example.h` → `secrets.h` (WiFi + server URL).
 
+## Dev hooks (Cursor / Claude)
+
+`POST /api/dev/notify` on the server: the robot speaks and changes expression when the
+IDE asks for permission, an agent finishes, a tool fails, or Anthropic rate-limits you.
+Handy when Cursor is minimized and Bender yells *"get back to the keyboard"*.
+
 ## Status
 
 - [x] Brain: WAV -> Whisper -> Ollama -> `{emotion, reply}`
-- [x] Face: 7 emotions with blinking
+- [x] Face: **12 emotions** with blinking and lip-sync
 - [x] ES8311 mic validated on hardware
 - [x] Touch-to-wake
 - [x] Spoken reply through the speaker (TTS)
-- [x] Lip-sync talking mouth (audio-driven)
+- [x] Optional home automation (Home Assistant)
+- [x] Cursor / Claude notifications → voice + emotion
 - [ ] Stable voice wake word ("Hi ESP")
+- [ ] Vision (ESP-CAM — roadmap)
 
 ---
 
