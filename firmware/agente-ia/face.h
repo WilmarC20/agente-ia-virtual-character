@@ -51,8 +51,9 @@ public:
     if (e != _emotion) {
       // brief squint so the new expression doesn't pop hard
       uint32_t tn = millis();
-      _blinkEndAt  = tn + 180;
-      _nextBlinkAt = _blinkEndAt + 2000 + random(2000);
+      _blinkEndAt    = tn + 250;
+      _nextBlinkAt   = _blinkEndAt + 2000 + random(2000);
+      _transitionEnd = tn + 420;
       _emotion = e;
       _gazeX = _gazeY = 0;
       _gazeTx = _gazeTy = 0;
@@ -530,6 +531,8 @@ private:
   uint32_t _blinkEndAt = 0, _nextBlinkAt = 5000, _nextGazeAt = 4000, _shakeUntil = 0;
   int _faceScreenW = FACE_DESIGN_W;
   float _blinkAmt = 0, _gazeX = 0, _gazeY = 0, _gazeTx = 0, _gazeTy = 0, _browPhase = 0;
+  float _browDySmooth = 0.0f, _browTiltSmooth = 0.0f;
+  uint32_t _transitionEnd = 0;
   float _vibingBobY = 0, _lastVibingBobDraw = 0;
   float _vibingLidPulse = 0.5f;
   static constexpr int kVibMouthX0 = 70, kVibMouthX1 = 250;
@@ -794,12 +797,15 @@ private:
       glow  = lerp565(0x0340, 0x03E0, ph);   // dark green → mid green
       frame = lerp565(0x03E0, 0x07E0, ph);   // mid green → bright green
     } else {
-      frame = accentInk();
-      // Slow breathing glow when idle (~10 s cycle), static 50 % while speaking
-      float breath = (!_talking && !_singing)
-                     ? (sinf(now * 0.00063f) + 1.0f) * 0.5f
-                     : 0.5f;
-      glow = lerp565(INK_GLOW, INK, breath * 0.7f + 0.05f);
+      if (!_talking && !_singing) {
+        // Idle breathing glow (~4 s cycle) — visibly dramatic range
+        float breath = (sinf(now * 0.00157f) + 1.0f) * 0.5f;
+        glow  = lerp565(INK_GLOW, INK_BRIGHT, breath * 0.82f + 0.08f);
+        frame = lerp565(INK, INK_BRIGHT, breath * 0.55f);
+      } else {
+        frame = accentInk();
+        glow  = lerp565(INK_GLOW, INK, 0.55f);
+      }
     }
     _canvas.fillRoundRect(36, 32 + dy, 248, 72, 36, VISOR);
     _canvas.fillRoundRect(44, 38 + dy, 232, 60, 30, VISOR_DEEP);
@@ -1735,11 +1741,22 @@ private:
       browDy -= a * 4.0f + sinf(t * 11.0f) * a * 1.3f;
       browTilt += sinf(t * 7.0f + _browPhase) * a * 1.6f;
     }
+    {
+      float lr = (millis() < _transitionEnd) ? 0.10f : 0.28f;
+      _browDySmooth   += (browDy   - _browDySmooth)   * lr;
+      _browTiltSmooth += (browTilt - _browTiltSmooth) * lr;
+      browDy   = _browDySmooth;
+      browTilt = _browTiltSmooth;
+    }
+    if (_listening) {
+      browDy   = -3.5f + sinf(t * 4.8f) * 0.5f;
+      browTilt = -0.18f + sinf(t * 3.1f) * 0.12f;
+    }
 
     drawCapsule();
 
     _canvas.setClipRect(VISOR_CLIP_X, VISOR_CLIP_Y, VISOR_CLIP_W, VISOR_CLIP_H);
-    float blink = _blinkAmt;
+    float blink = _listening ? 0.0f : _blinkAmt;
     if (p.winkRight) {
       drawEyeSide(true, p, blink);
       drawEyeSide(false, p, 0);
