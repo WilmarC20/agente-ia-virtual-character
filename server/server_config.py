@@ -295,6 +295,7 @@ Elegí la que mejor exprese tu reacción en este turno; no repitas la misma por 
 Estructura obligatoria del JSON:
 {{"emotion": "neutral" | "happy" | "sad" | "angry" | "surprised" | "thinking" | "sleepy" \
 | "love" | "excited" | "cool" | "confused" | "dizzy", \
+"intensity": 0.3–1.0 (intensidad de la emoción; 0.3 = sutil/disimulada, 0.7 = normal, 1.0 = al máximo), \
 "reply": "Texto para el TTS", "speak": true | false, "sing": true | false, \
 "sound_effect": "none" | "beep" | "laugh" | "error" | "yawn" | "power_up" | "glitch"}}
 """

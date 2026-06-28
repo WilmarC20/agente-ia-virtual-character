@@ -47,7 +47,8 @@ public:
     _nextBlinkAt = millis() + 2800 + random(3700);
   }
 
-  void setEmotion(Emotion e) {
+  void setEmotion(Emotion e, float intensity = 1.0f) {
+    _intensity = max(0.0f, min(1.0f, intensity));
     if (e != _emotion) {
       // brief squint so the new expression doesn't pop hard
       uint32_t tn = millis();
@@ -532,6 +533,7 @@ private:
   int _faceScreenW = FACE_DESIGN_W;
   float _blinkAmt = 0, _gazeX = 0, _gazeY = 0, _gazeTx = 0, _gazeTy = 0, _browPhase = 0;
   float _browDySmooth = 0.0f, _browTiltSmooth = 0.0f;
+  float _intensity = 1.0f;
   uint32_t _transitionEnd = 0;
   float _vibingBobY = 0, _lastVibingBobDraw = 0;
   float _vibingLidPulse = 0.5f;
@@ -1072,6 +1074,9 @@ private:
       case Emotion::Vibing:    segs = 7; bow =  0.30f; break;
       default:                 segs = 7; bow =  0.08f; break;
     }
+    // Scale expression toward neutral (bow=0.10, segs=7) at lower intensity.
+    bow  = 0.10f + (bow - 0.10f) * _intensity;
+    segs = 7 + (int)roundf((float)(segs - 7) * _intensity);
     drawLedMouth(animate, bow, segs);
   }
 
