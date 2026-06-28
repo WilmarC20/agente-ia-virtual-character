@@ -350,6 +350,19 @@ void queueDevSpeak(const String &text, const String &emotion) {
   g_devSpeakPending = true;
 }
 
+static const char* devEmotionSound(const String &em) {
+  if (em == "happy" || em == "excited") return "power_up";
+  if (em == "love")                     return "laugh";
+  if (em == "sad")                      return "yawn";
+  if (em == "sleepy")                   return "yawn";
+  if (em == "angry")                    return "glitch";
+  if (em == "dizzy")                    return "glitch";
+  if (em == "surprised")                return "beep";
+  if (em == "confused")                 return "beep";
+  if (em == "cool")                     return "beep";
+  return nullptr;
+}
+
 void processDevCommands() {
   if (g_devFacePending) {
     g_devFacePending = false;
@@ -363,6 +376,8 @@ void processDevCommands() {
     face.update();
     lastActivityMs = millis();
     Serial.printf("local dev face: %s bored=%d\n", g_devFaceEmotion.c_str(), g_devFaceBored);
+    const char *sfx = devEmotionSound(g_devFaceEmotion);
+    if (sfx) playSoundEffect(sfx);
   }
   if (g_devSpeakPending && state == State::Sleeping && !g_musicTaskHandle && !g_storyTaskHandle) {
     g_devSpeakPending = false;
