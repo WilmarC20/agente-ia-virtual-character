@@ -52,6 +52,15 @@ State state = State::Sleeping;
 uint32_t emotionHoldUntil = 0;
 uint32_t wakeIgnoreUntil = 0;
 uint32_t lastActivityMs = 0;    // last interaction; drives proactive idle remarks
+
+// M3 — Idle Behavior state machine
+enum class IdlePhase { Active, Present, Waiting, SemiDormant };
+IdlePhase idlePhase = IdlePhase::Active;
+// M2 — Microexpression cooldown timers
+uint32_t nextMicroExpAt    = 0;
+uint32_t lastGlanceUpAt    = 0;
+uint32_t lastGlanceUserAt  = 0;
+uint32_t lastDoubleBlinkAt = 0;
 bool g_wakeNetRunning = false;  // true only while on-device WakeNet is actively feeding
 bool g_voiceWakeEnabled = true; // PC-side wake phrase listener; toggled from Settings
 bool g_idleRemarksEnabled = ENABLE_IDLE_REMARKS;
@@ -232,6 +241,7 @@ void playStory(const String &storyId, const String &title);
 bool checkWakePhrase(const uint8_t *wav, size_t size, String *commandOut = nullptr);
 void proactiveIdleRemark();
 void pollDevCommand();
+void tickIdleBehavior();
 void queueDevFace(const String &emotion, bool bored, uint32_t holdMs, uint8_t vibingMic,
                   uint16_t vibingFloor, uint16_t vibingCeil);
 void queueDevSpeak(const String &text, const String &emotion);
@@ -1241,6 +1251,7 @@ void loop() {
     state = State::Sleeping;
   }
 
+  tickIdleBehavior();
   g_webAdmin.loop();
   delay(10);
 }
@@ -1822,6 +1833,77 @@ void proactiveIdleRemark() {
   face.update();
   if (doSpeak) speak(reply, sing, emotion);
   emotionHoldUntil = millis() + 8000;
+}
+
+// M3 Idle Behavior + M2 Microexpressions — called from loop() every iteration.
+void tickIdleBehavior() {
+  // Only run while the face is idle (not recording, processing, or playing back).
+  if (state != State::Sleeping || g_musicTaskHandle || g_storyTaskHandle) return;
+
+  uint32_t now = millis();
+  bool holdActive = emotionHoldUntil && now < emotionHoldUntil;
+
+  // Determine target idle phase from time-since-last-activity.
+  IdlePhase target;
+  if (holdActive) {
+    target = IdlePhase::Active;
+  } else if (now - lastActivityMs < 15000UL) {
+    target = IdlePhase::Present;
+  } else if (now - lastActivityMs < 60000UL) {
+    target = IdlePhase::Waiting;
+  } else {
+    target = IdlePhase::SemiDormant;
+  }
+
+  // Apply phase transitions.
+  if (target != idlePhase) {
+    idlePhase = target;
+    switch (idlePhase) {
+      case IdlePhase::Active:
+        nextMicroExpAt = now + 10000;  // no micros right after becoming active
+        break;
+      case IdlePhase::Present:
+        // Let the held emotion fade naturally — no forced change.
+        nextMicroExpAt = now + 6000 + random(4000);
+        break;
+      case IdlePhase::Waiting:
+        face.setEmotion(Emotion::Neutral, 0.2f);
+        face.setBored(false);
+        face.update();
+        nextMicroExpAt = now + 4000 + random(4000);
+        break;
+      case IdlePhase::SemiDormant:
+        face.setEmotion(Emotion::Sleepy, 0.15f);
+        face.setBored(true);
+        face.update();
+        nextMicroExpAt = now + 30000;  // very infrequent
+        break;
+    }
+  }
+
+  // Microexpressions — only in Present/Waiting; skip while active or semi-dormant.
+  if (idlePhase == IdlePhase::Active || idlePhase == IdlePhase::SemiDormant) return;
+  if (holdActive || now < nextMicroExpAt) return;
+
+  // Pick a weighted random microexpression.
+  uint8_t r = random(0, 3);
+  bool fired = false;
+
+  if (r == 0 && now - lastGlanceUpAt > 10000UL) {
+    face.setMicroGaze(0, -8, 600);     // look upward briefly
+    lastGlanceUpAt = now;
+    fired = true;
+  } else if (r == 1 && now - lastGlanceUserAt > 8000UL) {
+    face.setMicroGaze(0, 0, 400);      // center — "looking at user"
+    lastGlanceUserAt = now;
+    fired = true;
+  } else if (r == 2 && now - lastDoubleBlinkAt > 12000UL) {
+    face.triggerDoubleBlink();
+    lastDoubleBlinkAt = now;
+    fired = true;
+  }
+
+  nextMicroExpAt = now + (fired ? (7000 + random(8000)) : (2000 + random(3000)));
 }
 
 // Modal settings menu (opened from the gear). Blocks until the user taps "Guardar",
