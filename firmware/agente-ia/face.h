@@ -237,24 +237,41 @@ public:
   void feedPlaybackPcm(const int16_t *samples, size_t nSamples) {
     if (!samples || nSamples < 4) return;
 
-    float bandRaw[kVibingBands];
-    float beat = 1.0f;
-    computePlaybackSpectrum(samples, nSamples, 16000.0f, bandRaw, &beat);
+    // Raw Goertzel magnitudes — bypass computePlaybackSpectrum whose 38× gain saturates
+    // all bands to 220 for playback-level PCM. Auto-gain (same as setVibingSpectrum) keeps
+    // the bars reactive and frequency-differentiated regardless of music loudness.
+    float magRaw[kVibingBands];
+    float frameMax = 0.0f;
+    for (int b = 0; b < kVibingBands; b++) {
+      magRaw[b] = goertzelMagNorm(samples, nSamples, kBandFreqHz[b], 16000.0f) * kBandGain[b];
+      if (magRaw[b] > frameMax) frameMax = magRaw[b];
+    }
+    _vibPcmAgcMax = fmaxf(frameMax, _vibPcmAgcMax * 0.985f);
+    if (_vibPcmAgcMax < 20.0f) _vibPcmAgcMax = 20.0f;
+    const float agcGate = _vibPcmAgcMax * 0.05f;
+    const float agcRange = fmaxf(1.0f, _vibPcmAgcMax - agcGate);
+
+    static float s_pcmBassEnv = 0.0f;
+    const float bassRaw = magRaw[0] + magRaw[1] + magRaw[2];
+    s_pcmBassEnv = fmaxf(bassRaw * 0.34f, s_pcmBassEnv * 0.86f);
+    const float beat = (bassRaw > s_pcmBassEnv * 1.08f && bassRaw > agcGate * 3.0f) ? 1.45f : 1.0f;
 
     float peak = 0.0f, sum = 0.0f;
     for (int b = 0; b < kVibingBands; b++) {
       const float u = (float)b / (float)(kVibingBands - 1);
       float env = sinf(u * 3.14159265f);
       env = env * env;
-      float tgt = bandRaw[b] * (0.50f + 0.50f * env);
-      if (b < 4) tgt *= beat;
+      float nrm = (magRaw[b] - agcGate) / agcRange;
+      if (nrm < 0.0f) nrm = 0.0f;
+      if (nrm > 1.0f) nrm = 1.0f;
+      float tgt = nrm * (0.50f + 0.50f * env) * 220.0f;
+      if (b < 4) tgt = fminf(tgt * beat, 220.0f);
       const float rate = (tgt > _vibingBands[b]) ? 0.93f : 0.52f;
       _vibingBands[b] += (tgt - _vibingBands[b]) * rate;
       sum += _vibingBands[b];
       if (_vibingBands[b] > peak) peak = _vibingBands[b];
     }
-
-    (void)peak; (void)sum;
+    (void)sum;
     // Mouth openness from the ACTUAL played PCM loudness (RMS), AUTO-GAINED to the recent
     // peak so it uses the full range and clearly reacts: loud syllables open wide, pauses
     // close. The old powf(mix,0.24)*1.25 saturated everything to ~70-100, so the mouth
@@ -520,7 +537,8 @@ private:
   uint8_t _vibingMicGain = 150;
   uint16_t _vibingFloor = 100;
   uint16_t _vibingCeil = 500;
-  float _vibAgcMax = 30.0f;   // auto-gain: decaying peak of the mic spectrum (adapts to room)
+  float _vibAgcMax    = 30.0f;   // auto-gain for mic path (setVibingSpectrum)
+  float _vibPcmAgcMax = 20.0f;   // auto-gain for playback path (feedPlaybackPcm) — separate to avoid cross-contamination
   static constexpr int kVibingBands = 12;
   static constexpr int kSpecCols = 20;
   float _vibingBands[kVibingBands]{};
