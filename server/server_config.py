@@ -155,6 +155,102 @@ Personalidad:
     },
 }
 
+# M11 — Per-personality behavior config.
+# Controls expressivity anchor, voice speed, microexpression rate, emotion intensity biases,
+# per-context expressivity overrides, and emotion recovery duration.
+PERSONALITY_BEHAVIOR: dict[str, dict] = {
+    "bender": {
+        "expressivity": 0.80,
+        "energy_baseline": 0.75,
+        "sarcasm_enabled": True,
+        "emotion_biases": {"happy": 0.05, "excited": 0.08, "angry": 0.05},
+        "context_overrides": {},
+        "emotion_recovery_ms": 8000,
+        "microexp_rate": 0.80,
+        "night_mode_auto": True,
+        "voice_speed_base": 1.00,
+    },
+    "burro": {
+        "expressivity": 0.90,
+        "energy_baseline": 0.85,
+        "sarcasm_enabled": False,
+        "emotion_biases": {"excited": 0.10, "happy": 0.08},
+        "context_overrides": {},
+        "emotion_recovery_ms": 10000,
+        "microexp_rate": 0.90,
+        "night_mode_auto": False,
+        "voice_speed_base": 1.08,
+    },
+    "jarvis": {
+        "expressivity": 0.40,
+        "energy_baseline": 0.35,
+        "sarcasm_enabled": False,
+        "emotion_biases": {"neutral": 0.05, "thinking": 0.05},
+        "context_overrides": {"programming": {"expressivity": 0.50}},
+        "emotion_recovery_ms": 5000,
+        "microexp_rate": 0.40,
+        "night_mode_auto": True,
+        "voice_speed_base": 0.95,
+    },
+    "amigable": {
+        "expressivity": 0.65,
+        "energy_baseline": 0.55,
+        "sarcasm_enabled": False,
+        "emotion_biases": {"love": 0.05, "happy": 0.05},
+        "context_overrides": {},
+        "emotion_recovery_ms": 7000,
+        "microexp_rate": 0.70,
+        "night_mode_auto": True,
+        "voice_speed_base": 1.00,
+    },
+    "tecnico": {
+        "expressivity": 0.30,
+        "energy_baseline": 0.30,
+        "sarcasm_enabled": False,
+        "emotion_biases": {"thinking": 0.10, "neutral": 0.05},
+        "context_overrides": {
+            "programming": {"expressivity": 0.40},
+            "compiling":   {"expressivity": 0.45},
+        },
+        "emotion_recovery_ms": 4000,
+        "microexp_rate": 0.30,
+        "night_mode_auto": True,
+        "voice_speed_base": 0.95,
+    },
+    "companero": {
+        "expressivity": 0.75,
+        "energy_baseline": 0.65,
+        "sarcasm_enabled": True,
+        "emotion_biases": {"happy": 0.05, "excited": 0.05},
+        "context_overrides": {},
+        "emotion_recovery_ms": 8000,
+        "microexp_rate": 0.75,
+        "night_mode_auto": True,
+        "voice_speed_base": 1.05,
+    },
+}
+
+_BEHAVIOR_DEFAULTS: dict = {
+    "expressivity": 0.50,
+    "energy_baseline": 0.50,
+    "sarcasm_enabled": False,
+    "emotion_biases": {},
+    "context_overrides": {},
+    "emotion_recovery_ms": 8000,
+    "microexp_rate": 0.60,
+    "night_mode_auto": True,
+    "voice_speed_base": 1.00,
+}
+
+
+def get_behavior_config(personality_id: str | None = None) -> dict:
+    """Return merged behavior config for the given (or active) personality."""
+    pid = personality_id or load().get("personality", "bender")
+    result = dict(_BEHAVIOR_DEFAULTS)
+    result.update(PERSONALITY_BEHAVIOR.get(pid, {}))
+    return result
+
+
 # Límite de caracteres en "reply" para TTS (Jarvis puede ser más largo y cinematográfico).
 PERSONALITY_SPEAK_MAX_CHARS: dict[str, int] = {
     "jarvis": 300,

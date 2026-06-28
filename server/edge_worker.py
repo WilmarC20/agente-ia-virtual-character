@@ -45,10 +45,14 @@ def _sing_prosody(sing: bool, *, strong: bool = False) -> tuple[str, str, str]:
     return "+0%", "+0Hz", "+0%"
 
 
-async def _stream_edge_mp3(text: str, sing: bool, sing_strong: bool, voice: str) -> bytes:
+async def _stream_edge_mp3(
+    text: str, sing: bool, sing_strong: bool, voice: str, *, speed_rate: str = "+0%"
+) -> bytes:
     import edge_tts
 
     rate, pitch, volume = _sing_prosody(sing, strong=sing_strong)
+    if not sing and speed_rate != "+0%":
+        rate = speed_rate
     communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch, volume=volume)
     mp3 = bytearray()
     async for chunk in communicate.stream():
@@ -83,8 +87,10 @@ async def _synthesize(req: dict) -> bytes:
     sing = bool(req.get("sing", False))
     sing_strong = bool(req.get("sing_strong", False))
     voice = (req.get("voice") or EDGE_VOICE).strip() or EDGE_VOICE
+    speed_rate = str(req.get("speed_rate", "+0%"))
     mp3 = await asyncio.wait_for(
-        _stream_edge_mp3(text, sing, sing_strong, voice), timeout=EDGE_TIMEOUT_S
+        _stream_edge_mp3(text, sing, sing_strong, voice, speed_rate=speed_rate),
+        timeout=EDGE_TIMEOUT_S,
     )
     return _decode_mp3_to_wav(mp3)
 

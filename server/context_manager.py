@@ -41,3 +41,18 @@ def config(name: str | None = None) -> dict:
 
 def all_contexts() -> list[str]:
     return sorted(CONTEXT_CONFIG.keys())
+
+
+def get_effective_expressivity(behavior_config: dict, context_name: str | None = None) -> float:
+    """Blend personality base expressivity with context expressivity.
+
+    context_overrides in behavior_config take full precedence.
+    Otherwise: personality base is the anchor; context delta shifts from there.
+    """
+    ctx = context_name or get()
+    overrides = behavior_config.get("context_overrides", {})
+    if ctx in overrides and "expressivity" in overrides[ctx]:
+        return float(overrides[ctx]["expressivity"])
+    personality_base = float(behavior_config.get("expressivity", 0.5))
+    ctx_delta = config(ctx)["expressivity"] - 0.5
+    return max(0.0, min(1.0, personality_base + ctx_delta))

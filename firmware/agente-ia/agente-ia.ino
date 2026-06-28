@@ -54,8 +54,11 @@ uint32_t wakeIgnoreUntil = 0;
 uint32_t lastActivityMs = 0;    // last interaction; drives proactive idle remarks
 
 // M4 / M5 / M9 — active context and expressivity from server
-String   g_context     = "idle";
+String   g_context      = "idle";
 float    g_expressivity = 0.5f;
+// M11 — personality behavior params updated per /converse response
+float    g_microexpRate      = 0.6f;   // scales microexpression frequency
+int      g_emotionRecoveryMs = 8000;   // how long to hold response emotion before idle kicks in
 
 // M3 — Idle Behavior state machine
 enum class IdlePhase { Active, Present, Waiting, SemiDormant };
@@ -68,17 +71,19 @@ uint32_t lastDoubleBlinkAt = 0;
 
 // Full server reply parsed from /converse (replaces scattered out-params).
 struct BrainReply {
-  String emotion      = "neutral";
-  float  intensity    = 0.7f;
-  String tone         = "neutral";
-  String context      = "idle";
-  float  expressivity = 0.5f;
+  String emotion           = "neutral";
+  float  intensity         = 0.7f;
+  String tone              = "neutral";
+  String context           = "idle";
+  float  expressivity      = 0.5f;
   String reply;
-  bool   sing         = false;
-  bool   doSpeak      = true;
-  String soundEffect  = "none";
-  int    preRespMs    = 300;
-  int    postRespMs   = 200;
+  bool   sing              = false;
+  bool   doSpeak           = true;
+  String soundEffect       = "none";
+  int    preRespMs         = 300;
+  int    postRespMs        = 200;
+  int    emotionRecoveryMs = 8000;  // M11: how long to hold the response emotion before idle
+  float  microexpRate      = 0.6f;  // M11: personality microexpression frequency [0..1]
 };
 bool g_wakeNetRunning = false;  // true only while on-device WakeNet is actively feeding
 bool g_voiceWakeEnabled = true; // PC-side wake phrase listener; toggled from Settings
@@ -1214,8 +1219,11 @@ void loop() {
 
       if (ok) {
         // M4: store context + expressivity for idle behavior
-        g_context     = resp.context;
-        g_expressivity = resp.expressivity;
+        g_context          = resp.context;
+        g_expressivity     = resp.expressivity;
+        // M11: update personality behavior params
+        g_microexpRate      = resp.microexpRate;
+        g_emotionRecoveryMs = resp.emotionRecoveryMs;
 
         if (resp.soundEffect.length() > 0 && resp.soundEffect != "none") {
           playSoundEffect(resp.soundEffect.c_str());
@@ -1246,7 +1254,7 @@ void loop() {
         face.showText("No pude hablar con el cerebro :(", TFT_RED);
       }
       resumeWakeListener();
-      emotionHoldUntil = millis() + 8000;
+      emotionHoldUntil = millis() + g_emotionRecoveryMs;  // M11: personality recovery time
       lastActivityMs = millis();
       state = State::Sleeping;
       break;
@@ -1722,17 +1730,19 @@ bool askBrain(const uint8_t *wav, size_t size, BrainReply &out) {
   http.end();
   if (err) return false;
 
-  out.emotion      = doc["emotion"].as<String>();
-  out.intensity    = max(0.0f, min(1.0f, doc["intensity"] | 0.7f));
-  out.tone         = doc["tone"] | "neutral";
-  out.context      = doc["context"] | "idle";
-  out.expressivity = max(0.1f, min(1.0f, doc["expressivity"] | 0.5f));
-  out.reply        = doc["reply"].as<String>();
-  out.sing         = doc["sing"] | false;
-  out.doSpeak      = doc["speak"] | true;
-  out.soundEffect  = doc["sound_effect"] | "none";
-  out.preRespMs    = max(0, min(2000, doc["pre_response_ms"] | 300));
-  out.postRespMs   = max(0, min(2000, doc["post_response_ms"] | 200));
+  out.emotion           = doc["emotion"].as<String>();
+  out.intensity         = max(0.0f, min(1.0f, doc["intensity"] | 0.7f));
+  out.tone              = doc["tone"] | "neutral";
+  out.context           = doc["context"] | "idle";
+  out.expressivity      = max(0.1f, min(1.0f, doc["expressivity"] | 0.5f));
+  out.reply             = doc["reply"].as<String>();
+  out.sing              = doc["sing"] | false;
+  out.doSpeak           = doc["speak"] | true;
+  out.soundEffect       = doc["sound_effect"] | "none";
+  out.preRespMs         = max(0, min(2000, doc["pre_response_ms"] | 300));
+  out.postRespMs        = max(0, min(2000, doc["post_response_ms"] | 200));
+  out.emotionRecoveryMs = max(500, min(15000, doc["emotion_recovery_ms"] | 8000));
+  out.microexpRate      = max(0.0f, min(1.0f, doc["microexp_rate"] | 0.6f));
 
   // Smart speaker: the brain resolved a song to play -> stream it instead of speaking.
   String musicId = doc["music"]["video_id"] | "";
@@ -1872,10 +1882,10 @@ void tickIdleBehavior() {
     if (idlePhase != IdlePhase::Active) {
       idlePhase = IdlePhase::Active;
       face.setEmotion(Emotion::Angry, 0.8f);
-      face.setMicroGaze(0, 0, 5000);  // focus_lock
+      face.setMicroGaze(0, 0, 5000);
       face.setBored(false);
       face.update();
-      nextMicroExpAt = now + 60000;
+      nextMicroExpAt = now + 60000;  // emergency: suppress microexps regardless of rate
     }
     return;
   }
@@ -1896,26 +1906,27 @@ void tickIdleBehavior() {
   }
 
   // Apply phase transitions.
+  float uexpScale = 1.0f / max(0.05f, g_microexpRate);
   if (target != idlePhase) {
     idlePhase = target;
     switch (idlePhase) {
       case IdlePhase::Active:
-        nextMicroExpAt = now + 10000;
+        nextMicroExpAt = now + (uint32_t)(10000 * uexpScale);
         break;
       case IdlePhase::Present:
-        nextMicroExpAt = now + 6000 + random(4000);
+        nextMicroExpAt = now + (uint32_t)((6000 + random(4000)) * uexpScale);
         break;
       case IdlePhase::Waiting:
         face.setEmotion(Emotion::Neutral, max(0.10f, min(0.40f, 0.2f * exprFactor)));
         face.setBored(false);
         face.update();
-        nextMicroExpAt = now + 4000 + random(4000);
+        nextMicroExpAt = now + (uint32_t)((4000 + random(4000)) * uexpScale);
         break;
       case IdlePhase::SemiDormant:
         face.setEmotion(Emotion::Sleepy, max(0.08f, min(0.30f, 0.15f * exprFactor)));
         face.setBored(true);
         face.update();
-        nextMicroExpAt = now + 30000;
+        nextMicroExpAt = now + (uint32_t)(30000 * uexpScale);
         break;
     }
   }
@@ -1924,25 +1935,37 @@ void tickIdleBehavior() {
   if (idlePhase == IdlePhase::Active || idlePhase == IdlePhase::SemiDormant) return;
   if (holdActive || now < nextMicroExpAt) return;
 
+  // M11: microexpRate [0..1] scales how often microexpressions fire.
+  // rate=1.0 → base intervals; rate=0.3 → intervals stretched 3×; rate=0.0 → never.
+  if (g_microexpRate < 0.05f) {
+    nextMicroExpAt = now + 60000;
+    return;
+  }
+
   // Pick a weighted random microexpression.
   uint8_t r = random(0, 3);
   bool fired = false;
 
-  if (r == 0 && now - lastGlanceUpAt > 10000UL) {
+  uint32_t coolGlanceUp    = (uint32_t)(10000UL * uexpScale);
+  uint32_t coolGlanceUser  = (uint32_t)(8000UL  * uexpScale);
+  uint32_t coolDoubleBlink = (uint32_t)(12000UL * uexpScale);
+
+  if (r == 0 && now - lastGlanceUpAt > coolGlanceUp) {
     face.setMicroGaze(0, -8, 600);
     lastGlanceUpAt = now;
     fired = true;
-  } else if (r == 1 && now - lastGlanceUserAt > 8000UL) {
+  } else if (r == 1 && now - lastGlanceUserAt > coolGlanceUser) {
     face.setMicroGaze(0, 0, 400);
     lastGlanceUserAt = now;
     fired = true;
-  } else if (r == 2 && now - lastDoubleBlinkAt > 12000UL) {
+  } else if (r == 2 && now - lastDoubleBlinkAt > coolDoubleBlink) {
     face.triggerDoubleBlink();
     lastDoubleBlinkAt = now;
     fired = true;
   }
 
-  nextMicroExpAt = now + (fired ? (7000 + random(8000)) : (2000 + random(3000)));
+  uint32_t baseNext = fired ? (7000 + random(8000)) : (2000 + random(3000));
+  nextMicroExpAt = now + (uint32_t)(baseNext * uexpScale);
 }
 
 // M9 Acting Layer — map conversational tone to face microexpression.
