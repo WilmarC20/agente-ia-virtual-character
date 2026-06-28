@@ -49,6 +49,10 @@ public:
 
   void setEmotion(Emotion e) {
     if (e != _emotion) {
+      // brief squint so the new expression doesn't pop hard
+      uint32_t tn = millis();
+      _blinkEndAt  = tn + 180;
+      _nextBlinkAt = _blinkEndAt + 2000 + random(2000);
       _emotion = e;
       _gazeX = _gazeY = 0;
       _gazeTx = _gazeTy = 0;
@@ -97,6 +101,8 @@ public:
   bool isVibing() const { return _emotion == Emotion::Vibing; }
   void redraw() { _dirty = true; }
   void resetAmpGain() { _ampEnvMax = 200.0f; }
+  void setListening(bool v) { if (v != _listening) { _listening = v; _dirty = true; } }
+  bool isListening() const { return _listening; }
 
   // Mic spectrum for vibing (bands 0..255, peak = raw sample peak).
   void setVibingMicGain(uint8_t pct) {
@@ -442,6 +448,11 @@ public:
       }
     }
 
+    // Keep display alive for idle breathing and listening indicator (20 fps)
+    if (_listening || (!_talking && !_singing && _emotion != Emotion::Vibing)) {
+      if (now - _lastIdleDrawAt >= 50u) { _dirty = true; _lastIdleDrawAt = now; }
+    }
+
     if (_speechCaption.active() && _talking && _speechCaption.mode() == kSpeechCaptionKaraoke) {
       _speechCaption.tick(now, _talking);
       if (_speechCaption.needsRedraw(_captionDrawIdx)) {
@@ -493,6 +504,8 @@ private:
   String _topTitleRaw;
   int _topTitleX = 2;
   bool _dirty = true, _talking = false, _singing = false, _showGear = false, _bored = false;
+  bool _listening = false;
+  uint32_t _lastIdleDrawAt = 0;
   uint8_t _mouthAmp = 0, _mouthAmpTarget = 0;
   uint8_t _mouthAnim = 0;     // talking-mouth style (0 bars, 1 waves, 2 lips)
   float _mouthAmpSmooth = 0;
@@ -755,8 +768,21 @@ private:
   }
 
   void drawCapsule(int dy = 0) {
-    const uint16_t frame = accentInk();
-    const uint16_t glow = flickerInk(INK_GLOW, INK);
+    const uint32_t now = millis();
+    uint16_t frame, glow;
+    if (_listening) {
+      // Pulsing green border while recording (~1.1 s period)
+      float ph = (sinf(now * 0.0055f) + 1.0f) * 0.5f;
+      glow  = lerp565(0x0340, 0x03E0, ph);   // dark green → mid green
+      frame = lerp565(0x03E0, 0x07E0, ph);   // mid green → bright green
+    } else {
+      frame = accentInk();
+      // Slow breathing glow when idle (~10 s cycle), static 50 % while speaking
+      float breath = (!_talking && !_singing)
+                     ? (sinf(now * 0.00063f) + 1.0f) * 0.5f
+                     : 0.5f;
+      glow = lerp565(INK_GLOW, INK, breath * 0.7f + 0.05f);
+    }
     _canvas.fillRoundRect(36, 32 + dy, 248, 72, 36, VISOR);
     _canvas.fillRoundRect(44, 38 + dy, 232, 60, 30, VISOR_DEEP);
     drawVisorScanlines(dy);
