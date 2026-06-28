@@ -69,6 +69,8 @@ import esp_registry as esp_reg
 import server_config as srv_cfg
 import music_service as music
 import story_mode as story_mod
+import context_manager
+from emotional_memory import EmotionalMemory
 
 SERVER_DIR = Path(__file__).resolve().parent
 CAPTURE_DIR = SERVER_DIR / "debug_audio"
@@ -103,6 +105,7 @@ EMOTIONS = [
 SOUND_EFFECTS = ["none", "beep", "laugh", "error", "yawn", "power_up", "glitch"]
 
 _conversation_history: deque = deque(maxlen=6)
+_memory = EmotionalMemory()
 
 
 def build_system_prompt() -> str:
@@ -929,9 +932,17 @@ def release_ollama_vram() -> None:
         log.debug("Ollama release VRAM: %s", e)
 
 
+_VALID_TONES = frozenset({
+    "neutral", "ironic", "worried", "proud", "curious",
+    "flat", "excited", "empathetic", "sarcastic", "urgent",
+})
+
+
 async def ask_ollama(user_text: str, *, use_history: bool = False,
                      model_override: str | None = None,
                      system_prompt_override: str | None = None) -> dict:
+    ctx_name = context_manager.get()
+    ctx_cfg = context_manager.config(ctx_name)
     system_content = system_prompt_override if system_prompt_override else build_system_prompt()
     if ha.ha_enabled() and _wants_ha_context(user_text):
         devices = await asyncio.to_thread(ha.devices_prompt, OLLAMA_HA_MAX_DEVICES)
@@ -950,6 +961,8 @@ async def ask_ollama(user_text: str, *, use_history: bool = False,
     if mem:
         ctx_parts.append(mem)
     system_content += CONTEXT_PROMPT.format(context=" ".join(p for p in ctx_parts if p))
+    if ctx_name != "idle":
+        system_content += f"\n\nCONTEXTO DE COMPORTAMIENTO: contexto activo '{ctx_name}'. Ajustá tu energía, ritmo y tono a ese ambiente."
 
     messages = [{"role": "system", "content": system_content}]
     if use_history:
@@ -981,6 +994,8 @@ async def ask_ollama(user_text: str, *, use_history: bool = False,
         except (TypeError, ValueError):
             intensity = 0.7
         intensity = max(0.0, min(1.0, intensity))
+        tone_raw = str(data.get("tone", "neutral")).strip().lower()
+        tone = tone_raw if tone_raw in _VALID_TONES else "neutral"
         reply = prepare_spanish_text(str(data.get("reply", "")).strip())
         sing = bool(data.get("sing", False))
         speak = bool(data.get("speak", True))
@@ -1019,9 +1034,34 @@ async def ask_ollama(user_text: str, *, use_history: bool = False,
     if reply:
         reply = cap_speech_text(reply, sing=sing)
 
+    # M7: apply session memory modifiers
+    mods = _memory.get_modifiers()
+    intensity = max(0.0, min(1.0, intensity + mods["intensity_boost"]))
+    expressivity = min(1.0, ctx_cfg["expressivity"] + mods["expressivity_boost"])
+
+    # M5 Rhythm: pre/post response timing from context, adjusted by tone and intensity
+    pre_response_ms = ctx_cfg["pre_response_ms"]
+    if tone in ("urgent", "excited") and pre_response_ms > 150:
+        pre_response_ms = max(80, pre_response_ms // 2)
+    post_response_ms = ctx_cfg["post_response_ms"]
+    if intensity > 0.85:  # M8: post_emotion_peak silence
+        post_response_ms = max(post_response_ms, 600)
+    if len(reply) > 200:  # M8: post_complex_answer silence
+        post_response_ms = int(post_response_ms * 1.4)
+
+    # M7: log memory events
+    _memory.log("voice_interaction", severity=0.4)
+    if intensity > 0.85:
+        _memory.log("emotion_peak", severity=intensity)
+
     result = {
         "emotion": emotion,
-        "intensity": intensity,
+        "intensity": round(intensity, 3),
+        "tone": tone,
+        "context": ctx_name,
+        "expressivity": round(expressivity, 3),
+        "pre_response_ms": pre_response_ms,
+        "post_response_ms": post_response_ms,
         "reply": reply,
         "sing": sing,
         "speak": speak,
@@ -1039,6 +1079,7 @@ async def ask_ollama(user_text: str, *, use_history: bool = False,
         track = await _resolve_music_track(music_query.strip()[:120])
         if track:
             result["music"] = track
+            _memory.log("music_played", severity=0.7)
             log.info("music intent (llm) '%s' -> %s (%s)", music_query.strip(), track["title"], track["video_id"])
         else:
             result["reply"] = cap_speech_text("No encontré esa canción.", sing=False)
@@ -1577,6 +1618,41 @@ async def admin_page():
     if not ADMIN_HTML.is_file():
         return HTMLResponse("<h1>admin.html not found</h1>", status_code=404)
     return HTMLResponse(ADMIN_HTML.read_text(encoding="utf-8"))
+
+
+@app.get("/api/context")
+async def get_context_endpoint():
+    """Returns the active behavior context and its config (M4)."""
+    return {
+        "context": context_manager.get(),
+        "config": context_manager.config(),
+        "available": context_manager.all_contexts(),
+    }
+
+
+@app.post("/api/context")
+async def set_context_endpoint(request: Request):
+    """Set the active behavior context (M4). Affects expressivity, rhythm, and LLM tone."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid json"})
+    name = str(body.get("context", "")).strip().lower()
+    if name not in context_manager.CONTEXT_CONFIG:
+        return JSONResponse(status_code=400, content={
+            "error": f"unknown context: {name!r}",
+            "available": context_manager.all_contexts(),
+        })
+    result = context_manager.set_context(name)
+    _memory.log("context_switch", severity=0.3)
+    log.info("context -> %s", result)
+    return {"context": result, "config": context_manager.config(result)}
+
+
+@app.get("/api/memory/snapshot")
+async def memory_snapshot():
+    """Debug endpoint — recent emotional memory events (M7)."""
+    return {"events": _memory.snapshot(), "modifiers": _memory.get_modifiers()}
 
 
 @app.get("/api/admin/rvc-models")

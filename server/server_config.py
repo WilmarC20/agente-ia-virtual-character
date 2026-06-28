@@ -296,6 +296,8 @@ Estructura obligatoria del JSON:
 {{"emotion": "neutral" | "happy" | "sad" | "angry" | "surprised" | "thinking" | "sleepy" \
 | "love" | "excited" | "cool" | "confused" | "dizzy", \
 "intensity": 0.3–1.0 (intensidad de la emoción; 0.3 = sutil/disimulada, 0.7 = normal, 1.0 = al máximo), \
+"tone": "neutral" | "ironic" | "worried" | "proud" | "curious" | "flat" | "excited" | \
+"empathetic" | "sarcastic" | "urgent" (tono de voz y actuación; elige el que mejor represente cómo decís lo que decís), \
 "reply": "Texto para el TTS", "speak": true | false, "sing": true | false, \
 "sound_effect": "none" | "beep" | "laugh" | "error" | "yawn" | "power_up" | "glitch"}}
 """
