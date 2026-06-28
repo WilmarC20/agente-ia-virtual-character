@@ -4,6 +4,7 @@
 #include <ESP_I2S.h>
 #include "config.h"
 #include "audio_output.h"
+#include "playback_spectrum.h"
 
 struct Recording {
   uint8_t *wav = nullptr;
@@ -190,33 +191,7 @@ public:
       memset(bands, 0, (size_t)nBands);
       return (uint32_t)peak;
     }
-    const size_t per = total / (size_t)nBands;
-    for (int b = 0; b < nBands; b++) {
-      size_t start = (size_t)b * per;
-      size_t end = start + per;
-      if (end > total) end = total;
-      int32_t bp = 0;
-      int64_t sum = 0;
-      int zc = 0;
-      for (size_t i = start; i < end; i++) {
-        int32_t v = mono[i];
-        int32_t av = abs(v);
-        sum += av;
-        if (av > bp) bp = av;
-        if (i > start) {
-          int32_t p = mono[i - 1];
-          if ((v >= 0 && p < 0) || (v < 0 && p >= 0)) zc++;
-        }
-      }
-      size_t n = end - start;
-      float rms = (float)sum / (float)n;
-      float zcr = (float)zc / (float)n;
-      float energy = rms * 0.20f + zcr * 145.0f + bp * 0.09f;
-      int lvl = (int)(powf(energy / 520.0f, 0.54f) * 255.0f);
-      if (lvl > 255) lvl = 255;
-      if (lvl < 0) lvl = 0;
-      bands[b] = (uint8_t)lvl;
-    }
+    computeMicStyleBands(mono, total, (float)AUDIO_SAMPLE_RATE, bands, nBands);
     return (uint32_t)peak;
   }
 

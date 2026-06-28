@@ -1,0 +1,5 @@
+# Usa el Arduino15 existente (core esp32 3.x ya instalado).
+directories:
+  data: C:\Users\wilma\AppData\Local\Arduino15
+  downloads: C:\Users\wilma\AppData\Local\Arduino15\staging
+  user: C:\Users\wilma\Documents\Arduino

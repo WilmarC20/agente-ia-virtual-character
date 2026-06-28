@@ -28,9 +28,11 @@
 #define TOUCH_INVERT_X  1
 #define TOUCH_INVERT_Y  1
 #else
+// Rot.1 landscape: el piñón (arriba-der) se activaba tocando abajo-izq -> esquina opuesta
+// = ambos ejes invertidos. Corregido (antes INVERT_X 0 / INVERT_Y 1).
 #define TOUCH_SWAP_XY   1
-#define TOUCH_INVERT_X  0
-#define TOUCH_INVERT_Y  1
+#define TOUCH_INVERT_X  1
+#define TOUCH_INVERT_Y  0
 #endif
 #define TOUCH_DEBUG     0
 
