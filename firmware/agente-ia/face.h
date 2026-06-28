@@ -351,10 +351,10 @@ public:
       _mouthAmp = 100;
       return;
     }
-    if (!_talking && _emotion != Emotion::Vibing) {
-      _mouthAmpSmooth = 0.0f;
-      _mouthAmpTarget = 0;
-      _mouthAmp = 0;
+    if (!_talking && !_singing && _emotion != Emotion::Vibing && _mouthAmpTarget == 0) {
+      _mouthAmpSmooth *= 0.7f;
+      if (_mouthAmpSmooth < 0.1f) _mouthAmpSmooth = 0.0f;
+      _mouthAmp = (uint8_t)(_mouthAmpSmooth + 0.5f);
       return;
     }
     float target = (float)_mouthAmpTarget;
@@ -432,8 +432,13 @@ public:
         if (bobMoved) _lastVibingBobDraw = _vibingBobY;
         if (frameDue) _lastVibingDraw = now;
       }
-    } else if (changed) {
-      _dirty = true;
+    } else {
+      if (_mouthAmpTarget > 0 || _mouthAmpSmooth > 0.1f) {
+        smoothMouthAmp();
+        _dirty = true;
+      } else if (changed) {
+        _dirty = true;
+      }
     }
 
     if (_speechCaption.active() && _talking && _speechCaption.mode() == kSpeechCaptionKaraoke) {
@@ -694,7 +699,8 @@ private:
         p.mouth = {88, 232, 17, 6, 3, -4, 0.5f, 0, 0};
         break;
       case Emotion::Surprised:
-        p.brow = Brow::Raise; p.eyeR = 38; p.pupilS = 7; p.mouthKind = MouthKind::Compact;
+        p.brow = Brow::Raise; p.eyeR = 38; p.pupilS = 7;
+        p.mouth = {96, 224, 22, 6, 3, 5, 0, 0, 0};
         break;
       case Emotion::Thinking:
         p.brow = Brow::Asym; p.topLid = 0.18f; p.pupilOffX = 8; p.pupilOffY = -5;
@@ -1344,7 +1350,7 @@ private:
   }
 
   void drawMouthGrid(const MouthCfg &m) {
-    const bool anim = _talking || _singing;
+    const bool anim = _talking || _singing || _mouthAmpSmooth > 2.0f;
     if (!anim && (_emotion == Emotion::Angry || _emotion == Emotion::Neutral ||
                   _emotion == Emotion::Thinking || _emotion == Emotion::Confused)) {
       drawMouthGridProcedural(m);

@@ -1968,36 +1968,32 @@ async def _music_stream_response(video_id: str, request: Request | None = None):
         time.monotonic() - t0,
     )
 
-    async def _body():
-        pcm_total = len(first_chunk)
-        async for piece in _yield_pcm(first_chunk):
-            yield piece
-        try:
-            while True:
-                if request is not None and await request.is_disconnected():
-                    log.info("music/play client disconnect id=%s", video_id)
-                    music.shutdown_all_streams()
-                    break
-                chunk = await asyncio.to_thread(music._next_chunk, stream_it)
-                if chunk is None:
-                    break
-                pcm_total += len(chunk)
-                async for piece in _yield_pcm(chunk):
-                    yield piece
-        finally:
-            music.shutdown_all_streams()
-            log.info(
-                "music/play stream done id=%s %.1fs %d bytes",
-                video_id,
-                time.monotonic() - t0,
-                pcm_total,
-            )
+    # Acumulamos todo el PCM antes de responder para que FastAPI pueda incluir
+    # Content-Length automáticamente. Esto evita chunked transfer encoding en
+    # HTTP/1.1, que corrompía el stream PCM en el ESP (los chunk headers se
+    # interpretaban como muestras de audio → golpe rítmico cada 16 KB).
+    # PCM 16 kHz mono 16-bit ≈ 2 MB/min — manejable en RAM del servidor.
+    chunks: list[bytes] = [first_chunk]
+    try:
+        while True:
+            chunk = await asyncio.to_thread(music._next_chunk, stream_it)
+            if chunk is None:
+                break
+            chunks.append(chunk)
+    finally:
+        music.shutdown_all_streams()
 
-    return StreamingResponse(
-        _body(),
+    pcm_all = b"".join(chunks)
+    log.info(
+        "music/play ready id=%s %.1fs %d bytes",
+        video_id,
+        time.monotonic() - t0,
+        len(pcm_all),
+    )
+    return Response(
+        content=pcm_all,
         media_type="application/octet-stream",
         headers={
-            "Connection": "close",
             "Cache-Control": "no-store",
             "X-Audio-Format": "pcm_s16le;rate=16000;channels=1",
             "X-Track-Title": (meta.get("title") or "")[:120],

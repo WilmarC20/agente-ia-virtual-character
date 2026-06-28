@@ -1430,7 +1430,9 @@ void playMusic(const String &videoId, const String &title) {
   http.setReuse(false);
   http.setConnectTimeout(30000);
   http.setTimeout((int32_t)MUSIC_HTTP_TIMEOUT_MS);
-  http.useHTTP10(true);
+  // HTTP/1.1 + Content-Length (server acumula PCM completo antes de enviar).
+  // Con HTTP/1.0 uvicorn respondía HTTP/1.1 chunked; los chunk headers se
+  // interpretaban como PCM y causaban el golpe rítmico cada 16 KB.
 
   const String url = String(BRAIN_SERVER_URL) + "/music/play?id=" + videoId;
   Serial.printf("MUSIC GET %s timeout=%d\n", url.c_str(), (int)MUSIC_HTTP_TIMEOUT_MS);
