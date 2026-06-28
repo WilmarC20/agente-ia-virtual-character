@@ -96,6 +96,7 @@ public:
   Emotion emotion() const { return _emotion; }
   bool isVibing() const { return _emotion == Emotion::Vibing; }
   void redraw() { _dirty = true; }
+  void resetAmpGain() { _ampEnvMax = 200.0f; }
 
   // Mic spectrum for vibing (bands 0..255, peak = raw sample peak).
   void setVibingMicGain(uint8_t pct) {
