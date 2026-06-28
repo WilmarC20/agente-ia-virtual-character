@@ -77,6 +77,23 @@ public:
   void setBored(bool b) { if (b != _bored) { _bored = b; _dirty = true; } }
   void setShowGear(bool v) { if (v != _showGear) { _showGear = v; _dirty = true; } }
 
+  // Trigger a double blink (second blink ~250 ms after the first).
+  void triggerDoubleBlink() {
+    uint32_t now = millis();
+    if (now >= _blinkEndAt) {
+      _nextBlinkAt = now;
+      _pendingExtraBlink = true;
+    }
+  }
+
+  // Smoothly move gaze to (tx, ty) for durationMs, then resume random gaze.
+  void setMicroGaze(int tx, int ty, uint32_t durationMs) {
+    _gazeTx = (float)tx;
+    _gazeTy = (float)ty;
+    _nextGazeAt = millis() + durationMs + 300 + random(1000);
+    _dirty = true;
+  }
+
   // Título superpuesto SOBRE la cara (música/historia). Se dibuja DENTRO del sprite
   // (doble búfer) => transparente sobre el fondo, sin recuadro negro ni parpadeo.
   void setTopTitle(const String &t) {
@@ -405,7 +422,12 @@ public:
 
     if (_emotion != Emotion::Vibing && !_singing && now >= _nextBlinkAt && now >= _blinkEndAt) {
       _blinkEndAt = now + 110 + random(90);
-      _nextBlinkAt = _blinkEndAt + blinkDelayMs();
+      if (_pendingExtraBlink) {
+        _pendingExtraBlink = false;
+        _nextBlinkAt = _blinkEndAt + 200 + random(80); // second blink follows quickly
+      } else {
+        _nextBlinkAt = _blinkEndAt + blinkDelayMs();
+      }
       changed = true;
     }
     float blink = 0;
@@ -534,6 +556,7 @@ private:
   float _blinkAmt = 0, _gazeX = 0, _gazeY = 0, _gazeTx = 0, _gazeTy = 0, _browPhase = 0;
   float _browDySmooth = 0.0f, _browTiltSmooth = 0.0f;
   float _intensity = 1.0f;
+  bool _pendingExtraBlink = false;
   uint32_t _transitionEnd = 0;
   float _vibingBobY = 0, _lastVibingBobDraw = 0;
   float _vibingLidPulse = 0.5f;
