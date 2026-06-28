@@ -53,6 +53,10 @@ uint32_t emotionHoldUntil = 0;
 uint32_t wakeIgnoreUntil = 0;
 uint32_t lastActivityMs = 0;    // last interaction; drives proactive idle remarks
 
+// M4 / M5 / M9 — active context and expressivity from server
+String   g_context     = "idle";
+float    g_expressivity = 0.5f;
+
 // M3 — Idle Behavior state machine
 enum class IdlePhase { Active, Present, Waiting, SemiDormant };
 IdlePhase idlePhase = IdlePhase::Active;
@@ -61,6 +65,21 @@ uint32_t nextMicroExpAt    = 0;
 uint32_t lastGlanceUpAt    = 0;
 uint32_t lastGlanceUserAt  = 0;
 uint32_t lastDoubleBlinkAt = 0;
+
+// Full server reply parsed from /converse (replaces scattered out-params).
+struct BrainReply {
+  String emotion      = "neutral";
+  float  intensity    = 0.7f;
+  String tone         = "neutral";
+  String context      = "idle";
+  float  expressivity = 0.5f;
+  String reply;
+  bool   sing         = false;
+  bool   doSpeak      = true;
+  String soundEffect  = "none";
+  int    preRespMs    = 300;
+  int    postRespMs   = 200;
+};
 bool g_wakeNetRunning = false;  // true only while on-device WakeNet is actively feeding
 bool g_voiceWakeEnabled = true; // PC-side wake phrase listener; toggled from Settings
 bool g_idleRemarksEnabled = ENABLE_IDLE_REMARKS;
@@ -233,8 +252,7 @@ void resumeWakeListener() {
 #endif
 }
 
-bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,
-              bool &sing, bool &doSpeak, String &soundEffect, float &intensity);
+bool askBrain(const uint8_t *wav, size_t size, BrainReply &out);
 void speak(const String &text, bool sing, const String &emotion = "happy");
 void playMusic(const String &videoId, const String &title);
 void playStory(const String &storyId, const String &title);
@@ -242,6 +260,7 @@ bool checkWakePhrase(const uint8_t *wav, size_t size, String *commandOut = nullp
 void proactiveIdleRemark();
 void pollDevCommand();
 void tickIdleBehavior();
+void applyToneMicro(const String &tone);
 void queueDevFace(const String &emotion, bool bored, uint32_t holdMs, uint8_t vibingMic,
                   uint16_t vibingFloor, uint16_t vibingCeil);
 void queueDevSpeak(const String &text, const String &emotion);
@@ -1189,30 +1208,29 @@ void loop() {
         face.showText("Pensando...", TFT_YELLOW);
       }
 
-      String emotion, reply, soundEffect;
-      bool sing = false;
-      bool doSpeak = true;
-      float intensity = 0.7f;
-      soundEffect = "none";
-      bool ok = askBrain(rec.wav, rec.size, emotion, reply, sing, doSpeak, soundEffect, intensity);
+      BrainReply resp;
+      bool ok = askBrain(rec.wav, rec.size, resp);
       free(rec.wav);
 
       if (ok) {
-        if (soundEffect.length() > 0 && soundEffect != "none") {
-          playSoundEffect(soundEffect.c_str());
+        // M4: store context + expressivity for idle behavior
+        g_context     = resp.context;
+        g_expressivity = resp.expressivity;
+
+        if (resp.soundEffect.length() > 0 && resp.soundEffect != "none") {
+          playSoundEffect(resp.soundEffect.c_str());
           delay(150);
         }
         if (!face.isVibing()) {
-          face.setEmotion(emotionFromString(emotion), intensity);
+          face.setEmotion(emotionFromString(resp.emotion), resp.intensity);
+          applyToneMicro(resp.tone);  // M9: tone → face microexpression
         }
-        if (reply.length() > 0) {
-          face.showText("");
-        } else {
-          face.showText("");
-        }
+        face.showText("");
         face.update();
-        if (doSpeak && reply.length() > 0) {
-          speak(reply, sing, emotion);
+        if (resp.doSpeak && resp.reply.length() > 0) {
+          if (resp.preRespMs > 0) delay(resp.preRespMs);  // M5: pre-response pause
+          speak(resp.reply, resp.sing, resp.emotion);
+          if (resp.postRespMs > 0) delay(resp.postRespMs); // M8: post-response silence
         } else if (g_musicPlayPending) {
           face.setEmotion(Emotion::Happy);
           face.update();
@@ -1685,8 +1703,7 @@ bool checkWakePhrase(const uint8_t *wav, size_t size, String *commandOut) {
   return wake;
 }
 
-bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,
-              bool &sing, bool &doSpeak, String &soundEffect, float &intensity) {
+bool askBrain(const uint8_t *wav, size_t size, BrainReply &out) {
   HTTPClient http;
   http.setTimeout(60000);
   http.begin(String(BRAIN_SERVER_URL) + "/converse");
@@ -1705,24 +1722,31 @@ bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,
   http.end();
   if (err) return false;
 
-  emotion = doc["emotion"].as<String>();
-  reply = doc["reply"].as<String>();
-  sing = doc["sing"] | false;
-  doSpeak = doc["speak"] | true;
-  soundEffect = doc["sound_effect"] | "none";
-  intensity = max(0.0f, min(1.0f, doc["intensity"] | 0.7f));
+  out.emotion      = doc["emotion"].as<String>();
+  out.intensity    = max(0.0f, min(1.0f, doc["intensity"] | 0.7f));
+  out.tone         = doc["tone"] | "neutral";
+  out.context      = doc["context"] | "idle";
+  out.expressivity = max(0.1f, min(1.0f, doc["expressivity"] | 0.5f));
+  out.reply        = doc["reply"].as<String>();
+  out.sing         = doc["sing"] | false;
+  out.doSpeak      = doc["speak"] | true;
+  out.soundEffect  = doc["sound_effect"] | "none";
+  out.preRespMs    = max(0, min(2000, doc["pre_response_ms"] | 300));
+  out.postRespMs   = max(0, min(2000, doc["post_response_ms"] | 200));
+
   // Smart speaker: the brain resolved a song to play -> stream it instead of speaking.
   String musicId = doc["music"]["video_id"] | "";
   if (musicId.length() > 0) {
     String musicTitle = doc["music"]["title"] | "";
     Serial.printf("Music intent -> %s (%s)\n", musicTitle.c_str(), musicId.c_str());
     queueMusicPlay(musicId, musicTitle);
-    doSpeak = false;
-    reply = "";
+    out.doSpeak = false;
+    out.reply = "";
   }
-  Serial.printf("Heard: %s\nReply [%s@%.2f] speak=%d sing=%d sfx=%s: %s\n",
-                doc["heard"].as<const char *>(), emotion.c_str(), intensity, doSpeak, sing,
-                soundEffect.c_str(), reply.c_str());
+  Serial.printf("Heard: %s\nReply [%s@%.2f tone=%s ctx=%s pre=%dms] speak=%d sing=%d sfx=%s: %s\n",
+                doc["heard"].as<const char *>(), out.emotion.c_str(), out.intensity,
+                out.tone.c_str(), out.context.c_str(), out.preRespMs,
+                out.doSpeak, out.sing, out.soundEffect.c_str(), out.reply.c_str());
   return true;
 }
 
@@ -1843,6 +1867,22 @@ void tickIdleBehavior() {
   uint32_t now = millis();
   bool holdActive = emotionHoldUntil && now < emotionHoldUntil;
 
+  // M10 Priority: emergency context overrides everything — snap to angry + focus gaze.
+  if (g_context == "emergency") {
+    if (idlePhase != IdlePhase::Active) {
+      idlePhase = IdlePhase::Active;
+      face.setEmotion(Emotion::Angry, 0.8f);
+      face.setMicroGaze(0, 0, 5000);  // focus_lock
+      face.setBored(false);
+      face.update();
+      nextMicroExpAt = now + 60000;
+    }
+    return;
+  }
+
+  // M4: scale idle intensities by context expressivity (1.0 at default 0.5).
+  float exprFactor = g_expressivity / 0.5f;
+
   // Determine target idle phase from time-since-last-activity.
   IdlePhase target;
   if (holdActive) {
@@ -1860,23 +1900,22 @@ void tickIdleBehavior() {
     idlePhase = target;
     switch (idlePhase) {
       case IdlePhase::Active:
-        nextMicroExpAt = now + 10000;  // no micros right after becoming active
+        nextMicroExpAt = now + 10000;
         break;
       case IdlePhase::Present:
-        // Let the held emotion fade naturally — no forced change.
         nextMicroExpAt = now + 6000 + random(4000);
         break;
       case IdlePhase::Waiting:
-        face.setEmotion(Emotion::Neutral, 0.2f);
+        face.setEmotion(Emotion::Neutral, max(0.10f, min(0.40f, 0.2f * exprFactor)));
         face.setBored(false);
         face.update();
         nextMicroExpAt = now + 4000 + random(4000);
         break;
       case IdlePhase::SemiDormant:
-        face.setEmotion(Emotion::Sleepy, 0.15f);
+        face.setEmotion(Emotion::Sleepy, max(0.08f, min(0.30f, 0.15f * exprFactor)));
         face.setBored(true);
         face.update();
-        nextMicroExpAt = now + 30000;  // very infrequent
+        nextMicroExpAt = now + 30000;
         break;
     }
   }
@@ -1890,11 +1929,11 @@ void tickIdleBehavior() {
   bool fired = false;
 
   if (r == 0 && now - lastGlanceUpAt > 10000UL) {
-    face.setMicroGaze(0, -8, 600);     // look upward briefly
+    face.setMicroGaze(0, -8, 600);
     lastGlanceUpAt = now;
     fired = true;
   } else if (r == 1 && now - lastGlanceUserAt > 8000UL) {
-    face.setMicroGaze(0, 0, 400);      // center — "looking at user"
+    face.setMicroGaze(0, 0, 400);
     lastGlanceUserAt = now;
     fired = true;
   } else if (r == 2 && now - lastDoubleBlinkAt > 12000UL) {
@@ -1904,6 +1943,17 @@ void tickIdleBehavior() {
   }
 
   nextMicroExpAt = now + (fired ? (7000 + random(8000)) : (2000 + random(3000)));
+}
+
+// M9 Acting Layer — map conversational tone to face microexpression.
+void applyToneMicro(const String &tone) {
+  if (tone == "ironic" || tone == "sarcastic") face.setMicroGaze(-8, 2, 500);
+  else if (tone == "curious")                  face.setMicroGaze(4, -5, 400);
+  else if (tone == "worried")                  face.setMicroGaze(0, -8, 600);
+  else if (tone == "proud")                    face.setMicroGaze(0, 0, 800);
+  else if (tone == "excited")                  face.triggerDoubleBlink();
+  else if (tone == "urgent")                   face.setMicroGaze(0, 0, 1200);
+  else if (tone == "empathetic")               face.setMicroGaze(2, -3, 500);
 }
 
 // Modal settings menu (opened from the gear). Blocks until the user taps "Guardar",

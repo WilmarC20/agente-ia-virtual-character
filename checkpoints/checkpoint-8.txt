@@ -1,0 +1,11 @@
+checkpoint-8
+commit: 02043b6d769f34326ff84824a7833d322bdc7ee8
+
+Estado: music fix — bypass prefetch polling, direct /music/play
+Fecha: 2026-06-28
+
+Para restaurar:
+  git checkout 02043b6 -- firmware/agente-ia/agente-ia.ino
+  git checkout 02043b6 -- firmware/agente-ia/face.h
+  git checkout 02043b6 -- server/main.py
+  git checkout 02043b6 -- firmware/agente-ia/sound_fx.h
