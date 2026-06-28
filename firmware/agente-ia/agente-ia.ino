@@ -1538,7 +1538,6 @@ void playStory(const String &storyId, const String &title) {
   g_storyCueNext = 0;
   if (g_storyCueCount > 0) face.setEmotion(g_storyCues[0].emotion);
   face.setTalking(true);
-  face.setTopTitle(label);
   face.update();
 
   HTTPClient http;
@@ -1609,6 +1608,10 @@ void playStory(const String &storyId, const String &title) {
   Serial.printf("STORY mode=%u rawPcm=%d enjoyMus=%d ampEarly=%d\n",
                 sMode, useRawPcm, useEnjoyMus, !ampDeferred);
 
+  // Reset auto-gain ceiling so story mouth is not silenced by a previous
+  // loud music session that inflated _ampEnvMax way above story audio levels.
+  face.resetAmpGain();
+
   const size_t pcmWritten =
       playHttpPcmStream(http, stream, remaining, false, false, nullptr,
                         useRawPcm, nullptr, useEnjoyMus);
@@ -1621,7 +1624,6 @@ void playStory(const String &storyId, const String &title) {
   storyClearCues();
   face.setTalking(false);
   face.setEmotion(Emotion::Neutral);
-  face.clearTopTitle();
   face.showText("");
   face.update();
   endPlayback(i2s);
