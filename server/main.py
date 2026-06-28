@@ -976,6 +976,11 @@ async def ask_ollama(user_text: str, *, use_history: bool = False,
     try:
         data = parse_ollama_json(content)
         emotion = data.get("emotion", "neutral")
+        try:
+            intensity = float(data.get("intensity", 0.7))
+        except (TypeError, ValueError):
+            intensity = 0.7
+        intensity = max(0.0, min(1.0, intensity))
         reply = prepare_spanish_text(str(data.get("reply", "")).strip())
         sing = bool(data.get("sing", False))
         speak = bool(data.get("speak", True))
@@ -1016,6 +1021,7 @@ async def ask_ollama(user_text: str, *, use_history: bool = False,
 
     result = {
         "emotion": emotion,
+        "intensity": intensity,
         "reply": reply,
         "sing": sing,
         "speak": speak,

@@ -225,7 +225,7 @@ void resumeWakeListener() {
 }
 
 bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,
-              bool &sing, bool &doSpeak, String &soundEffect);
+              bool &sing, bool &doSpeak, String &soundEffect, float &intensity);
 void speak(const String &text, bool sing, const String &emotion = "happy");
 void playMusic(const String &videoId, const String &title);
 void playStory(const String &storyId, const String &title);
@@ -1182,8 +1182,9 @@ void loop() {
       String emotion, reply, soundEffect;
       bool sing = false;
       bool doSpeak = true;
+      float intensity = 0.7f;
       soundEffect = "none";
-      bool ok = askBrain(rec.wav, rec.size, emotion, reply, sing, doSpeak, soundEffect);
+      bool ok = askBrain(rec.wav, rec.size, emotion, reply, sing, doSpeak, soundEffect, intensity);
       free(rec.wav);
 
       if (ok) {
@@ -1192,7 +1193,7 @@ void loop() {
           delay(150);
         }
         if (!face.isVibing()) {
-          face.setEmotion(emotionFromString(emotion));
+          face.setEmotion(emotionFromString(emotion), intensity);
         }
         if (reply.length() > 0) {
           face.showText("");
@@ -1674,7 +1675,7 @@ bool checkWakePhrase(const uint8_t *wav, size_t size, String *commandOut) {
 }
 
 bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,
-              bool &sing, bool &doSpeak, String &soundEffect) {
+              bool &sing, bool &doSpeak, String &soundEffect, float &intensity) {
   HTTPClient http;
   http.setTimeout(60000);
   http.begin(String(BRAIN_SERVER_URL) + "/converse");
@@ -1698,6 +1699,7 @@ bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,
   sing = doc["sing"] | false;
   doSpeak = doc["speak"] | true;
   soundEffect = doc["sound_effect"] | "none";
+  intensity = max(0.0f, min(1.0f, doc["intensity"] | 0.7f));
   // Smart speaker: the brain resolved a song to play -> stream it instead of speaking.
   String musicId = doc["music"]["video_id"] | "";
   if (musicId.length() > 0) {
@@ -1707,8 +1709,8 @@ bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,
     doSpeak = false;
     reply = "";
   }
-  Serial.printf("Heard: %s\nReply [%s] speak=%d sing=%d sfx=%s: %s\n",
-                doc["heard"].as<const char *>(), emotion.c_str(), doSpeak, sing,
+  Serial.printf("Heard: %s\nReply [%s@%.2f] speak=%d sing=%d sfx=%s: %s\n",
+                doc["heard"].as<const char *>(), emotion.c_str(), intensity, doSpeak, sing,
                 soundEffect.c_str(), reply.c_str());
   return true;
 }
@@ -1809,13 +1811,14 @@ void proactiveIdleRemark() {
   if (err) return;
 
   String emotion = doc["emotion"].as<String>();
+  float intensity = max(0.0f, min(1.0f, doc["intensity"] | 0.7f));
   String reply = doc["reply"].as<String>();
   bool sing = doc["sing"] | false;
   bool doSpeak = doc["speak"] | true;
   if (reply.length() == 0) return;
 
-  Serial.printf("idle remark [%s]: %s\n", emotion.c_str(), reply.c_str());
-  face.setEmotion(emotionFromString(emotion));
+  Serial.printf("idle remark [%s] intensity=%.2f: %s\n", emotion.c_str(), intensity, reply.c_str());
+  face.setEmotion(emotionFromString(emotion), intensity);
   face.update();
   if (doSpeak) speak(reply, sing, emotion);
   emotionHoldUntil = millis() + 8000;
