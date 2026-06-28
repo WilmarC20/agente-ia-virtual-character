@@ -19,6 +19,7 @@ extern String g_musicNowVideoId;
 
 // Called from agente-ia.ino after settings change (touch menu or web admin).
 void syncWakeNetFromSettings();
+void applyDeviceUiSettings(const AppSettings &s);
 
 // Pruebas locales de gesto / TTS (panel /test del ESP).
 void queueDevFace(const String &emotion, bool bored, uint32_t holdMs, uint8_t vibingMic = 0,
@@ -45,6 +46,7 @@ public:
     _server.on("/api/music/play", HTTP_POST, [this]() { handlePostMusic(); });
     _server.on("/api/music/stop", HTTP_POST, [this]() { handlePostMusicStop(); });
     _server.on("/api/music/status", HTTP_GET, [this]() { handleGetMusicStatus(); });
+    _server.on("/api/story/launch", HTTP_POST, [this]() { handleStoryLaunch(); });
     _server.onNotFound([this]() { _server.send(404, "text/plain", "Not found"); });
     _server.begin();
     Serial.printf("Web admin: http://%s/\n", WiFi.localIP().toString().c_str());
@@ -63,6 +65,7 @@ private:
   void applyLive() {
     applySettingsGlobals(*_settings, *_wakePhraseIdx, *_voiceWakeEnabled, *_idleRemarksEnabled);
     _codec->setPlaybackVolumePercent(_settings->volume);
+    applyDeviceUiSettings(*_settings);
     syncWakeNetFromSettings();
   }
 
@@ -77,11 +80,14 @@ private:
     doc["hi_esp_available"] = false;
 #endif
     doc["idle_remarks"] = _settings->idleRemarks;
+    doc["mouth_anim"] = _settings->mouthAnim;
+    doc["speech_caption"] = _settings->speechCaption;
     doc["phrase_idx"] = _settings->phraseIdx;
     JsonArray phrases = doc["wake_phrases"].to<JsonArray>();
     for (int i = 0; i < WAKE_PRESET_COUNT; i++) phrases.add(WAKE_PRESET_LABELS[i]);
     doc["wake_phrase"] = WAKE_PRESET_LABELS[_settings->phraseIdx];
     doc["brain_url"] = BRAIN_SERVER_URL;
+    doc["story_play_mode"] = _settings->storyPlayMode;
   }
 
   void handleGetSettings() {
@@ -113,9 +119,21 @@ private:
     if (doc["hi_esp_wake"].is<bool>()) _settings->hiEspWake = doc["hi_esp_wake"];
 #endif
     if (doc["idle_remarks"].is<bool>()) _settings->idleRemarks = doc["idle_remarks"];
+    if (doc["mouth_anim"].is<uint8_t>()) {
+      uint8_t ma = doc["mouth_anim"];
+      _settings->mouthAnim = (ma > 2) ? 0 : ma;
+    }
+    if (doc["speech_caption"].is<uint8_t>()) {
+      uint8_t sc = doc["speech_caption"];
+      _settings->speechCaption = (sc > 2) ? 0 : sc;
+    }
     if (doc["phrase_idx"].is<uint8_t>()) {
       uint8_t idx = doc["phrase_idx"];
       if (idx < WAKE_PRESET_COUNT) _settings->phraseIdx = idx;
+    }
+    if (doc["story_play_mode"].is<uint8_t>()) {
+      uint8_t spm = doc["story_play_mode"];
+      _settings->storyPlayMode = (spm > 3) ? 0 : spm;
     }
 
     saveSettings(*_settings);
@@ -230,6 +248,34 @@ private:
     _server.send(200, "application/json", "{\"ok\":true,\"stop\":true}");
   }
 
+  void handleStoryLaunch() {
+    uint8_t mode = _settings->storyPlayMode;
+    String body = "{\"beats\":["
+      "{\"text\":\"Probando modo " + String(mode) + ". Uno dos tres, la historia debe sonar con la voz del personaje.\",\"emotion\":\"happy\"},"
+      "{\"text\":\"Si escuchas esto correctamente el modo funciona. Fin de prueba.\",\"emotion\":\"excited\"}"
+      "],\"title\":\"Test modo " + String(mode) + "\",\"gap_ms\":300,\"priority\":true}";
+
+    HTTPClient http;
+    http.setReuse(false);
+    http.setConnectTimeout(6000);
+    http.setTimeout(90000);
+    if (!http.begin(String(BRAIN_SERVER_URL) + "/api/dev/story")) {
+      _server.send(503, "application/json", "{\"error\":\"no se pudo conectar al cerebro\"}");
+      return;
+    }
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("X-Device-MAC", WiFi.macAddress());
+    int code = http.POST(body);
+    if (code != 200) {
+      String err = http.getString(); http.end();
+      _server.send(502, "application/json",
+        "{\"error\":\"cerebro retorno " + String(code) + ": " + err.substring(0, 120) + "\"}");
+      return;
+    }
+    String resp = http.getString(); http.end();
+    _server.send(200, "application/json", resp);
+  }
+
   void handleGetMusicStatus() {
     JsonDocument doc;
     doc["playing"] = g_musicPlaying;
@@ -301,11 +347,30 @@ a{color:var(--accent)}
 <input type="range" id="volume" min="0" max="100" step="1"/>
 <div class="row"><div><strong>Comentarios espontáneos</strong><br><span class="status">Habla solo tras estar inactivo</span></div>
 <label class="toggle"><input type="checkbox" id="idleRemarks"><span></span></label></div>
+<label for="mouthAnim" style="margin-top:.7rem">Animación de boca al hablar</label>
+<select id="mouthAnim"><option value="0">Ecualizador (barras)</option><option value="1">Ondas cruzadas</option><option value="2">Rejilla Bender (2 líneas)</option></select>
+<label for="speechCaption" style="margin-top:.7rem">Texto al hablar (pantalla)</label>
+<select id="speechCaption"><option value="0">Oculto (solo cara)</option><option value="1">Karaoke (palabra a palabra)</option><option value="2">Texto ASCII (sin tildes)</option></select>
+<p class="status" style="margin-top:.35rem">Por defecto no se muestra la respuesta: evita caracteres rotos. Karaoke usa palabras sin tildes sincronizadas al audio.</p>
 </div>
 
 <div class="panel">
 <h2>Estado</h2>
 <p class="status" id="statusLine">Cargando...</p>
+</div>
+
+<div class="panel">
+<h2>&#127909; Debug historia (audio)</h2>
+<label for="storyPlayMode" style="margin-bottom:.4rem">Modo de reproduccion</label>
+<select id="storyPlayMode">
+<option value="0">0 — Actual: rawPCM + buffer musica + amp diferido</option>
+<option value="1">1 — TTS-like: rawPCM + buffer TTS + amp inmediato</option>
+<option value="2">2 — Music+amp: rawPCM + buffer musica + amp inmediato</option>
+<option value="3">3 — WAV mode: salta header 44b + buffer TTS + amp inmediato</option>
+</select>
+<p class="status" style="margin:.4rem 0">Guarda el modo y luego pulsa Test para lanzar una historia de prueba desde el cerebro PC.</p>
+<button class="secondary" id="storyTestBtn" style="margin-top:.3rem">&#9654; Lanzar historia de prueba</button>
+<div class="msg" id="storyMsg"></div>
 </div>
 
 <button class="primary" id="saveBtn">Guardar cambios</button>
@@ -321,6 +386,9 @@ async function load(){
   $('voiceWake').checked=cfg.voice_wake;
   $('hiEspWake').checked=cfg.hi_esp_wake;
   $('idleRemarks').checked=cfg.idle_remarks;
+  if(cfg.mouth_anim!==undefined)$('mouthAnim').value=cfg.mouth_anim;
+  if(cfg.speech_caption!==undefined)$('speechCaption').value=cfg.speech_caption;
+  if(cfg.story_play_mode!==undefined)$('storyPlayMode').value=cfg.story_play_mode;
   $('hiEspRow').style.display=cfg.hi_esp_available?'flex':'none';
   const sel=$('phrase');sel.innerHTML='';
   (cfg.wake_phrases||[]).forEach((p,i)=>{const o=document.createElement('option');o.value=i;o.textContent=p;sel.appendChild(o);});
@@ -335,12 +403,25 @@ function showMsg(t,ok){const m=$('msg');m.textContent=t;m.className='msg '+(ok?'
 $('volume').oninput=()=>$('volVal').textContent=$('volume').value+'%';
 $('saveBtn').onclick=async()=>{
   const body={volume:+$('volume').value,voice_wake:$('voiceWake').checked,
-    hi_esp_wake:$('hiEspWake').checked,idle_remarks:$('idleRemarks').checked,phrase_idx:+$('phrase').value};
+    hi_esp_wake:$('hiEspWake').checked,idle_remarks:$('idleRemarks').checked,
+    mouth_anim:+$('mouthAnim').value,speech_caption:+$('speechCaption').value,phrase_idx:+$('phrase').value,
+    story_play_mode:+$('storyPlayMode').value};
   try{const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);showMsg('Guardado correctamente',true);cfg=j;load();}
   catch(e){showMsg('Error: '+e.message,false);}
 };
 $('reloadBtn').onclick=load;
+$('storyTestBtn').onclick=async()=>{
+  const mode=+$('storyPlayMode').value;
+  const stMsg=$('storyMsg');
+  stMsg.textContent='Generando audio en el cerebro PC (puede tardar ~20s)...';stMsg.className='msg ok';
+  try{
+    const r=await fetch('/api/story/launch',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const j=await r.json();
+    if(!r.ok)throw new Error(j.error||r.status);
+    stMsg.textContent='En cola: '+Math.round((j.duration_ms||0)/1000)+'s de audio (modo '+mode+') — escucha el parlante';
+  }catch(e){stMsg.className='msg err';stMsg.textContent='Error: '+e.message;}
+};
 load();
 </script>
 </body>

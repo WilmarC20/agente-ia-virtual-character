@@ -68,6 +68,7 @@ import agent_state
 import esp_registry as esp_reg
 import server_config as srv_cfg
 import music_service as music
+import story_mode as story_mod
 
 SERVER_DIR = Path(__file__).resolve().parent
 CAPTURE_DIR = SERVER_DIR / "debug_audio"
@@ -124,6 +125,123 @@ Reglas:
 Dispositivos disponibles (nombre (entity_id) = estado):
 {devices}
 """
+
+# Appended when a music backend is available — teaches the model to emit a "music" query.
+MUSIC_PROMPT = """
+
+MÚSICA (parlante inteligente). Podés reproducir canciones por el parlante.
+Si el usuario pide poner/reproducir/escuchar una canción, un artista o un género
+(ej. "reproducí Bohemian Rhapsody", "poné algo de Soda Stereo", "quiero escuchar cumbia"),
+AGREGÁ al JSON el campo: "music": "<consulta de búsqueda: canción y/o artista>".
+- En "reply" confirmá corto y con tu actitud (ej. "Dale, poniendo Soda Stereo.").
+- Pasá como consulta lo que pidió; no inventes temas.
+- Si el pedido NO es de música, NO incluyas "music".
+"""
+
+
+def _music_available() -> bool:
+    try:
+        return bool(music.has_youtube_api() or music.has_ytmusicapi() or music.has_yt_dlp())
+    except Exception:
+        return False
+
+
+# Direct music-command detection (the small LLM often ignores the "music" instruction and
+# just answers in character). Extracts the song/artist after a trigger word — works for ANY
+# track, not a hardcoded list.
+def music_command_query(text: str) -> str | None:
+    t = normalize_heard(text or "")
+    _filler = r"(?:(?:la|el|un|una)\s+)?(?:canci[oó]n|cancion|tema|temita|m[uú]sica|musica|algo)\s+(?:de\s+)?"
+    # Strong music verbs (música-specific): the rest of the phrase is the query.
+    m = re.search(r"\b(?:reproduc\w*|escuch\w*|play)\b\s+(.+)", t)
+    if m:
+        q = re.sub(r"^" + _filler, "", m.group(1), flags=re.IGNORECASE)
+    else:
+        # "poné/pon/ponme" is ambiguous (also home automation), so require a music marker
+        # OR "ponme <artista>" without filler (common speech).
+        m = re.search(r"\bp[oó]n(?:e|é|me|er|ga|gan)?\b\s+" + _filler + r"(.+)", t, flags=re.IGNORECASE)
+        if not m:
+            m = re.search(r"\bponme\b\s+(.+)", t, flags=re.IGNORECASE)
+        if not m:
+            return None
+        q = m.group(1)
+    q = re.sub(r"^(?:de|por)\s+", "", q, flags=re.IGNORECASE)
+    q = q.strip(" .,¿?¡!\"'")
+    return q if len(q) >= 2 else None
+
+
+async def _resolve_music_track(query: str) -> dict | None:
+    try:
+        sr = await asyncio.to_thread(music.search, query, limit=1)
+        tracks = (sr or {}).get("results") or []
+        if not tracks:
+            return None
+        vid = tracks[0].get("id") or tracks[0].get("video_id") or ""
+        return {"video_id": vid, "title": tracks[0].get("title") or query} if vid else None
+    except Exception as e:
+        log.warning("music search '%s' failed: %s", query, e)
+        return None
+
+
+async def synthesize_character_wav(text: str, *, sing_flag: bool = False, log_label: str = "TTS") -> bytes:
+    """Misma pipeline que POST /tts: voz del personaje (RVC/Applio) o guía si falla."""
+    t0 = time.monotonic()
+    rvc_timeout = float(os.environ.get("TTS_RVC_TIMEOUT_S", "180"))
+    use_applio_unified = (
+        TTS_RVC_ENABLED
+        and sing.singing_configured()
+        and sing.tts_rvc_runtime_available()
+        and os.environ.get("TTS_RVC_GUIDE", "edge").lower() == "edge"
+        and sing.TTS_RVC_ENGINE == "applio"
+    )
+    if use_applio_unified:
+        log.info("%s pipeline: Applio unificado (edge+RVC)", log_label)
+        await asyncio.to_thread(release_ollama_vram)
+        wav = await asyncio.wait_for(
+            asyncio.to_thread(sing.render_tts_applio_from_text, text, timeout=rvc_timeout),
+            timeout=rvc_timeout + 10,
+        )
+        log.info("%s Applio %.1fs (%d bytes)", log_label, time.monotonic() - t0, len(wav))
+        return wav
+    if TTS_RVC_ENABLED and sing.singing_configured():
+        from tts_engine import synthesize_rvc_guide_wav
+
+        wav = await asyncio.to_thread(synthesize_rvc_guide_wav, text, sing_flag)
+        log.info(
+            "%s guia %s %.1fs (%d bytes)",
+            log_label,
+            os.environ.get("TTS_RVC_GUIDE", "edge"),
+            time.monotonic() - t0,
+            len(wav),
+        )
+        if sing.tts_rvc_runtime_available():
+            try:
+                trvc = time.monotonic()
+                if sing.TTS_RVC_ENGINE != "bender_http":
+                    await asyncio.to_thread(release_ollama_vram)
+                wav = await asyncio.wait_for(
+                    sing.render_tts_with_rvc(wav, timeout=rvc_timeout),
+                    timeout=rvc_timeout + 10,
+                )
+                log.info(
+                    "%s RVC %.1fs (%d bytes) | total %.1fs",
+                    log_label,
+                    time.monotonic() - trvc,
+                    len(wav),
+                    time.monotonic() - t0,
+                )
+            except TimeoutError:
+                log.warning("%s RVC timeout %.0fs — voz guia sin RVC", log_label, rvc_timeout)
+            except Exception as e:
+                log.warning("%s RVC fallo (%s) — voz guia sin RVC", log_label, e)
+        return wav
+    return await synthesize_wav_16k(text, sing=sing_flag)
+
+
+async def _character_tts_wav(text: str) -> bytes:
+    """Guion/story: voz del personaje (idéntica a /tts)."""
+    safe = cap_speech_text(prepare_spanish_text(text), sing=False)
+    return await synthesize_character_wav(safe, sing_flag=False, log_label="story")
 
 
 def time_context() -> str:
@@ -819,6 +937,8 @@ async def ask_ollama(user_text: str, *, use_history: bool = False,
         devices = await asyncio.to_thread(ha.devices_prompt, OLLAMA_HA_MAX_DEVICES)
         if devices:
             system_content += HOME_PROMPT.format(devices=devices)
+    if _music_available():
+        system_content += MUSIC_PROMPT
 
     # Situational awareness + memory: time, who's home, what we remember of the human.
     ctx_parts = [time_context()]
@@ -906,6 +1026,17 @@ async def ask_ollama(user_text: str, *, use_history: bool = False,
     if isinstance(actions, list) and actions and ha.ha_enabled() and not wants_face_only(user_text):
         result["ha_actions"] = await asyncio.to_thread(ha.execute_actions, actions)
         log.info("HA actions -> %s", result["ha_actions"])
+
+    # Smart speaker: resolve the model's music request to a playable track for the device.
+    music_query = data.get("music")
+    if isinstance(music_query, str) and music_query.strip() and _music_available() and not wants_face_only(user_text):
+        track = await _resolve_music_track(music_query.strip()[:120])
+        if track:
+            result["music"] = track
+            log.info("music intent (llm) '%s' -> %s (%s)", music_query.strip(), track["title"], track["video_id"])
+        else:
+            result["reply"] = cap_speech_text("No encontré esa canción.", sing=False)
+            result["speak"] = True
 
     # Persist anything the character learned about the human (name, facts, mood).
     if data.get("name") or data.get("remember") or data.get("mood"):
@@ -1073,6 +1204,114 @@ async def dev_speak(request: Request):
     return {"ok": True, "queued": qlen, "cmd": cmd}
 
 
+_story_cache: dict[str, dict[str, Any]] = {}
+_STORY_CACHE_MAX = 8
+
+
+def _story_cache_put(story_id: str, wav: bytes, timeline: list, title: str, duration_ms: int) -> None:
+    while len(_story_cache) >= _STORY_CACHE_MAX:
+        oldest = min(_story_cache.items(), key=lambda kv: kv[1].get("created", 0.0))[0]
+        _story_cache.pop(oldest, None)
+    _story_cache[story_id] = {
+        "wav": wav,
+        "timeline": timeline,
+        "title": title,
+        "duration_ms": duration_ms,
+        "created": time.time(),
+    }
+
+
+@app.post("/api/dev/story")
+async def dev_story(request: Request):
+    """Genera audio TTS concatenado + timeline de emociones; encola reproducción en el ESP."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid json"})
+    beats = body.get("beats")
+    if not isinstance(beats, list) or not beats:
+        return JSONResponse(status_code=400, content={"error": "beats vacío"})
+    title = str(body.get("title", "Historia")).strip()[:120] or "Historia"
+    gap_ms = max(0, min(2000, int(body.get("gap_ms", 350))))
+    priority = bool(body.get("priority", True))
+    try:
+        wav, timeline, dur_ms = await story_mod.build_story_wav(
+            beats, gap_ms=gap_ms, synth=_character_tts_wav)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except Exception as e:
+        log.exception("dev/story build failed")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    import uuid
+
+    story_id = uuid.uuid4().hex[:12]
+    _story_cache_put(story_id, wav, timeline, title, dur_ms)
+    cmd: dict[str, Any] = {
+        "type": "story",
+        "story_id": story_id,
+        "title": title,
+        "timeline": timeline,
+        "duration_ms": dur_ms,
+    }
+    async with _dev_lock:
+        if priority:
+            _dev_queue.appendleft(cmd)
+        else:
+            _dev_queue.append(cmd)
+        qlen = len(_dev_queue)
+    log.info(
+        "dev story queued id=%s title=%r beats=%d dur=%dms (queue=%d)",
+        story_id,
+        title,
+        len(beats),
+        dur_ms,
+        qlen,
+    )
+    return {
+        "ok": True,
+        "story_id": story_id,
+        "title": title,
+        "duration_ms": dur_ms,
+        "timeline": timeline,
+        "queued": qlen,
+        "cmd": cmd,
+    }
+
+
+async def _story_stream_response(story_id: str):
+    entry = _story_cache.get(story_id)
+    if not entry:
+        return JSONResponse(status_code=404, content={"error": "story not found"})
+    wav = entry["wav"]
+    if len(wav) <= 44:
+        return JSONResponse(status_code=503, content={"error": "story wav vacío"})
+    pcm = wav[44:]
+    title = str(entry.get("title") or story_id)
+    log.info("story/play id=%s title=%r bytes=%d", story_id, title, len(pcm))
+    # Usamos Response (no StreamingResponse) para que FastAPI incluya Content-Length
+    # automáticamente. Esto evita chunked transfer encoding en HTTP/1.1, que corrompía
+    # el stream PCM cuando el ESP leía bytes raw sin decodificar los chunk headers.
+    return Response(
+        content=pcm,
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Story-Title": title[:120],
+            "X-Story-Duration-Ms": str(entry.get("duration_ms", 0)),
+        },
+    )
+
+
+@app.get("/story/play")
+async def story_play_esp(id: str = Query("", alias="id")):
+    """PCM 16 kHz mono en streaming (modo historia / guion de video)."""
+    story_id = (id or "").strip()
+    if not story_id:
+        return JSONResponse(status_code=400, content={"error": "missing id"})
+    return await _story_stream_response(story_id)
+
+
 @app.get("/api/dev/status")
 async def dev_status():
     async with _dev_lock:
@@ -1086,6 +1325,76 @@ async def dev_clear():
         n = len(_dev_queue)
         _dev_queue.clear()
     return {"ok": True, "cleared": n}
+
+
+_NOTIFY_KIND_EMOTIONS: dict[str, str] = {
+    "agent_blocked": "thinking",
+    "ask_question": "confused",
+    "subagent_done": "happy",
+    "ci_failed": "sad",
+    "approval_needed": "surprised",
+    "stop_failure": "sad",
+    "elicitation": "confused",
+    "task_completed": "happy",
+    "agent": "thinking",
+}
+_notify_last: dict[str, float] = {}
+_NOTIFY_COOLDOWN_S = 45.0
+
+
+@app.post("/api/dev/notify")
+async def dev_notify(request: Request):
+    """Aviso al robot (cara + TTS) cuando un agente de Cursor/Claude necesita intervención."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid json"})
+    kind = str(body.get("kind", "agent")).strip().lower()[:64] or "agent"
+    context = body.get("context") if isinstance(body.get("context"), dict) else {}
+    message = str(body.get("message", "")).strip()
+    generated = None
+    if not message:
+        generated = srv_cfg.notify_reply(kind, context=context)
+        message = generated["reply"]
+    if not message:
+        return JSONResponse(status_code=400, content={"error": "empty message"})
+    message = cap_speech_text(prepare_spanish_text(message), sing=False)
+    emotion = str(body.get("emotion", "")).strip().lower()
+    if not emotion or emotion not in _VALID_DEV_EMOTIONS:
+        if generated:
+            emotion = generated["emotion"]
+        else:
+            emotion = _NOTIFY_KIND_EMOTIONS.get(kind, "thinking")
+    if emotion not in _VALID_DEV_EMOTIONS:
+        emotion = "thinking"
+    speak = bool(body.get("speak", True))
+    priority = bool(body.get("priority", kind in (
+        "agent_blocked", "approval_needed", "ask_question", "stop_failure", "elicitation",
+    )))
+    pid = srv_cfg.current_personality_id()
+    dedupe_key = str(body.get("dedupe_key", f"{kind}:{pid}"))
+    now = time.time()
+    last = _notify_last.get(dedupe_key, 0.0)
+    if now - last < _NOTIFY_COOLDOWN_S:
+        return {"ok": True, "skipped": True, "reason": "cooldown", "kind": kind}
+    _notify_last[dedupe_key] = now
+
+    cmd: dict[str, Any] = {"type": "speak", "text": message, "emotion": emotion} if speak else {
+        "type": "face",
+        "emotion": emotion,
+        "hold_ms": max(3000, min(120000, int(body.get("hold_ms", 15000)))),
+    }
+    async with _dev_lock:
+        if priority:
+            _dev_queue.appendleft(cmd)
+        else:
+            _dev_queue.append(cmd)
+        qlen = len(_dev_queue)
+    log.info(
+        "dev notify [%s] personality=%s %s speak=%s priority=%s (queue=%d)",
+        kind, pid, message[:80], speak, priority, qlen,
+    )
+    return {"ok": True, "queued": qlen, "kind": kind, "personality": pid, "cmd": cmd}
 
 
 @app.post("/converse/reset")
@@ -2072,66 +2381,13 @@ async def tts(body: dict):
     sing_flag = bool(body.get("sing", False))
     text = cap_speech_text(text, sing=sing_flag)
     log.info("tts sing=%s (%d chars): %s", sing_flag, len(text), text)
-    t0 = time.monotonic()
-    rvc_timeout = float(os.environ.get("TTS_RVC_TIMEOUT_S", "180"))
-    use_applio_unified = (
-        TTS_RVC_ENABLED
-        and sing.singing_configured()
-        and sing.tts_rvc_runtime_available()
-        and os.environ.get("TTS_RVC_GUIDE", "edge").lower() == "edge"
-        and sing.TTS_RVC_ENGINE == "applio"
-    )
     try:
-        if use_applio_unified:
-            log.info("tts pipeline: Applio unificado (edge+RVC mismo proceso)")
-            await asyncio.to_thread(release_ollama_vram)
-            wav = await asyncio.wait_for(
-                asyncio.to_thread(sing.render_tts_applio_from_text, text, timeout=rvc_timeout),
-                timeout=rvc_timeout + 10,
-            )
-            log.info(
-                "TTS Applio %.1fs (%d bytes) | total /tts %.1fs",
-                time.monotonic() - t0,
-                len(wav),
-                time.monotonic() - t0,
-            )
-        elif TTS_RVC_ENABLED and sing.singing_configured():
-            from tts_engine import synthesize_rvc_guide_wav
-
-            wav = await asyncio.to_thread(synthesize_rvc_guide_wav, text, sing_flag)
-            log.info(
-                "TTS guia %s %.1fs (%d bytes)",
-                os.environ.get("TTS_RVC_GUIDE", "edge"),
-                time.monotonic() - t0,
-                len(wav),
-            )
-            if sing.tts_rvc_runtime_available():
-                try:
-                    trvc = time.monotonic()
-                    # bender_http corre en proceso separado; no necesita liberar VRAM de Ollama
-                    if sing.TTS_RVC_ENGINE != "bender_http":
-                        await asyncio.to_thread(release_ollama_vram)
-                    wav = await asyncio.wait_for(
-                        sing.render_tts_with_rvc(wav, timeout=rvc_timeout),
-                        timeout=rvc_timeout + 10,
-                    )
-                    log.info(
-                        "TTS RVC %.1fs (%d bytes) | total /tts %.1fs",
-                        time.monotonic() - trvc,
-                        len(wav),
-                        time.monotonic() - t0,
-                    )
-                except TimeoutError:
-                    log.warning("TTS RVC timeout %.0fs — enviando guia sin RVC", rvc_timeout)
-                except Exception as e:
-                    log.warning("TTS RVC fallo (%s) — usando voz guia sin RVC", e)
-        else:
-            wav = await synthesize_wav_16k(text, sing=sing_flag)
+        wav = await synthesize_character_wav(text, sing_flag=sing_flag, log_label="TTS")
     except ModuleNotFoundError as e:
         log.error("TTS dependency missing: %s", e)
         return JSONResponse(status_code=503, content={"error": "TTS deps missing — run server/start.ps1"})
     except TimeoutError:
-        log.warning("TTS timeout %.0fs", rvc_timeout)
+        log.warning("TTS timeout")
         return JSONResponse(status_code=504, content={"error": "TTS timeout"})
     except Exception as e:
         log.exception("TTS failed")
@@ -2211,6 +2467,26 @@ async def converse(request: Request):
             wake["reply"] = cap_speech_text(prepare_spanish_text(wake["reply"]), sing=False)
             wake["heard"] = text
             return wake
+
+    # Smart speaker: a direct "reproducí/poné X" command -> resolve + play (the small LLM
+    # tends to ignore the music instruction, so we handle it here, fast and reliable).
+    if _music_available():
+        mq = music_command_query(text)
+        if mq:
+            track = await _resolve_music_track(mq)
+            if track:
+                log.info("music command '%s' -> %s (%s)", mq, track["title"], track["video_id"])
+                music.prefetch_pcm_stream(track["video_id"])
+                return {
+                    "emotion": "happy", "reply": "", "heard": text, "sing": False,
+                    "speak": False, "sound_effect": "none", "music": track,
+                }
+            log.info("music command '%s' -> sin resultados", mq)
+            return {
+                "emotion": "confused",
+                "reply": cap_speech_text("No encontré esa canción.", sing=False),
+                "heard": text, "sing": False, "speak": True, "sound_effect": "none",
+            }
 
     result = try_quick_reply(text)
     if result is not None:

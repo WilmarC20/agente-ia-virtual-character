@@ -25,6 +25,9 @@
 #include "music_screen.h"
 #include "web_admin.h"
 
+// Cambia en cada flash para verificar en Serial Monitor que cargó el binario nuevo.
+static constexpr const char *FIRMWARE_BUILD_ID = "capt-off-250626";
+
 static void addBrainDeviceHeaders(HTTPClient &http) {
   http.addHeader("X-Device-MAC", WiFi.macAddress());
 }
@@ -135,6 +138,11 @@ void syncWakeNetFromSettings() {
 void syncWakeNetFromSettings() {}
 #endif
 
+void applyDeviceUiSettings(const AppSettings &s) {
+  face.setMouthAnim(s.mouthAnim);
+  face.setSpeechCaptionMode(s.speechCaption);
+}
+
 bool touchPressed() {
   Wire.beginTransmission(FT6336_I2C_ADDR);
   Wire.write(0x02);
@@ -220,6 +228,7 @@ bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,
               bool &sing, bool &doSpeak, String &soundEffect);
 void speak(const String &text, bool sing, const String &emotion = "happy");
 void playMusic(const String &videoId, const String &title);
+void playStory(const String &storyId, const String &title);
 bool checkWakePhrase(const uint8_t *wav, size_t size, String *commandOut = nullptr);
 void proactiveIdleRemark();
 void pollDevCommand();
@@ -228,6 +237,12 @@ void queueDevFace(const String &emotion, bool bored, uint32_t holdMs, uint8_t vi
 void queueDevSpeak(const String &text, const String &emotion);
 void processDevCommands();
 void openSettings();
+void touchCaress();
+void touchHit();
+
+// Single tap waking is deferred briefly so a quick second tap can register as a "hit".
+volatile bool g_wakePending = false;
+uint32_t g_wakePendingAt = 0;
 
 String g_musicVideoId;
 String g_musicTitle;
@@ -238,6 +253,53 @@ volatile bool g_musicPlaying = false;
 volatile bool g_musicStreaming = false;
 volatile bool g_musicStopRequested = false;
 static TaskHandle_t g_musicTaskHandle = nullptr;
+
+struct StoryCue {
+  uint32_t atMs;
+  Emotion emotion;
+};
+static constexpr int kStoryMaxCues = 24;
+static StoryCue g_storyCues[kStoryMaxCues];
+static int g_storyCueCount = 0;
+static int g_storyCueNext = 0;
+static uint32_t g_storyPlayStart = 0;
+static volatile bool g_storyActive = false;
+static volatile bool g_storyAmpPending = false;
+static String g_storyId;
+static String g_storyTitle;
+static TaskHandle_t g_storyTaskHandle = nullptr;
+
+static void storyClearCues() {
+  g_storyCueCount = 0;
+  g_storyCueNext = 0;
+  g_storyPlayStart = 0;
+  g_storyActive = false;
+  g_storyAmpPending = false;
+}
+
+static void storyLoadCues(JsonArray arr) {
+  storyClearCues();
+  for (JsonObject o : arr) {
+    if (g_storyCueCount >= kStoryMaxCues) break;
+    g_storyCues[g_storyCueCount].atMs = o["at_ms"] | 0u;
+    const char *em = o["emotion"] | "neutral";
+    g_storyCues[g_storyCueCount].emotion = emotionFromString(String(em));
+    g_storyCueCount++;
+  }
+}
+
+static void storyTickEmotions() {
+  if (!g_storyActive || g_storyPlayStart == 0) return;
+  const uint32_t elapsed = millis() - g_storyPlayStart;
+  bool changed = false;
+  while (g_storyCueNext < g_storyCueCount && g_storyCues[g_storyCueNext].atMs <= elapsed) {
+    face.setEmotion(g_storyCues[g_storyCueNext].emotion);
+    emotionHoldUntil = 0;
+    g_storyCueNext++;
+    changed = true;
+  }
+  if (changed) face.redraw();
+}
 
 static volatile bool g_devFacePending = false;
 static volatile bool g_devSpeakPending = false;
@@ -302,14 +364,16 @@ void processDevCommands() {
     lastActivityMs = millis();
     Serial.printf("local dev face: %s bored=%d\n", g_devFaceEmotion.c_str(), g_devFaceBored);
   }
-  if (g_devSpeakPending && state == State::Sleeping && !g_musicTaskHandle) {
+  if (g_devSpeakPending && state == State::Sleeping && !g_musicTaskHandle && !g_storyTaskHandle) {
     g_devSpeakPending = false;
     String text = g_devSpeakText;
     String em = g_devSpeakEmotion;
-    face.setEmotion(emotionFromString(em));
-    face.showText(text);
+    // Notify/dev speak: no pisar vibing si el usuario ya está en ese modo.
+    if (!face.isVibing()) {
+      face.setEmotion(emotionFromString(em));
+    }
     face.update();
-    Serial.printf("local dev speak [%s]: %s\n", em.c_str(), text.c_str());
+    Serial.printf("local dev speak [%s] vibing=%d: %s\n", em.c_str(), face.isVibing(), text.c_str());
     speak(text, false, em);
     emotionHoldUntil = millis() + 8000;
     lastActivityMs = millis();
@@ -329,6 +393,27 @@ static void playMusicTask(void *arg) {
   vTaskDelete(nullptr);
 }
 
+struct StoryTaskArgs {
+  String storyId;
+  String title;
+};
+
+static void playStoryTask(void *arg) {
+  auto *a = static_cast<StoryTaskArgs *>(arg);
+  playStory(a->storyId, a->title);
+  delete a;
+  g_storyTaskHandle = nullptr;
+  vTaskDelete(nullptr);
+}
+
+static void startStoryAsync(const String &storyId, const String &title) {
+  if (g_storyTaskHandle || g_musicTaskHandle) return;
+  g_storyId = storyId;
+  g_storyTitle = title;
+  auto *a = new StoryTaskArgs{storyId, title};
+  xTaskCreatePinnedToCore(playStoryTask, "story", 32768, a, 5, &g_storyTaskHandle, 1);
+}
+
 static void startMusicAsync() {
   if (g_musicTaskHandle) return;
   auto *a = new MusicTaskArgs{g_musicVideoId, g_musicTitle};
@@ -345,13 +430,35 @@ void queueMusicPlay(const String &videoId, const String &title) {
   g_musicPlayPending = true;
   Serial.printf("Music queued: %s (%s)\n", g_musicVideoId.c_str(), g_musicTitle.c_str());
   face.setEmotion(Emotion::Happy);
-  MusicScreen::drawNowPlaying(gfx, String("En cola: ") + g_musicTitle, g_settings.volume);
+  face.setTopTitle(String("En cola: ") + g_musicTitle);
   face.update();
 }
 
 void requestMusicStop() {
   g_musicStopRequested = true;
   g_musicPlayPending = false;
+}
+
+// Physical-touch feelings (instant, no LLM): petting him = tender; poking/hitting = startled.
+void touchCaress() {
+  Serial.println("touch: caress -> love");
+  face.setEmotion(Emotion::Love);
+  face.setTopTitle("");
+  face.update();
+  playSoundEffect("laugh");
+  emotionHoldUntil = millis() + 2600;
+  lastActivityMs = millis();
+}
+
+void touchHit() {
+  Serial.println("touch: hit -> angry + shake");
+  face.setEmotion(Emotion::Angry);
+  face.setTopTitle("");
+  face.shake();
+  face.update();
+  playSoundEffect("glitch");
+  emotionHoldUntil = millis() + 1800;
+  lastActivityMs = millis();
 }
 
 namespace {
@@ -452,19 +559,20 @@ static uint8_t pcmToMouthLevel(const int16_t *samples, size_t nSamples) {
     sumSq += (int64_t)s * s;
   }
   float rms = sqrtf((float)sumSq / (float)nSamples);
-  if (rms < 160.0f && peak < 650) return 0;
+  if (rms < 90.0f && peak < 380) return 0;
 
   float pk = sqrtf((float)peak);
   float rm = sqrtf(rms);
-  float pkN = (pk - 5.5f) / 40.0f;
-  float rmN = (rm - 9.0f) / 36.0f;
+  float pkN = (pk - 3.5f) / 26.0f;
+  float rmN = (rm - 5.0f) / 26.0f;
   if (pkN < 0.0f) pkN = 0.0f;
   if (rmN < 0.0f) rmN = 0.0f;
   if (pkN > 1.0f) pkN = 1.0f;
   if (rmN > 1.0f) rmN = 1.0f;
 
-  float mix = pkN * 0.8f + rmN * 0.2f;
-  float levelF = powf(mix, 0.58f) * 100.0f;
+  float mix = pkN * 0.88f + rmN * 0.12f;
+  float levelF = powf(mix, 0.38f) * 100.0f;
+  levelF = fminf(100.0f, levelF * 1.35f);
   int32_t level = (int32_t)(levelF + 0.5f);
   if (level < 0) level = 0;
   if (level > 100) level = 100;
@@ -521,7 +629,55 @@ size_t playHttpPcmStream(HTTPClient &http, WiFiClient *stream, int remaining, bo
   static constexpr size_t kLowWater = 49152;      // ~1.5 s mínimo
   static constexpr size_t kHighWater = 262144;   // ~8 s objetivo
   static constexpr size_t kIoChunk = 2048;       // ~64 ms por tick I2S
-  static constexpr uint32_t kMouthFrameMs = 16;
+  static constexpr size_t kFacePumpChunk = 512;  // 256 muestras @ 16 kHz (~16 ms)
+
+  auto spectroPlayback = [&]() -> bool {
+    return enjoyMusic || (face.isVibing() && face.isTalking());
+  };
+  // 30 fps durante audio. Más alto (83 fps) bloquea el DMA I2S → underrun (golpe).
+  // Story mode 3 usa 10 000 ms para diagnosticar si face.update() es la causa del golpe.
+  const uint32_t kMouthFrameMs =
+      (g_storyActive && g_settings.storyPlayMode == 3) ? 10000u : 33u;
+
+  auto pumpFaceIfDue = [&]() {
+    if (millis() - lastMouthUpdate >= kMouthFrameMs) {
+      storyTickEmotions();
+      face.update();
+      lastMouthUpdate = millis();
+    }
+  };
+
+  // I2S write con yield: evita congelar pantalla cuando el DMA está lleno.
+  auto playMonoYield = [&](const uint8_t *data, size_t bytes) -> size_t {
+    bytes &= ~1u;
+    if (bytes < 2 || !g_i2sTxRunning) return 0;
+    size_t total = 0;
+    while (total < bytes && !g_musicStopRequested) {
+      if (g_storyActive && g_storyPlayStart == 0) g_storyPlayStart = millis();
+      if (g_storyAmpPending) {
+        digitalWrite(PIN_SPK_EN, LOW);
+        g_storyAmpPending = false;
+      }
+      size_t want = min(bytes - total, kFacePumpChunk);
+      want &= ~1u;
+      if (want < 2) break;
+      size_t n = i2s.write(data + total, want);
+      if (n == 0) {
+        face.update();
+        lastMouthUpdate = millis();
+        g_webAdmin.loop();
+        delay(1);
+        continue;
+      }
+      if (n >= 2) {
+        if (singingMode) face.feedPlaybackMouth(100);
+        else face.feedPlaybackPcm((const int16_t *)(data + total), n / 2);
+      }
+      total += n;
+      pumpFaceIfDue();
+    }
+    return total;
+  };
 
   auto applyFadeIn = [&](int16_t *samples, size_t count) {
     for (size_t i = 0; i < count && fadePos < kFadeSamples; i++, fadePos++) {
@@ -537,7 +693,7 @@ size_t playHttpPcmStream(HTTPClient &http, WiFiClient *stream, int remaining, bo
       uint8_t pair[2] = {pcmCarry, p[0]};
       int16_t *s = (int16_t *)pair;
       if (useFade) applyFadeIn(s, 1);
-      written += playMonoPcm16(i2s, pair, 2, blockI2s);
+      written += blockI2s ? playMonoYield(pair, 2) : playMonoPcm16(i2s, pair, 2, false);
       p += 1;
       len -= 1;
       hasCarry = false;
@@ -552,7 +708,7 @@ size_t playHttpPcmStream(HTTPClient &http, WiFiClient *stream, int remaining, bo
         int16_t *samples = (int16_t *)p;
         applyFadeIn(samples, len / 2);
       }
-      written += playMonoPcm16(i2s, p, len, blockI2s);
+      written += blockI2s ? playMonoYield(p, len) : playMonoPcm16(i2s, p, len, false);
     }
     return written;
   };
@@ -578,7 +734,7 @@ size_t playHttpPcmStream(HTTPClient &http, WiFiClient *stream, int remaining, bo
     if (pcmLen == 0) return true;
 
     if (titleOnFirstPcm && !showedTitle) {
-      MusicScreen::drawTitle(gfx, *titleOnFirstPcm);
+      face.setTopTitle(*titleOnFirstPcm);
       face.setTalking(true);
       if (singingMode) {
         face.setSinging(true);
@@ -587,10 +743,6 @@ size_t playHttpPcmStream(HTTPClient &http, WiFiClient *stream, int remaining, bo
       face.update();
       showedTitle = true;
     }
-    if (!singingMode && !enjoyMusic && pcmLen >= 2) {
-      const int16_t *samples = (const int16_t *)(netBuf + pcmOff);
-      face.setMouthAmplitude(pcmToMouthLevel(samples, pcmLen / 2));
-    }
 
     size_t pushed = 0;
     while (pushed < pcmLen) {
@@ -598,7 +750,9 @@ size_t playHttpPcmStream(HTTPClient &http, WiFiClient *stream, int remaining, bo
       if (chunk == 0) break;
       ringPush(netBuf + pcmOff + pushed, chunk);
       pushed += chunk;
+      pumpFaceIfDue();
     }
+    pumpFaceIfDue();
     return true;
   };
 
@@ -607,34 +761,45 @@ size_t playHttpPcmStream(HTTPClient &http, WiFiClient *stream, int remaining, bo
     for (int i = 0; i < 12 && ringFree() >= kIoChunk; i++) {
       if (pumpNetwork()) got = true;
       else break;
+      pumpFaceIfDue();
     }
     return got;
   };
 
   auto playFromRing = [&](bool useFade) {
     while (ringCount >= kIoChunk && !g_musicStopRequested) {
+      // Rellenar la red MIENTRAS se drena el ring (productor+consumidor en el mismo loop):
+      // evita la fase "vaciar todo y luego leer red" que dejaba el DMA I2S sin datos y
+      // provocaba el golpe rítmico (underrun) en música/historia.
+      if (ringCount < kHighWater) pumpNetwork();
       size_t n = ringPop(playBuf, min(sizeof(playBuf), ringCount));
       if (n > 0) pcmWritten += writePcmAligned(playBuf, n, useFade, true);
+      pumpFaceIfDue();
     }
     if (ringCount >= 2 && !g_musicStopRequested) {
       size_t n = ringPop(playBuf, ringCount & ~1u);
       if (n > 0) pcmWritten += writePcmAligned(playBuf, n, useFade, true);
+      pumpFaceIfDue();
     }
   };
 
   while (http.connected() && (remaining > 0 || remaining == -1)) {
     if (g_musicStopRequested) break;
 
-    if (enjoyMusic && primed && ringCount < kHighWater) pumpNetworkBurst();
+    if (spectroPlayback() && primed && ringCount < kHighWater) pumpNetworkBurst();
 
-    while (ringCount < kLowWater && pumpNetwork()) {}
+    while (ringCount < kLowWater && pumpNetwork()) {
+      pumpFaceIfDue();
+    }
 
     if (!primed) {
-      while (ringCount < kPrimeBytes && pumpNetwork()) {}
+      while (ringCount < kPrimeBytes && pumpNetwork()) {
+        pumpFaceIfDue();
+      }
       if (ringCount < kPrimeBytes && stream->available() == 0 && !stream->connected()) break;
       if (ringCount < kPrimeBytes && stream->available() == 0) {
         g_webAdmin.loop();
-        if (!enjoyMusic) face.update();
+        pumpFaceIfDue();
         delay(1);
         if (!stream->connected() && stream->available() == 0) break;
         continue;
@@ -646,6 +811,7 @@ size_t playHttpPcmStream(HTTPClient &http, WiFiClient *stream, int remaining, bo
       if (primed) {
         for (int retry = 0; retry < 32 && ringCount == 0; retry++) {
           pumpNetwork();
+          pumpFaceIfDue();
           if (ringCount > 0) break;
           delay(1);
         }
@@ -657,14 +823,17 @@ size_t playHttpPcmStream(HTTPClient &http, WiFiClient *stream, int remaining, bo
       if (!pumpNetwork()) {
         if (!stream->connected() && stream->available() == 0) break;
         g_webAdmin.loop();
+        pumpFaceIfDue();
         delay(1);
         continue;
       }
       if (ringCount == 0) continue;
     }
 
-    if (enjoyMusic) {
-      while (ringCount < kLowWater && pumpNetwork()) {}
+    if (spectroPlayback()) {
+      while (ringCount < kLowWater && pumpNetwork()) {
+        pumpFaceIfDue();
+      }
       playFromRing(false);
     } else {
       size_t n = ringPop(playBuf, min(sizeof(playBuf), ringCount));
@@ -672,18 +841,41 @@ size_t playHttpPcmStream(HTTPClient &http, WiFiClient *stream, int remaining, bo
     }
 
     g_webAdmin.loop();
-    if (millis() - lastMouthUpdate > kMouthFrameMs) {
-      face.update();
-      lastMouthUpdate = millis();
-    }
+    pumpFaceIfDue();
   }
 
-  // Vaciar ring al final
+  // Vaciar ring al final — fade-out suave (evita golpe al cortar I2S/amp en historia/TTS)
+  static constexpr size_t kFadeOutSamples = 2400;  // ~150 ms @ 16 kHz
+  const size_t tailSampleCount = ringCount / 2;
+  size_t tailSamplePos = 0;
   while (ringCount > 0) {
     size_t n = ringPop(playBuf, min(sizeof(playBuf), ringCount));
-    if (n > 0) pcmWritten += writePcmAligned(playBuf, n, !enjoyMusic, true);
+    if (n >= 2) {
+      int16_t *samples = (int16_t *)playBuf;
+      const size_t ns = n / 2;
+      for (size_t i = 0; i < ns; i++, tailSamplePos++) {
+        const size_t fromEnd = (tailSampleCount > tailSamplePos)
+                                   ? (tailSampleCount - tailSamplePos - 1)
+                                   : 0;
+        if (fromEnd < kFadeOutSamples) {
+          const float g = (float)fromEnd / (float)kFadeOutSamples;
+          samples[i] = (int16_t)(samples[i] * g);
+        }
+      }
+      pcmWritten += writePcmAligned(playBuf, n, false, true);
+    }
+    pumpFaceIfDue();
   }
   if (hasCarry) hasCarry = false;
+
+  // Vaciar DMA I2S con silencio antes de apagar TX (evita click de corte)
+  if (pcmWritten > 0 && g_i2sTxRunning && !g_musicStopRequested) {
+    static int16_t silence[512];
+    memset(silence, 0, sizeof(silence));
+    for (int i = 0; i < 10; i++) {
+      playMonoYield((const uint8_t *)silence, sizeof(silence));
+    }
+  }
 
   return pcmWritten;
 }
@@ -739,6 +931,8 @@ void setup() {
   applySettingsGlobals(g_settings, g_wakePhraseIdx, g_voiceWakeEnabled, g_idleRemarksEnabled);
   face.setVibingMicGain(g_settings.vibingMic);
   face.setVibingRange(g_settings.vibingFloor, g_settings.vibingCeil);
+  face.setMouthAnim(g_settings.mouthAnim);
+  face.setSpeechCaptionMode(g_settings.speechCaption);
   codec.setPlaybackVolumePercent(g_settings.volume);
   syncWakeNetFromSettings();
   g_webAdmin.begin(g_settings, codec, g_wakePhraseIdx, g_voiceWakeEnabled, g_idleRemarksEnabled);
@@ -759,16 +953,17 @@ void setup() {
   }
 
   updateWakeHint();
-  Serial.println("Ready - web admin + touch");
+  Serial.printf("Ready - web admin + touch  build=%s\n", FIRMWARE_BUILD_ID);
   lastActivityMs = millis();
 }
 
 void loop() {
+  face.setMouthAnim(g_settings.mouthAnim);  // keep the talking-mouth style in sync (web admin/menu)
   // Mientras hay tarea de música, ella dibuja la UI (prefetch); durante el stream
   // solo STOP/volumen desde aquí — evita dos hilos tocando SPI (rayas en pantalla).
-  if (g_musicTaskHandle) {
+  if (g_musicTaskHandle || g_storyTaskHandle) {
     g_webAdmin.loop();
-    if (g_musicStreaming) {
+    if (g_musicTaskHandle && g_musicStreaming) {
       static uint32_t lastTouchMs = 0;
       if (millis() - lastTouchMs >= 80) {
         lastTouchMs = millis();
@@ -791,20 +986,27 @@ void loop() {
 
       // Gesto vibing: espectrograma en boca según micrófono ambiente.
       static uint32_t lastVibingMic = 0;
-      if (face.isVibing() && millis() - lastVibingMic > 25) {
+      if (face.isVibing() && millis() - lastVibingMic > 16) {
         lastVibingMic = millis();
         uint8_t bands[12];
         pauseWakeListener(false);
-        uint32_t peak = recorder.captureVibingBands(i2s, bands, 12, 45);
+        uint32_t peak = recorder.captureVibingBands(i2s, bands, 12, 32);
         resumeWakeListener();
         face.setVibingSpectrum(bands, 12, peak);
         lastActivityMs = millis();
       }
 
-      // Touch: a SHORT tap on the gear opens Settings, a short tap anywhere else wakes.
-      // A LONG press (>700 ms) ANYWHERE also opens Settings — a mapping-independent
-      // fallback so config is reachable even before the touch X/Y is calibrated. The
-      // "tap screen=(x,y)" log lets us calibrate the gear hit-zone from the serial.
+      // Deferred wake: a single tap fires Listening only after a short window passes with
+      // no second tap (so a quick double-tap can be read as a "hit" instead).
+      if (g_wakePending && millis() >= g_wakePendingAt) {
+        g_wakePending = false;
+        face.clearMicLevel();
+        state = State::Listening;
+        break;
+      }
+
+      // Touch gestures: gear -> Settings; long-press -> Settings; swipe on his face ->
+      // caress; quick double-tap on his face -> hit; single tap -> wake (deferred above).
       static bool pressing = false, longHandled = false;
       static uint32_t pressStart = 0;
       static int pressX = 0, pressY = 0;
@@ -825,12 +1027,23 @@ void loop() {
           }
         } else {                           // finger released
           pressing = false;
-          if (!longHandled) {              // short tap
-            if (Face::gearHit(pressX, pressY, gfx.width()) || Face::gearHit(lastX, lastY, gfx.width())) {
+          if (!longHandled) {              // short gesture
+            int moved = abs(lastX - pressX) + abs(lastY - pressY);
+            bool gear = Face::gearHit(pressX, pressY, gfx.width()) || Face::gearHit(lastX, lastY, gfx.width());
+            bool onBody = Face::bodyHit(pressX, pressY, gfx.width());
+            static uint32_t lastBodyTapMs = 0;
+            if (gear) {
               openSettings();
+            } else if (onBody && moved > 34) {
+              touchCaress();                 // swipe across his face -> caress
+            } else if (onBody && (millis() - lastBodyTapMs) < 380) {
+              lastBodyTapMs = 0;
+              g_wakePending = false;
+              touchHit();                    // quick second tap -> got hit/poked
             } else {
-              face.clearMicLevel();
-              state = State::Listening;
+              lastBodyTapMs = millis();
+              g_wakePending = true;          // single tap -> wake after the double-tap window
+              g_wakePendingAt = millis() + 380;
             }
           }
         }
@@ -961,15 +1174,21 @@ void loop() {
           playSoundEffect(soundEffect.c_str());
           delay(150);
         }
-        face.setEmotion(emotionFromString(emotion));
+        if (!face.isVibing()) {
+          face.setEmotion(emotionFromString(emotion));
+        }
         if (reply.length() > 0) {
-          face.showText(reply);
+          face.showText("");
         } else {
           face.showText("");
         }
         face.update();
         if (doSpeak && reply.length() > 0) {
           speak(reply, sing, emotion);
+        } else if (g_musicPlayPending) {
+          face.setEmotion(Emotion::Happy);
+          face.update();
+          Serial.println("Music queued from voice — starting playback");
         } else {
           Serial.println("Silent ignore — no TTS");
           emotionHoldUntil = 0;
@@ -1104,13 +1323,14 @@ void speak(const String &text, bool sing, const String &emotion) {
       return;
     }
 
-    face.showText(text);
+    face.beginReplyCaption(text);
     face.setTalking(true);
     if (sing) {
       face.setSinging(true);
       face.setEmotion(Emotion::Happy);
       face.setMouthAmplitude(100);
     }
+    // Mantener vibing durante TTS (ecualizador espejo); solo canto fuerza happy.
     face.update();
     digitalWrite(PIN_SPK_EN, LOW);
 
@@ -1167,7 +1387,7 @@ static bool waitMusicPrefetchReady(const String &videoId, const String &label) {
       }
       http.end();
     }
-    MusicScreen::drawNowPlaying(gfx, String("Esperando PC... ") + label, g_settings.volume);
+    face.setTopTitle(String("Esperando PC... ") + label);
     face.update();
     vTaskDelay(pdMS_TO_TICKS(500));
   }
@@ -1194,7 +1414,7 @@ void playMusic(const String &videoId, const String &title) {
   g_musicPlaying = true;
 
   face.setEmotion(Emotion::Happy);
-  MusicScreen::drawNowPlaying(gfx, String("Esperando PC... ") + label, g_settings.volume);
+  face.setTopTitle(String("Esperando PC... ") + label);
   face.update();
 
   if (!waitMusicPrefetchReady(videoId, label)) {
@@ -1262,10 +1482,12 @@ void playMusic(const String &videoId, const String &title) {
     return;
   }
 
-  face.setTalking(false);
-  face.setSinging(false);
-  face.setEmotion(Emotion::Happy);
-  MusicScreen::drawNowPlaying(gfx, label, g_settings.volume);
+  // Modo música = cara Vibing: boca espectrograma reactiva al PCM + notas musicales
+  // flotando (igual que el gesto vibing). El título va en el sprite (doble búfer).
+  face.setEmotion(Emotion::Vibing);
+  face.setTalking(true);
+  face.setTopTitle(label);
+  MusicScreen::drawControls(gfx, g_settings.volume);
   face.update();
   digitalWrite(PIN_SPK_EN, LOW);
 
@@ -1279,6 +1501,8 @@ void playMusic(const String &videoId, const String &title) {
   http.end();
 
   face.setTalking(false);
+  face.setEmotion(Emotion::Neutral);
+  face.clearTopTitle();
   face.update();
   endPlayback(i2s);
   g_musicPlaying = false;
@@ -1293,6 +1517,113 @@ void playMusic(const String &videoId, const String &title) {
     updateWakeHint();
   }
   g_musicStopRequested = false;
+  delay(400);
+  wakeIgnoreUntil = millis() + WAKE_COOLDOWN_MS;
+  resumeWakeListener();
+}
+
+void playStory(const String &storyId, const String &title) {
+  pauseWakeListener();
+
+  if (WiFi.status() != WL_CONNECTED) {
+    face.showText("WiFi perdido", TFT_RED);
+    face.update();
+    resumeWakeListener();
+    return;
+  }
+
+  const String label = title.length() > 0 ? title : storyId;
+  g_storyCueNext = 0;
+  if (g_storyCueCount > 0) face.setEmotion(g_storyCues[0].emotion);
+  face.setTalking(true);
+  face.setTopTitle(label);
+  face.update();
+
+  HTTPClient http;
+  WiFiClient client;
+  client.setTimeout((uint32_t)MUSIC_HTTP_TIMEOUT_MS);
+  http.setReuse(false);
+  http.setConnectTimeout(30000);
+  http.setTimeout((int32_t)MUSIC_HTTP_TIMEOUT_MS);
+  // HTTP/1.1 + Content-Length (server sends Response, not StreamingResponse).
+  // Con HTTP/1.0 uvicorn podía responder en HTTP/1.1 chunked; los chunk headers
+  // se interpretaban como PCM y causaban el golpe rítmico cada 16 KB.
+
+  const String url = String(BRAIN_SERVER_URL) + "/story/play?id=" + storyId;
+  Serial.printf("STORY GET %s\n", url.c_str());
+  if (!http.begin(client, url)) {
+    face.showText("Historia: error HTTP", TFT_RED);
+    face.update();
+    resumeWakeListener();
+    return;
+  }
+  http.addHeader("Connection", "close");
+  addBrainDeviceHeaders(http);
+
+  const int code = http.GET();
+  Serial.printf("STORY GET code=%d len=%d\n", code, http.getSize());
+  if (code != 200) {
+    const String err = http.getString();
+    Serial.printf("story error: %d %s\n", code, err.c_str());
+    face.showText(code < 0 ? "Historia error red" : "Historia fallo", TFT_RED);
+    face.update();
+    http.end();
+    resumeWakeListener();
+    return;
+  }
+
+  WiFiClient *stream = http.getStreamPtr();
+  if (stream) stream->setTimeout((uint32_t)MUSIC_HTTP_TIMEOUT_MS);
+  const int remaining = http.getSize() <= 0 ? -1 : http.getSize();
+
+  preparePlayback(i2s);
+  if (!g_i2sTxRunning) {
+    http.end();
+    face.showText("Error audio TX", TFT_RED);
+    endPlayback(i2s);
+    resumeWakeListener();
+    return;
+  }
+
+  // storyPlayMode test variants (selectable from web admin):
+  //   0 (baseline) : rawPcm=true, enjoyMusic=true,  amp deferred inside write
+  //   1 (tts-like) : rawPcm=true, enjoyMusic=false, amp explicit before stream
+  //   2 (mus+amp)  : rawPcm=true, enjoyMusic=true,  amp explicit before stream
+  //   3 (no-face)  : rawPcm=true, enjoyMusic=true,  amp explicit, face update c/10s
+  //                  DIAGNOSTIC: si mode 3 no tiene golpe → face.update() es el culpable
+  const uint8_t sMode     = g_settings.storyPlayMode;
+  const bool useRawPcm    = true;
+  const bool useEnjoyMus  = (sMode != 1);
+  const bool ampDeferred  = (sMode == 0);
+
+  g_storyActive = true;
+  g_storyPlayStart = 0;
+  g_storyAmpPending = ampDeferred;
+
+  if (!ampDeferred) {
+    digitalWrite(PIN_SPK_EN, LOW);  // modes 1-3: enable amp before stream (like music/tts)
+  }
+
+  Serial.printf("STORY mode=%u rawPcm=%d enjoyMus=%d ampEarly=%d\n",
+                sMode, useRawPcm, useEnjoyMus, !ampDeferred);
+
+  const size_t pcmWritten =
+      playHttpPcmStream(http, stream, remaining, false, false, nullptr,
+                        useRawPcm, nullptr, useEnjoyMus);
+
+  delay(20);
+  digitalWrite(PIN_SPK_EN, HIGH);
+  http.end();
+
+  g_storyActive = false;
+  storyClearCues();
+  face.setTalking(false);
+  face.setEmotion(Emotion::Neutral);
+  face.clearTopTitle();
+  face.showText("");
+  face.update();
+  endPlayback(i2s);
+  Serial.printf("story played %u bytes PCM\n", pcmWritten);
   delay(400);
   wakeIgnoreUntil = millis() + WAKE_COOLDOWN_MS;
   resumeWakeListener();
@@ -1352,6 +1683,15 @@ bool askBrain(const uint8_t *wav, size_t size, String &emotion, String &reply,
   sing = doc["sing"] | false;
   doSpeak = doc["speak"] | true;
   soundEffect = doc["sound_effect"] | "none";
+  // Smart speaker: the brain resolved a song to play -> stream it instead of speaking.
+  String musicId = doc["music"]["video_id"] | "";
+  if (musicId.length() > 0) {
+    String musicTitle = doc["music"]["title"] | "";
+    Serial.printf("Music intent -> %s (%s)\n", musicTitle.c_str(), musicId.c_str());
+    queueMusicPlay(musicId, musicTitle);
+    doSpeak = false;
+    reply = "";
+  }
   Serial.printf("Heard: %s\nReply [%s] speak=%d sing=%d sfx=%s: %s\n",
                 doc["heard"].as<const char *>(), emotion.c_str(), doSpeak, sing,
                 soundEffect.c_str(), reply.c_str());
@@ -1415,11 +1755,21 @@ void pollDevCommand() {
     String em = cmd["emotion"] | "happy";
     if (text.length() == 0) return;
     face.setEmotion(emotionFromString(em));
-    face.showText(text);
     face.update();
     Serial.printf("dev speak [%s]: %s\n", em.c_str(), text.c_str());
     speak(text, false, em);
     emotionHoldUntil = millis() + 8000;
+    return;
+  }
+
+  if (strcmp(type, "story") == 0) {
+    String sid = cmd["story_id"] | "";
+    String title = cmd["title"] | "";
+    if (sid.length() == 0) return;
+    JsonArray timeline = cmd["timeline"].as<JsonArray>();
+    if (!timeline.isNull()) storyLoadCues(timeline);
+    Serial.printf("dev story: %s (%s) cues=%d\n", sid.c_str(), title.c_str(), g_storyCueCount);
+    startStoryAsync(sid, title);
   }
 }
 
@@ -1449,7 +1799,6 @@ void proactiveIdleRemark() {
 
   Serial.printf("idle remark [%s]: %s\n", emotion.c_str(), reply.c_str());
   face.setEmotion(emotionFromString(emotion));
-  face.showText(reply);
   face.update();
   if (doSpeak) speak(reply, sing, emotion);
   emotionHoldUntil = millis() + 8000;
@@ -1463,6 +1812,7 @@ void openSettings() {
 
   applySettingsGlobals(g_settings, g_wakePhraseIdx, g_voiceWakeEnabled, g_idleRemarksEnabled);
   syncWakeNetFromSettings();
+  applyDeviceUiSettings(g_settings);
   codec.setPlaybackVolumePercent(g_settings.volume);
   Serial.printf("Settings saved: vol=%u%% voiceWake=%d phrase='%s' idle=%d\n",
                 g_settings.volume, g_settings.voiceWake, WAKE_PRESET_LABELS[g_wakePhraseIdx],

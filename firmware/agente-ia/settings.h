@@ -20,9 +20,12 @@ struct AppSettings {
 #endif
   uint8_t phraseIdx = 0;
   bool idleRemarks = ENABLE_IDLE_REMARKS;
+  uint8_t mouthAnim = 0;         // talking mouth style: 0 bars, 1 waves, 2 lips
+  uint8_t speechCaption = 0;     // 0 off, 1 karaoke, 2 ascii plain
   uint8_t vibingMic = 150;       // gain % (50–300)
   uint16_t vibingFloor = 100;    // piso ruido 0–500 (raw tras gain)
   uint16_t vibingCeil = 500;     // techo 200–900 (raw tras gain = barras al máximo)
+  uint8_t storyPlayMode = 0;     // story audio test: 0=current,1=tts-like,2=music+amp,3=wav-mode
 };
 
 inline void loadSettings(AppSettings &s) {
@@ -38,7 +41,13 @@ inline void loadSettings(AppSettings &s) {
 #endif
   s.phraseIdx = p.getUChar("phrase", s.phraseIdx);
   s.idleRemarks = p.getBool("idle", s.idleRemarks);
+  s.mouthAnim = p.getUChar("manim", s.mouthAnim);
+  if (s.mouthAnim > 2) s.mouthAnim = 0;
+  s.speechCaption = p.getUChar("scap", s.speechCaption);
+  if (s.speechCaption > 2) s.speechCaption = 0;
   s.vibingMic = p.getUChar("vmic", s.vibingMic);
+  s.storyPlayMode = p.getUChar("spm", 0);
+  if (s.storyPlayMode > 3) s.storyPlayMode = 0;
   {
     uint16_t flo = p.getUShort("vflo", 0);
     uint16_t cei = p.getUShort("vcei", 0);
@@ -76,9 +85,12 @@ inline void saveSettings(const AppSettings &s) {
 #endif
   p.putUChar("phrase", s.phraseIdx);
   p.putBool("idle", s.idleRemarks);
+  p.putUChar("manim", s.mouthAnim);
+  p.putUChar("scap", s.speechCaption);
   p.putUChar("vmic", s.vibingMic);
   p.putUShort("vflo", s.vibingFloor);
   p.putUShort("vcei", s.vibingCeil);
+  p.putUChar("spm", s.storyPlayMode);
   p.end();
 }
 
