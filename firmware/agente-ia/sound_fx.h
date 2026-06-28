@@ -33,38 +33,21 @@ inline bool initSoundFx() {
   }
   Serial.printf("Partition '%s' @ 0x%x size %u KB\n", label, part->address, part->size / 1024);
 
-  if (esp_spiffs_mounted(label)) {
-    SPIFFS.end();
-  }
+  // Unmount cleanly if already registered via low-level API (leaves _mountpoint null).
+  if (esp_spiffs_mounted(label)) SPIFFS.end();
 
-  // Never format 7 MB on boot — esp_spiffs_format() blocks minutes with no Serial output.
-  // Upload WAVs with upload_spiffs.ps1 instead.
-  esp_vfs_spiffs_conf_t conf = {};
-  conf.base_path = "/spiffs";
-  conf.partition_label = label;
-  conf.max_files = 10;
-  conf.format_if_mount_failed = false;
-
-  esp_err_t err = esp_vfs_spiffs_register(&conf);
-  if (err != ESP_OK) {
+  // SPIFFS.begin() mounts AND sets _mountpoint so SPIFFS.open() works.
+  // formatOnFail=false avoids the multi-minute blocking format on a 7 MB partition.
+  if (!SPIFFS.begin(false, "/spiffs", 10, label)) {
     Serial.printf(
-      "SPIFFS mount failed: %s (%d)\n"
-      "  -> Reflashear imagen: firmware/agente-ia/upload_spiffs.ps1\n"
-      "  (efectos desactivados; el resto sigue)\n",
-      esp_err_to_name(err), err);
-    return false;
-  }
-
-  size_t total = 0, used = 0;
-  err = esp_spiffs_info(label, &total, &used);
-  if (err != ESP_OK) {
-    Serial.printf("SPIFFS info failed: %s\n", esp_err_to_name(err));
-    esp_vfs_spiffs_unregister(label);
+      "SPIFFS mount failed (label='%s').\n"
+      "  -> Re-flash: esptool write_flash 0x610000 firmware/agente-ia/spiffs.bin\n",
+      label);
     return false;
   }
 
   g_soundFxReady = true;
-  Serial.printf("SPIFFS OK (%u / %u bytes)\n", used, total);
+  Serial.printf("SPIFFS OK (%u / %u bytes)\n", SPIFFS.usedBytes(), SPIFFS.totalBytes());
   return true;
 }
 
