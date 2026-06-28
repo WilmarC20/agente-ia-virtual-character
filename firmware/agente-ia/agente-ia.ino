@@ -1768,6 +1768,8 @@ void pollDevCommand() {
     face.showText("");
     face.update();
     Serial.printf("dev face: %s bored=%d hold=%ums\n", em.c_str(), (bool)cmd["bored"], hold);
+    const char *sfx = devEmotionSound(em);
+    if (sfx) playSoundEffect(sfx);
     return;
   }
 
