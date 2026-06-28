@@ -1402,11 +1402,6 @@ private:
 
   void drawMouthGrid(const MouthCfg &m) {
     const bool anim = _talking || _singing || _mouthAmpSmooth > 2.0f;
-    if (!anim && (_emotion == Emotion::Angry || _emotion == Emotion::Neutral ||
-                  _emotion == Emotion::Thinking || _emotion == Emotion::Confused)) {
-      drawMouthGridProcedural(m);
-      return;
-    }
     drawLedMouthForEmotion(_emotion, anim, m);
   }
 
