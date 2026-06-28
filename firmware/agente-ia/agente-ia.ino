@@ -1138,11 +1138,13 @@ void loop() {
         face.setEmotion(Emotion::Surprised);
         face.update();
         face.showText("Te escucho...", TFT_GREEN);
+        face.setListening(true);
       }
 
       pauseWakeListener();
       if (!usePendingWake) {
         rec = recorder.record(i2s, onMicLevel);
+        face.setListening(false);
         face.clearMicLevel();
       }
 
