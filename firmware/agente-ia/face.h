@@ -1054,18 +1054,23 @@ private:
   }
 
   void drawLedMouthForEmotion(Emotion e, bool animate, const MouthCfg &m) {
-    float bow = m.bow * 0.08f;
+    float bow = 0.0f;
     int segs = 7;
     switch (e) {
-      case Emotion::Angry: segs = 5; bow = -0.12f; break;
-      case Emotion::Sad: bow = -0.22f; break;
+      case Emotion::Neutral:   segs = 7; bow =  0.10f; break; // calm hint of a smile
       case Emotion::Happy:
       case Emotion::Excited:
-      case Emotion::Love: bow = 0.28f; break;
-      case Emotion::Sleepy: segs = 6; bow = -0.08f; break;
-      case Emotion::Surprised: segs = 8; bow = 0.05f; break;
-      case Emotion::Vibing: segs = 7; bow = 0.30f; break;
-      default: break;
+      case Emotion::Love:      segs = 9; bow =  0.40f; break; // wide open smile
+      case Emotion::Sad:       segs = 6; bow = -0.30f; break; // deep frown
+      case Emotion::Angry:     segs = 4; bow = -0.25f; break; // tight aggressive frown
+      case Emotion::Surprised: segs = 9; bow =  0.10f; break; // wide, slightly open
+      case Emotion::Thinking:  segs = 6; bow = -0.10f; break; // pondering frown
+      case Emotion::Sleepy:    segs = 5; bow = -0.14f; break; // heavy droopy frown
+      case Emotion::Cool:      segs = 5; bow =  0.22f; break; // confident smirk
+      case Emotion::Confused:  segs = 8; bow =  0.04f; break; // wide, puzzled
+      case Emotion::Dizzy:     segs = 6; bow = -0.20f; break; // wonky frown
+      case Emotion::Vibing:    segs = 7; bow =  0.30f; break;
+      default:                 segs = 7; bow =  0.08f; break;
     }
     drawLedMouth(animate, bow, segs);
   }
