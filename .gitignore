@@ -24,3 +24,10 @@ server/__pycache__/
 # Scratch / temp
 tmp/
 *.log
+
+# Local-only paths
+docs/marketing/
+docs/agenteia-manual/
+docs/linkedin-teaser-espectativa.md
+scripts/build-marketing.py
+scripts/build-manual-pdf.py
