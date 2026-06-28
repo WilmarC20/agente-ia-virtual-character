@@ -2472,7 +2472,6 @@ async def converse(request: Request):
             track = await _resolve_music_track(mq)
             if track:
                 log.info("music command '%s' -> %s (%s)", mq, track["title"], track["video_id"])
-                music.prefetch_pcm_stream(track["video_id"])
                 return {
                     "emotion": "happy", "reply": "", "heard": text, "sing": False,
                     "speak": False, "sound_effect": "none", "music": track,
