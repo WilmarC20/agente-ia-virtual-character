@@ -1434,12 +1434,6 @@ void playMusic(const String &videoId, const String &title) {
   face.setTopTitle(String("Esperando PC... ") + label);
   face.update();
 
-  if (!waitMusicPrefetchReady(videoId, label)) {
-    g_musicPlaying = false;
-    resumeWakeListener();
-    return;
-  }
-
   HTTPClient http;
   WiFiClient client;
   client.setNoDelay(true);
