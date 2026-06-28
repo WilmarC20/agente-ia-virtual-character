@@ -207,22 +207,26 @@
     }
   }
 
-  function drawHappyClosedEye(ctx, cx, cy, r) {
+  function drawHappyClosedEye(ctx, cx, cy, r, squint = 0, ampLift = 0) {
     ctx.strokeStyle = INK;
     ctx.lineWidth = 2;
+    const arcH = 0.34 * (1 - squint * 0.58);
+    const arcW = 0.82 * (1 - squint * 0.06);
+    const yBase = 6 - (ampLift * 4 + squint * 3);
     for (let w = 0; w < 2; w++) {
       ctx.beginPath();
       for (let i = 0; i <= 14; i++) {
         const u = i / 14;
         const a = Math.PI * (0.12 + u * 0.76);
-        const x = cx + Math.cos(a) * r * 0.82;
-        const y = cy + Math.sin(a) * r * 0.34 + 6 + w;
+        const x = cx + Math.cos(a) * r * arcW;
+        const y = cy + Math.sin(a) * r * arcH + yBase + w;
         if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
       ctx.stroke();
     }
   }
 
+  const VIB_MOUTH_X0 = 70, VIB_MOUTH_X1 = 250, VIB_MOUTH_Y0 = 150, VIB_MOUTH_Y1 = 186;
   const vibingNotes = Array.from({ length: 4 }, () => ({ x: 0, y: -50, vx: 0, vy: 0, kind: 0 }));
   let lastNoteSpawn = 0;
 
@@ -240,17 +244,32 @@
     }
   }
 
-  function tickVibingNotes(t, amp, bob) {
-    const spawnMs = Math.max(140, 320 - amp * 180);
+  function vibingHighTone(bands) {
+    let peak = 0, sum = 0;
+    for (let b = 7; b < bands.length; b++) {
+      sum += bands[b];
+      if (bands[b] > peak) peak = bands[b];
+    }
+    const avg = sum / (bands.length - 7);
+    return Math.min(1, (peak * 0.72 + avg * 0.28) / 220);
+  }
+
+  function tickVibingNotes(t, amp, hi, bob) {
+    const noteDrive = Math.max(amp * 0.22, hi);
+    if (noteDrive < 0.08) return;
+    const spawnMs = Math.max(70, 410 - noteDrive * 300);
     if (t - lastNoteSpawn > spawnMs) {
       lastNoteSpawn = t;
-      const slot = vibingNotes.find(n => n.y < -30);
-      if (slot) {
-        slot.x = 118 + Math.random() * 85;
-        slot.y = 122 + bob + Math.random() * 12;
-        slot.vy = -1.4 - amp * 2.2 - Math.random() * 0.9;
-        slot.vx = (Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.random() * 0.7);
-        slot.kind = Math.random() < 0.5 ? 0 : 1;
+      const spawns = hi > 0.52 ? 2 : 1;
+      for (let s = 0; s < spawns; s++) {
+        const slot = vibingNotes.find(n => n.y < -30);
+        if (slot) {
+          slot.x = 118 + Math.random() * 85;
+          slot.y = VIB_MOUTH_Y0 - 18 + bob + Math.random() * 12;
+          slot.vy = -1.5 - noteDrive * 2.9 - Math.random() * 0.9;
+          slot.vx = (Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.random() * 0.7);
+          slot.kind = (hi > 0.38 && Math.random() < 0.67) ? 1 : (Math.random() < 0.5 ? 0 : 1);
+        }
       }
     }
     for (const n of vibingNotes) {
@@ -260,10 +279,11 @@
     }
   }
 
-  function drawVibingNotes(ctx, amp) {
+  function drawVibingNotes(ctx, amp, hi) {
+    const noteDrive = Math.max(amp * 0.22, hi);
     for (const n of vibingNotes) {
       if (n.y < -35 || n.y > 210) continue;
-      const headR = Math.min(7, 4 + amp * 3);
+      const headR = Math.min(7, 4 + noteDrive * 3.5);
       drawMusicNote(ctx, n.x, n.y, headR, n.kind !== 0);
     }
   }
@@ -285,40 +305,78 @@
     const amp = vibingAmp(t);
     const out = new Array(12).fill(0);
     for (let i = 0; i < 12; i++) {
+      const hiBoost = i >= 7 ? 1.1 + 0.45 * Math.abs(Math.sin(t * 0.021 + i * 0.7)) : 1.0;
       const w = 0.35 + 0.65 * Math.abs(Math.sin(t * 0.014 + i * 0.55));
       const beat = 0.5 + 0.5 * Math.sin(t * 0.009 + i * 0.2);
-      out[i] = Math.min(220, Math.floor(amp * 220 * w * beat));
+      out[i] = Math.min(220, Math.floor(amp * 220 * w * beat * hiBoost));
     }
     return out;
   }
 
-  function drawVibingSpectrogramMouth(ctx, bob) {
-    const x0 = 78, x1 = 242, y0 = 138 + bob, y1 = 172 + bob;
-    const pad = 5, gap = 1;
+  function vibingBarColors(cx, bars, t, time) {
+    const u = cx / (bars - 1);
+    const pulse = 0.82 + 0.18 * Math.sin(time * 0.011 + cx * 0.42);
+    const e = t * pulse;
+    let base;
+    if (u < 0.33) base = lerpColor('#006688', INK, u / 0.33);
+    else if (u < 0.66) base = lerpColor(INK, '#44ff88', (u - 0.33) / 0.33);
+    else base = lerpColor('#44ff88', '#ff44cc', (u - 0.66) / 0.34);
+    const glow = lerpColor(VISOR_DEEP, base, 0.30 + e * 0.55);
+    const bot = lerpColor(base, INK_BRIGHT, e * 0.72);
+    const top = lerpColor(base, VISOR_DEEP, 0.28 + (1 - e) * 0.22);
+    const hi = lerpColor(INK_BRIGHT, '#ffffff', e * 0.65);
+    return { glow, bot, top, hi };
+  }
+
+  function lerpColor(a, b, t) {
+    const pa = parseInt(a.slice(1), 16);
+    const pb = parseInt(b.slice(1), 16);
+    const r = (pa >> 16 & 0xff) + ((pb >> 16 & 0xff) - (pa >> 16 & 0xff)) * t;
+    const g = (pa >> 8 & 0xff) + ((pb >> 8 & 0xff) - (pa >> 8 & 0xff)) * t;
+    const bl = (pa & 0xff) + ((pb & 0xff) - (pa & 0xff)) * t;
+    return `rgb(${r | 0},${g | 0},${bl | 0})`;
+  }
+
+  function drawVibingMirrorBar(ctx, cx, bars, sx, barW, midY, halfH, t, time) {
+    if (halfH < 2) halfH = 2;
+    const totalH = halfH * 2;
+    const { glow, bot, top, hi } = vibingBarColors(cx, bars, t, time);
+    rr(ctx, sx - 1, midY - halfH - 1, barW + 2, totalH + 2, 3, glow, null);
+    rr(ctx, sx, midY - halfH, barW, halfH, 2, top, null);
+    rr(ctx, sx, midY, barW, halfH, 2, bot, null);
+    if (t > 0.28) {
+      ctx.fillStyle = hi;
+      ctx.fillRect(sx + 1, midY, barW - 2, 1);
+    }
+    if (t > 0.62 && halfH > 3) {
+      ctx.fillRect(sx + 1, midY - halfH + 1, barW - 2, 1);
+    }
+  }
+
+  function drawVibingSpectrogramMouth(ctx, bob, time) {
+    const x0 = VIB_MOUTH_X0, x1 = VIB_MOUTH_X1, y0 = VIB_MOUTH_Y0 + bob, y1 = VIB_MOUTH_Y1 + bob;
+    const pad = 5, gap = 2;
     const cols = MOUTH_COLORS.vibing || [INK, INK_GLOW, INK_BRIGHT];
-    const [segInk, segGlow, segHi] = cols;
+    const [segInk] = cols;
     rr(ctx, x0, y0, x1 - x0, y1 - y0, 10, VISOR_DEEP, segInk, 1);
     const innerW = x1 - x0 - pad * 2;
     const innerH = y1 - y0 - pad * 2;
     const bars = vibingColHist.length;
     const barW = (innerW - gap * (bars - 1)) / bars;
-    const ox = x0 + pad;
+    const gridW = barW * bars + gap * (bars - 1);
+    const mouthCx = (x0 + x1) / 2;
+    const ox = mouthCx - gridW / 2;
     const oy = y0 + pad;
-    let sx = ox;
+    const midY = oy + Math.floor(innerH / 2);
+    const maxHalf = Math.floor(innerH / 2);
     for (let cx = 0; cx < bars; cx++) {
       const v = vibingColHist[cx];
       if (v >= 6) {
         const t = Math.min(1, Math.pow(v / 220, 0.68));
-        const ph = Math.max(3, Math.min(innerH, Math.floor(innerH * t)));
-        const py = oy + innerH - ph;
-        rr(ctx, sx - 1, py - 1, barW + 2, ph + 2, 3, segGlow, null);
-        rr(ctx, sx, py, barW, ph, 2, t > 0.58 ? segHi : segInk, null);
-        if (t > 0.35) {
-          ctx.fillStyle = segHi;
-          ctx.fillRect(sx + 1, py + 1, barW - 2, 1);
-        }
+        const halfH = Math.max(2, Math.floor(maxHalf * t));
+        const sx = ox + cx * (barW + gap);
+        drawVibingMirrorBar(ctx, cx, bars, sx, barW, midY, halfH, t, time);
       }
-      sx += barW + gap;
     }
     rr(ctx, x0, y0, x1 - x0, y1 - y0, 10, null, segInk, 1);
   }
@@ -329,25 +387,92 @@
     return Math.max(mic, idle);
   }
 
+  function vibingLidBoundaryY(cx, cy, r, drop, arch, x) {
+    const nx = (x - cx) / r;
+    return (cy - r) + 2 * r * drop + arch * r * (1 - nx * nx);
+  }
+
+  function drawVibingRelaxedEye(ctx, cx, cy, r, lidPulse, gazeX) {
+    ctx.fillStyle = VISOR_DEEP;
+    ctx.beginPath(); ctx.arc(cx, cy, r + 4, 0, Math.PI * 2); ctx.fill();
+
+    const drop = 0.40 + lidPulse * 0.06;
+    const arch = 0.26 + lidPulse * 0.06;
+
+    for (let y = cy - r; y <= cy + r; y++) {
+      const disc = r * r - (y - cy) * (y - cy);
+      if (disc <= 0) continue;
+      const halfW = Math.floor(Math.sqrt(disc));
+      const xL = cx - halfW;
+      const xR = cx + halfW;
+      let x = xL;
+      while (x <= xR) {
+        const bnd = vibingLidBoundaryY(cx, cy, r, drop, arch, x);
+        if (y + 0.5 < bnd) {
+          const rs = x;
+          while (x <= xR && y + 0.5 < vibingLidBoundaryY(cx, cy, r, drop, arch, x)) x++;
+          ctx.fillStyle = VISOR_DEEP;
+          ctx.fillRect(rs, y, x - rs, 1);
+        } else {
+          const rs = x;
+          while (x <= xR && y + 0.5 >= vibingLidBoundaryY(cx, cy, r, drop, arch, x)) x++;
+          ctx.fillStyle = EYE;
+          ctx.fillRect(rs, y, x - rs, 1);
+        }
+      }
+    }
+
+    ctx.strokeStyle = EYE_GLOW;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(cx, cy, r + 1, 0, Math.PI * 2); ctx.stroke();
+
+    const px = cx + gazeX;
+    const py = cy + 5;
+    const s = 5;
+    ctx.fillStyle = PUP;
+    ctx.fillRect(px - s, py - s, s * 2, s * 2);
+    ctx.fillStyle = HILITE;
+    ctx.beginPath(); ctx.arc(px - s / 3, py - s / 3, s / 3, 0, Math.PI * 2); ctx.fill();
+  }
+
   function drawVibingFace(ctx, t) {
     const amp = vibingAmp(t);
     const beatHz = 1.6 + amp * 1.4;
-    const targetBob = Math.sin(t * 0.001 * beatHz * Math.PI * 2) * (2 + amp * 6);
+    const bobHz = beatHz * 0.68;
+    const targetBob = Math.sin(t * 0.001 * bobHz * Math.PI * 2) * (0.5 + amp * 1.6);
     if (drawVibingFace._bob === undefined) drawVibingFace._bob = 0;
-    drawVibingFace._bob += (targetBob - drawVibingFace._bob) * 0.12;
+    drawVibingFace._bob += (targetBob - drawVibingFace._bob) * 0.09;
     const bob = drawVibingFace._bob;
+    const bands = fakeVibingBands(t);
+    advanceVibingSpec(bands);
     advanceVibingSpec(fakeVibingBands(t));
-    tickVibingNotes(t, amp, bob);
+    const hi = vibingHighTone(bands);
+    tickVibingNotes(t, amp, hi, bob);
+
+    const beat = Math.sin(t * 0.001 * beatHz * Math.PI * 2);
+    const lidTarget = 0.5 + 0.5 * beat;
+    if (drawVibingFace._lidPulse === undefined) drawVibingFace._lidPulse = 0.5;
+    drawVibingFace._lidPulse += (lidTarget - drawVibingFace._lidPulse) * 0.12;
+
+    const gazeAmpX = 2.2 + amp * 3.0;
+    const targetGx = Math.sin(t * 0.001 * beatHz * Math.PI * 2) * gazeAmpX;
+    if (drawVibingFace._gx === undefined) drawVibingFace._gx = 0;
+    if (drawVibingFace._gy === undefined) drawVibingFace._gy = 0;
+    drawVibingFace._gx += (targetGx - drawVibingFace._gx) * 0.08;
+    drawVibingFace._gy += (0 - drawVibingFace._gy) * 0.12;
+
+    const browDy = Math.sin(t * 0.001 * bobHz * Math.PI * 2) * (0.4 + amp * 0.9);
     ctx.fillStyle = BG;
     ctx.fillRect(0, 0, W, H);
     ctx.save();
     ctx.translate(0, bob);
     drawVisor(ctx);
-    drawHappyClosedEye(ctx, EYE_L, EYE_Y, EYE_RAD);
-    drawHappyClosedEye(ctx, EYE_R, EYE_Y, EYE_RAD);
-    drawVibingSpectrogramMouth(ctx, 0);
+    drawVibingRelaxedEye(ctx, EYE_L, EYE_Y, EYE_RAD, drawVibingFace._lidPulse, drawVibingFace._gx);
+    drawVibingRelaxedEye(ctx, EYE_R, EYE_Y, EYE_RAD, drawVibingFace._lidPulse, drawVibingFace._gx);
+    drawVibingSpectrogramMouth(ctx, 0, t);
     ctx.restore();
-    drawVibingNotes(ctx, amp);
+    drawBrows(ctx, 'arch', browDy);
+    drawVibingNotes(ctx, amp, hi);
   }
 
   function drawLedMouth(ctx, emotion, t, speaking) {

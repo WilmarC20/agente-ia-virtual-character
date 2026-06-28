@@ -114,13 +114,16 @@
         </div>
         <div id="vibingOpts" class="panel" style="padding:.85rem;margin-bottom:.75rem;background:#121a24;border-color:#2a4058">
           <h2 style="font-size:.88rem;margin:0 0 .6rem">Gesto música — micrófono</h2>
+          <p class="status" style="margin:0 0 .4rem;color:var(--accent)">🎚️ Auto-ganancia: el piso/techo se ajustan solos. Subí la sensibilidad si el mic queda corto.</p>
           <label>Sensibilidad del mic <span id="vibingMicVal" style="color:var(--accent);font-weight:700">150%</span></label>
           <input type="range" id="vibingMic" min="50" max="300" step="5" value="150" style="width:100%;margin:.35rem 0 .5rem">
-          <label>Piso (ruido) <span id="vibingFloorVal" style="color:var(--accent);font-weight:700">100</span></label>
-          <input type="range" id="vibingFloor" min="0" max="500" step="5" value="100" style="width:100%;margin:.35rem 0 .5rem">
-          <label>Techo (máximo) <span id="vibingCeilVal" style="color:var(--accent);font-weight:700">500</span></label>
-          <input type="range" id="vibingCeil" min="200" max="900" step="5" value="500" style="width:100%;margin:.35rem 0 .5rem">
-          <p class="status" style="margin:0">Piso 0–500 · Techo 200–900 (señal tras ganancia). Piso bajo = casi sin filtro; sube el piso para cortar ruido.</p>
+          <!-- Piso/techo ya no aplican con auto-ganancia; ocultos para no romper el JS. -->
+          <div style="display:none">
+            <label>Piso <span id="vibingFloorVal">100</span></label>
+            <input type="range" id="vibingFloor" min="0" max="500" step="5" value="100">
+            <label>Techo <span id="vibingCeilVal">500</span></label>
+            <input type="range" id="vibingCeil" min="200" max="900" step="5" value="500">
+          </div>
         </div>
         <div class="grid" id="faceGrid"></div>
         <div class="row">
@@ -134,6 +137,8 @@
         <select id="speakEmotion"></select>
         <button class="primary" id="speakBtn">Enviar TTS al robot</button>
         <div class="msg" id="speakMsg"></div>
+        <button type="button" id="notifyTestBtn" style="margin-top:.75rem">🔔 Probar notificación (notify)</button>
+        <div class="msg" id="notifyMsg"></div>
       </div>
 
       <div class="panel" id="espDirectPanel" style="display:none">
@@ -305,6 +310,30 @@ $('speakBtn').onclick = async () => {
     refreshQueue();
   } catch (e) {
     showMsg($('speakMsg'), e.message, false);
+  }
+};
+
+$('notifyTestBtn').onclick = async () => {
+  try {
+    const r = await fetch('/api/dev/notify', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        kind: 'ask_question',
+        context: { source: 'claude', client: 'Claude Code', project: 'agenteIA', file: 'dev_panel.html' },
+        priority: true,
+        dedupe_key: 'dev-test-' + Date.now()
+      })
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    const txt = j.skipped
+      ? `Omitido (${j.reason})`
+      : `Notify encolado (cola: ${j.queued}) — ${j.cmd?.text || j.cmd?.emotion || ''}`;
+    showMsg($('notifyMsg'), txt, !j.skipped);
+    refreshQueue();
+  } catch (e) {
+    showMsg($('notifyMsg'), e.message, false);
   }
 };
 

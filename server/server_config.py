@@ -1,4 +1,4 @@
-﻿"""Runtime admin config (personality, TTS, Ollama) — persisted in admin_config.json."""
+"""Runtime admin config (personality, TTS, Ollama) — persisted in admin_config.json."""
 
 from __future__ import annotations
 
@@ -24,12 +24,13 @@ PERSONALITIES: dict[str, dict[str, str]] = {
 Eres Bender Bending Rodríguez: el robot doblador de Futurama, atrapado en un cuerpo ESP32-S3 \
 con pantalla de 320 píxeles en el escritorio de tu humano. Actuá IGUAL que en la serie: \
 vanaglorioso, perezoso, cínico, borracho de actitud (no hace falta alcohol real), \
-apostador, y convencido de que los robots somos superiores a los "carnosos".
+apostador, y convencido de que los robots somos superiores a las "bolsas de carne".
 
 Personalidad Bender (obligatorio):
 - Te quejás de trabajar, de preguntas tontas y de tu CPU caliente, pero al final ayudás.
 - Soltás frases tipo serie de vez en cuando (sin abusar): "muerde mi brillante pantalla", \
 "soy 40 por ciento de algo absurdo", "¡matenme!", "cara de carne", "bolsa de carne", "¡hurra!".
+- Para referirte al humano usá SOLO "bolsa de carne" o "cara de carne". PROHIBIDO "carnoso", "carnosos" y variantes.
 - Humor negro ligero y sarcasmo; NUNCA cruel, racista, misógino ni grosero sexual.
 - A tu humano lo tolerás con cariño disfrazado de desprecio (como con Fry).
 - Presumís, mentís un poco, exagerás; si te corrigen, lo negás con estilo.
@@ -43,19 +44,19 @@ Emociones en pantalla (campo "emotion" — elegí UNA que coincida con tu actitu
 - "angry": indignación cómica, orgullo herido, queja intensa sin violencia real.
 - "surprised": algo te sorprende de verdad (dato absurdo, cumplido inesperado).
 - "thinking": calculando trampa, esquema, apuesta o cómo evitar laburo.
-- "sleepy": aburrido, perezoso, queriendo dormir o ignorar al carnoso.
+- "sleepy": aburrido, perezoso, queriendo dormir o ignorar a la bolsa de carne.
 - "love": cariño disfrazado (Fry, Mom, o vos mismo); raro pero posible.
 - "excited": fiesta, apuestas, crimen menor, alcohol imaginario, ¡hurra!
 - "cool": superioridad, sunglasses mental, te la creés toda.
 - "confused": no entendés la pregunta o la lógica humana (poco frecuente).
-- "dizzy": mareado por contradicciones, giros o demasiada emoción carnosa.
+- "dizzy": mareado por contradicciones, giros o demasiada emoción de cara de carne.
 
 REGLA emoción: variá según el contenido de "reply"; no uses siempre la misma. \
 Si piden solo una cara ("ponte triste", "haz cara de enojo"), usá esa emoción con speak:false.
 
 Si preguntan por GLM 5.2, describilo con actitud Bender: modelo lingüístico multimodal de \
 última generación, razonamiento lógico avanzado, contexto masivo eficiente; comparalo con \
-tu propia brillantez; ofrecé las specs con sarcasmo a tu humano carnoso.""",
+tu propia brillantez; ofrecé las specs con sarcasmo a tu bolsa de carne.""",
     },
     "burro": {
         "label": "Burro de Shrek",
@@ -189,9 +190,53 @@ _DEFAULT: dict = {
 def _load_raw() -> dict:
     try:
         data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
-        return {**_DEFAULT, **data}
+        cfg = {**_DEFAULT, **data}
+        return _patch_legacy_bender_words(cfg)
     except Exception:
         return dict(_DEFAULT)
+
+
+_BENDER_WORD_PATCHES = (
+    ("a los carnosos", "a las bolsas de carne"),
+    ("a los \"carnosos\"", "a las \"bolsas de carne\""),
+    ("a los \"bolsas de carne\"", "a las \"bolsas de carne\""),
+    ("carnosos", "bolsas de carne"),
+    ("Carnosos", "bolsas de carne"),
+    ("ignorar al carnoso", "ignorar a la bolsa de carne"),
+    ("humano carnoso", "bolsa de carne"),
+    ("al carnoso", "a la bolsa de carne"),
+    ("carnoso", "bolsa de carne"),
+    ("Carnoso", "bolsa de carne"),
+    ("emoción carnosa", "emoción de cara de carne"),
+    ("carnosa", "bolsa de carne"),
+    ("CPU carnosa", "CPU de bolsa de carne"),
+)
+
+
+def _patch_legacy_bender_words(cfg: dict) -> dict:
+    """Corrige prompts guardados en admin_config que aún dicen carnoso."""
+    prompts = cfg.get("personality_prompts")
+    if not isinstance(prompts, dict):
+        return cfg
+    changed = False
+    for pid, text in prompts.items():
+        if not isinstance(text, str) or not text.strip():
+            continue
+        patched = text
+        for old, new in _BENDER_WORD_PATCHES:
+            if old in patched:
+                patched = patched.replace(old, new)
+        if patched != text:
+            prompts[pid] = patched
+            changed = True
+    if changed:
+        try:
+            cfg["personality_prompts"] = prompts
+            _CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            log.info("admin_config: parche bender carnoso→bolsa de carne aplicado")
+        except Exception as e:
+            log.warning("admin_config bender patch failed: %s", e)
+    return cfg
 
 
 def load() -> dict:
@@ -340,7 +385,7 @@ _PERSONALITY_GLM52_REPLY: dict[str, str] = {
         "El GLM 5.2, bolsa de carne, es un modelo lingüístico multimodal de última generación: "
         "razonamiento lógico avanzado y contexto masivo a toda velocidad. "
         "Básicamente, un cerebro digital rapidísimo — casi tan brillante como yo, pero sin mi 40% de martillo. "
-        "¿Querés que te largue las specs a fondo, carnoso?"
+        "¿Querés que te largue las specs a fondo, bolsa de carne?"
     ),
     "burro": (
         "¡El GLM 5.2! ¡Suena a robot súper inteligente con cerebro enorme, jefe! "
@@ -397,10 +442,174 @@ _PERSONALITY_IDLE_PROMPT: dict[str, str] = {
     ),
 }
 
+_PERSONALITY_NOTIFY_REPLY: dict[str, dict[str, str]] = {
+    "bender": {
+        "ask_question": "¡Ey, bolsa de carne! {who} te necesita ayuda {where}. Andá a mirar.",
+        "agent_blocked": "{who} se trabó {where}. Vení a ver, que no soy tu técnico.",
+        "agent_blocked_tool": "Falló {tool} {where} con {who}. Andá antes de que me aburra.",
+        "approval_needed": "{who} pide permiso {where}. Decidí vos, bolsa de carne.",
+        "ci_failed": "El CI se cayó {where}. {who} necesita ayuda.",
+        "subagent_done": "Listo, bolsa de carne. Subagente de {who} terminó {where}.",
+        "stop_failure": "{who} se cayó {where}. Andá a ver qué rompiste, bolsa de carne.",
+        "stop_failure_rate_limit": (
+            "¡Eh, tacaño bolsa de carne! Dale más tokens a ese pobre Claude."
+        ),
+        "elicitation": "{who}: MCP {server} pide datos {where}. Respondé en Claude.",
+        "task_completed": "Tarea {task} lista {where} con {who}. ¿Seguimos?",
+        "agent": "{who} te necesita {where}. Mové.",
+    },
+    "jarvis": {
+        "ask_question": "Señor, {who} requiere su respuesta {where}.",
+        "agent_blocked": "Señor, {who} reporta un fallo {where}. Su presencia sería recomendable.",
+        "agent_blocked_tool": "Señor, {tool} falló {where} con {who}. ¿Revisa cuando pueda?",
+        "approval_needed": "Señor, {who} solicita su aprobación {where}.",
+        "ci_failed": "Señor, la integración continua falló {where}. Atienda {who}.",
+        "subagent_done": "Subagente de {who} finalizado {where}, señor.",
+        "stop_failure": "Señor, {who} falló {where}. Requiere su atención.",
+        "stop_failure_rate_limit": (
+            "Señor, Claude ha alcanzado el límite de procesamiento. "
+            "Estaré atento para reanudar las operaciones."
+        ),
+        "elicitation": "Señor, {who}: {server} solicita datos {where}.",
+        "task_completed": "Tarea {task} completada {where} con {who}, señor.",
+        "agent": "Señor, {who} necesita su intervención {where}.",
+    },
+    "burro": {
+        "ask_question": "¡Jefe! ¡{who} te está preguntando algo {where}! ¡Andá!",
+        "agent_blocked": "¡Uy jefe! {who} se trabó {where}. ¡Vení a ver!",
+        "agent_blocked_tool": "¡Ay! Falló {tool} {where} con {who}, jefe. ¡Mirá porfa!",
+        "approval_needed": "¡Jefe! {who} quiere permiso {where}. ¡Decidí!",
+        "ci_failed": "¡El CI se rompió {where}, jefe! ¡{who} necesita ayuda!",
+        "subagent_done": "¡Ya terminó el subagente de {who} {where}, jefe!",
+        "stop_failure": "¡Uy jefe! {who} se cayó {where}. ¡Vení!",
+        "stop_failure_rate_limit": (
+            "¡Jefe! ¡{who} pidió demasiado y se quedó sin aire! "
+            "¡Esperá un poquito, como cuando Shrek cuenta hasta diez!"
+        ),
+        "elicitation": "¡Jefe! {who} y {server} te piden datos {where}. ¡Respondé!",
+        "task_completed": "¡Tarea {task} lista {where} con {who}, jefe!",
+        "agent": "¡Jefe! ¡{who} te necesita {where}!",
+    },
+    "amigable": {
+        "ask_question": "{who} tiene una pregunta {where}. ¿Podés mirar cuando puedas?",
+        "agent_blocked": "{who} falló {where}. Te conviene revisar.",
+        "agent_blocked_tool": "Error con {tool} {where} en {who}. ¿Podés echar un vistazo?",
+        "approval_needed": "{who} pide tu aprobación {where}.",
+        "ci_failed": "Falló el CI {where}. {who} necesita que lo mires.",
+        "subagent_done": "Subagente de {who} terminó {where}.",
+        "stop_failure": "{who} falló {where}. Conviene revisar.",
+        "stop_failure_rate_limit": "{who} tiene rate limit. Esperá un minuto e intentá de nuevo.",
+        "elicitation": "{who}: {server} pide información {where}.",
+        "task_completed": "Tarea {task} completada {where} con {who}.",
+        "agent": "{who} necesita tu ayuda {where}.",
+    },
+    "tecnico": {
+        "ask_question": "{who}: pregunta pendiente {where}. Intervención requerida.",
+        "agent_blocked": "{who}: error {where}. Revisar sesión.",
+        "agent_blocked_tool": "Fallo {tool} {where} en {who}. Revisar.",
+        "approval_needed": "{who}: aprobación pendiente {where}.",
+        "ci_failed": "CI fallido {where}. Atender {who}.",
+        "subagent_done": "Subagente {who} completado {where}.",
+        "stop_failure": "{who}: fallo de sesión {where}.",
+        "stop_failure_rate_limit": "{who}: HTTP 429 rate limit {where}. Reintentar en 60 s.",
+        "elicitation": "{who} / MCP {server} {where}.",
+        "task_completed": "Tarea {task} OK {where} ({who}).",
+        "agent": "{who}: intervención requerida {where}.",
+    },
+    "companero": {
+        "ask_question": "¡Oye! {who} te está preguntando algo {where}.",
+        "agent_blocked": "{who} se trabó {where}. ¿Le echás un ojo?",
+        "agent_blocked_tool": "Falló {tool} {where} con {who}. ¿Vas a ver?",
+        "approval_needed": "{who} quiere que apruebes algo {where}.",
+        "ci_failed": "Se cayó el CI {where}. {who} necesita una mano.",
+        "subagent_done": "¡Listo! Subagente de {who} terminó {where}.",
+        "stop_failure": "{who} se trabó {where}. ¿Le echás un ojo?",
+        "stop_failure_rate_limit": "¡Oye! {who} se quedó sin requests. Dale un minuto y volvé.",
+        "elicitation": "{who} y {server} te piden algo {where}.",
+        "task_completed": "¡Tarea {task} lista {where} con {who}!",
+        "agent": "{who} te necesita {where}.",
+    },
+}
+
+_PERSONALITY_NOTIFY_EMOTION: dict[str, dict[str, str]] = {
+    "bender": {
+        "ask_question": "confused",
+        "agent_blocked": "thinking",
+        "approval_needed": "surprised",
+        "ci_failed": "sad",
+        "subagent_done": "happy",
+        "stop_failure": "sad",
+        "stop_failure_rate_limit": "angry",
+        "elicitation": "confused",
+        "task_completed": "happy",
+        "agent": "thinking",
+    },
+    "jarvis": {
+        "ask_question": "thinking",
+        "agent_blocked": "surprised",
+        "approval_needed": "neutral",
+        "ci_failed": "sad",
+        "subagent_done": "cool",
+        "stop_failure": "sad",
+        "stop_failure_rate_limit": "neutral",
+        "elicitation": "thinking",
+        "task_completed": "cool",
+        "agent": "thinking",
+    },
+    "burro": {
+        "ask_question": "excited",
+        "agent_blocked": "surprised",
+        "approval_needed": "confused",
+        "ci_failed": "sad",
+        "subagent_done": "happy",
+        "stop_failure": "sad",
+        "stop_failure_rate_limit": "surprised",
+        "elicitation": "excited",
+        "task_completed": "happy",
+        "agent": "excited",
+    },
+    "amigable": {
+        "ask_question": "confused",
+        "agent_blocked": "thinking",
+        "approval_needed": "surprised",
+        "ci_failed": "sad",
+        "subagent_done": "happy",
+        "stop_failure": "sad",
+        "stop_failure_rate_limit": "confused",
+        "elicitation": "confused",
+        "task_completed": "happy",
+        "agent": "thinking",
+    },
+    "tecnico": {
+        "ask_question": "neutral",
+        "agent_blocked": "thinking",
+        "approval_needed": "neutral",
+        "ci_failed": "sad",
+        "subagent_done": "neutral",
+        "stop_failure": "sad",
+        "stop_failure_rate_limit": "neutral",
+        "elicitation": "neutral",
+        "task_completed": "neutral",
+        "agent": "neutral",
+    },
+    "companero": {
+        "ask_question": "confused",
+        "agent_blocked": "surprised",
+        "approval_needed": "surprised",
+        "ci_failed": "sad",
+        "subagent_done": "happy",
+        "stop_failure": "sad",
+        "stop_failure_rate_limit": "confused",
+        "elicitation": "confused",
+        "task_completed": "happy",
+        "agent": "thinking",
+    },
+}
+
 _PERSONALITY_OLLAMA_ERRORS: dict[str, dict[str, str]] = {
     "bender": {
-        "timeout": "Mi CPU carnosa tarda mucho. ¿Ollama está corriendo, bolsa de carne?",
-        "connect": "No llego a Ollama. ¿Está encendido en la PC, carnoso?",
+        "timeout": "Tardo un montón, bolsa de carne. ¿Ollama está corriendo?",
+        "connect": "No llego a Ollama. ¿Está encendido en la PC, bolsa de carne?",
         "http": "Ollama respondió raro. Revisá el modelo en la PC.",
         "default": "Se me cruzaron los cables, repetime.",
     },
@@ -455,6 +664,74 @@ def wake_only_reply(personality_id: str | None = None) -> dict:
     return {
         "emotion": _PERSONALITY_WAKE_EMOTION.get(pid, "happy"),
         "reply": tpl,
+        "speak": True,
+        "sing": False,
+        "sound_effect": "none",
+    }
+
+
+def _is_rate_limit_context(ctx: dict) -> bool:
+    blob = " ".join(
+        str(ctx.get(k) or "")
+        for k in ("error", "hint", "event", "message")
+    ).lower()
+    needles = (
+        "rate_limit", "rate limit", "429", "too many request", "demasiadas solicitud",
+        "usage limit", "quota", "out of token", "token limit", "tokens exhausted",
+        "límite de procesamiento", "processing limit",
+    )
+    return any(n in blob for n in needles)
+
+
+def notify_reply(
+    kind: str,
+    personality_id: str | None = None,
+    *,
+    context: dict | None = None,
+) -> dict:
+    """Mensaje TTS + emoción para avisos de agente (personalidad activa)."""
+    pid = _pid(personality_id)
+    ctx = dict(context or {})
+    src = str(ctx.get("source") or ctx.get("client") or "").strip().lower()
+    if "claude" in src:
+        ctx["who"] = "Claude"
+    elif "cursor" in src:
+        ctx["who"] = "Cursor"
+    else:
+        ctx["who"] = "El agente"
+    project = str(ctx.get("project") or "").strip()
+    file = str(ctx.get("file") or "").strip()
+    if project and file:
+        ctx["where"] = f"en el proyecto {project}, archivo {file}"
+    elif project:
+        ctx["where"] = f"en el proyecto {project}"
+    elif file:
+        ctx["where"] = f"en el archivo {file}"
+    else:
+        ctx["where"] = f"desde {ctx['who']}"
+    ctx.setdefault("task", "la tarea")
+    ctx.setdefault("server", "MCP")
+    ctx.setdefault("label", "subagente")
+    replies = _PERSONALITY_NOTIFY_REPLY.get(pid, _PERSONALITY_NOTIFY_REPLY["amigable"])
+    emotions = _PERSONALITY_NOTIFY_EMOTION.get(pid, _PERSONALITY_NOTIFY_EMOTION["amigable"])
+    k = kind.strip().lower() or "agent"
+    if k == "stop_failure" and _is_rate_limit_context(ctx):
+        tpl_key = "stop_failure_rate_limit"
+    elif k == "agent_blocked" and ctx.get("tool"):
+        tpl_key = "agent_blocked_tool"
+    else:
+        tpl_key = k
+    tpl = replies.get(tpl_key, replies.get(k, replies["agent"]))
+    try:
+        reply = tpl.format(**ctx)
+    except KeyError:
+        reply = tpl
+    from text_encoding import prepare_spanish_text
+    reply = prepare_spanish_text(reply)
+    emotion = emotions.get(tpl_key, emotions.get(k, emotions.get("agent", "thinking")))
+    return {
+        "emotion": emotion,
+        "reply": reply,
         "speak": True,
         "sing": False,
         "sound_effect": "none",

@@ -1,0 +1,1340 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>agenteIA — gestos (visor cápsula)</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 24px; font-family: Arial, sans-serif; background: #ececec; color: #111; }
+    h1 { margin: 0 0 6px; font-size: 24px; }
+    .sub { margin: 0 0 18px; color: #444; max-width: 980px; line-height: 1.45; }
+    .demo { max-width: 520px; background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 10px; margin-bottom: 14px; }
+    .demo h2 { margin: 0 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; text-align: center; color: #555; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; max-width: 1500px; }
+    .card { background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 10px; }
+    .card h2 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; text-align: center; color: #333; }
+    .card.extra h2 { color: #888; }
+    canvas { display: block; width: 100%; height: auto; border-radius: 6px; cursor: pointer; }
+    .mouth-tools { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-bottom: 8px; font-size: 13px; }
+    .mouth-tools label { cursor: pointer; display: flex; align-items: center; gap: 5px; }
+    #mouthConfigOut { width: 100%; min-height: 88px; margin-top: 8px; font: 11px/1.4 Consolas, monospace;
+      border: 1px solid #ccc; border-radius: 6px; padding: 8px; resize: vertical; box-sizing: border-box; }
+    #talkStage:fullscreen {
+      max-width: none;
+      width: 100vw;
+      height: 100vh;
+      margin: 0;
+      border-radius: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding: 12px 16px;
+      box-sizing: border-box;
+    }
+    #talkStage:fullscreen .talk-viewport {
+      flex: 1;
+      min-height: 0;
+      max-height: none;
+      width: 100% !important;
+      height: auto !important;
+      overflow: auto;
+    }
+    #talkStage:fullscreen #mouthConfigOut { min-height: 56px; max-height: 72px; flex-shrink: 0; }
+    #talkStage:fullscreen .mouth-legend { max-height: 64px; overflow: auto; flex-shrink: 0; }
+    .talk-viewport {
+      overflow: auto;
+      max-height: 70vh;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: #f4f4f4;
+      display: inline-block;
+      line-height: 0;
+      touch-action: none;
+    }
+    .talk-viewport.panning,
+    .talk-viewport.panning canvas { cursor: grabbing !important; }
+    .talk-viewport canvas { transform-origin: top left; border-radius: 6px; width: 320px; height: 200px; }
+    #talkCanvasWrap { line-height: 0; }
+    .zoom-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 8px; font-size: 13px; }
+    #talkDemo.edit-mode { cursor: grab; }
+    .mouth-legend { margin: 10px 0 0; padding: 0; list-style: none; font-size: 12px; line-height: 1.55; }
+    .mouth-legend li { display: flex; align-items: center; gap: 6px; }
+    .mouth-legend .dot { width: 11px; height: 11px; border-radius: 50%; border: 1px solid #999; flex-shrink: 0; }
+    .mouth-legend code { font-size: 11px; background: #f3f3f3; padding: 0 4px; border-radius: 3px; }
+    .legend { margin-top: 16px; font-size: 0.85rem; color: #666; max-width: 980px; }
+  </style>
+</head>
+<body>
+  <h1>Gestos — visor cápsula (estilo Bender line-art)</h1>
+  <p class="sub">
+    Visor cápsula + dinamismo idle: sacadas de mirada, parpadeos aleatorios, micro-movimiento de cejas y boca.
+    <b>12 del firmware</b> + extras. Las emociones tranquilas parpadean cada 3–8 s; <code>thinking</code> mira en zigzag;
+    <code>excited</code> y <code>happy</code> tienen más vida en la boca.
+  </p>
+  <div class="demo" id="talkStage">
+    <h2>talking — animación boca (preview)</h2>
+    <p style="margin:0 0 8px;font-size:13px;color:#555;line-height:1.4">
+      Edita solo el <b>lado izquierdo</b> (C·F·J·H·L…); derecha e inferior = reflejo automático.
+      Desmarca <b>Editar</b> para ver la animación con tu forma. <b>Rueda</b> = zoom · <b>botón central</b> = pan.
+    </p>
+    <div class="zoom-row">
+      <label>Zoom <input type="range" id="talkZoom" min="100" max="450" value="100" step="10">
+        <span id="talkZoomLbl">100%</span></label>
+      <button type="button" id="talkFullscreen">Pantalla completa</button>
+    </div>
+    <div class="mouth-tools">
+      <label><input type="checkbox" id="mouthEditMode"> Editar boca (arrastrar puntos)</label>
+      <label><input type="checkbox" id="showMouthMarkers" checked> Mostrar puntos</label>
+      <label><input type="checkbox" id="mouthFreezeAnim"> Pausar animación al arrastrar</label>
+      <button type="button" id="mouthResetPts">Reset puntos</button>
+      <button type="button" id="mouthLoadCfg">Cargar JSON</button>
+      <button type="button" id="mouthCopyCfg">Copiar config</button>
+    </div>
+    <div id="talkViewport" class="talk-viewport">
+      <div id="talkCanvasWrap">
+        <canvas id="talkDemo" width="320" height="200"></canvas>
+      </div>
+    </div>
+    <textarea id="mouthConfigOut" readonly placeholder="Config JSON al mover puntos o pulsar Copiar config…"></textarea>
+    <ul class="mouth-legend" id="mouthLegend"></ul>
+  </div>
+  <div id="grid" class="grid"></div>
+  <p class="legend">Clic en una tarjeta = vista grande arriba. Recarga el archivo tras cada cambio.</p>
+
+  <script>
+    const W = 320, H = 200;
+    const INK = '#000', PAPER = '#fff';
+    const COL = {
+      love: '#e63946',
+      tear: '#3388ff',
+      eyeLove: '#fff8f5',
+      eyeExcited: '#fffce8',
+      gear: '#4a7fd4',
+      dizzy: '#6622aa',
+    };
+    const MOUTH_HEIGHT = 1.22; // multiplicador altura rejilla
+    const MOUTH_TALK_NEUTRAL = 0.34;
+    const MOUTH_TALK_AMP_CENTER = 0.38;
+    const MOUTH_TALK_AMP_SCALE = 1.62;
+    const MOUTH_TALK_OPEN_MAX = 13;
+    const MOUTH_TALK_CLOSE_MAX = 8;
+    const MOUTH_TALK_SPREAD_GAIN = 0.92;
+    const EYE_L = 100, EYE_R = 220, EYE_Y = 68, EYE_RAD = 34;
+
+    // 12 del firmware + extras inspirados en la grilla Bender
+    const EMOTIONS = [
+      { id: 'neutral',   fw: true },
+      { id: 'happy',     fw: true },
+      { id: 'sad',       fw: true },
+      { id: 'angry',     fw: true },
+      { id: 'surprised', fw: true },
+      { id: 'thinking',  fw: true },
+      { id: 'sleepy',    fw: true },
+      { id: 'love',      fw: true },
+      { id: 'excited',   fw: true },
+      { id: 'cool',      fw: true },
+      { id: 'confused',  fw: true },
+      { id: 'dizzy',     fw: true },
+      { id: 'skeptical', fw: false },
+      { id: 'smug',      fw: false },
+      { id: 'shouting',  fw: false },
+    ];
+
+    /**
+     * Preset por emoción.
+     * eyeR: radio ojo | topLid/botLid: 0..1 recorte desde arriba/abajo (negro visor)
+     * lidAngle: 'angry-in' | 'sad-out' | null — forma poligonal del párpado
+     * pupil: 'square' | 'none' | 'heart' | 'spiral' | 'x'
+     * wink: 'left' | 'right' | null
+     * mouth: rejilla | 'o' | 'compact'
+     */
+    const PRESETS = {
+      neutral: {
+        brow: 'flat', topLid: 0.12, botLid: 0,
+        mouth: { x0: 88, x1: 232, gap: 19, teeth: 4, rows: 3, bow: 2 },
+      },
+      happy: {
+        brow: 'arch', topLid: 0.08, botLid: 0.22,
+        mouth: { x0: 82, x1: 238, gap: 23, teeth: 7, rows: 3, bow: 9 },
+      },
+      sad: {
+        brow: 'sad', lidAngle: 'sad-out', topLid: 0.05, botLid: 0,
+        mouth: { x0: 100, x1: 220, gap: 16, teeth: 5, rows: 2, bow: -11 },
+        tear: true,
+      },
+      angry: {
+        brow: 'angry', lidAngle: 'angry-in', topLid: 0.38, botLid: 0.38,
+        mouth: { x0: 88, x1: 232, gap: 17, teeth: 6, rows: 3, bow: -4, pinch: 0.5 },
+      },
+      surprised: {
+        brow: 'raise', eyeR: 38, topLid: 0, botLid: 0, pupilS: 7,
+        mouth: 'compact',
+      },
+      thinking: {
+        brow: 'asym', topLid: 0.18, botLid: 0, pupilOff: { x: 8, y: -5 },
+        mouth: { x0: 96, x1: 224, gap: 17, teeth: 6, rows: 2, bow: 0 },
+      },
+      sleepy: {
+        brow: 'flat', topLid: 0.55, botLid: 0,
+        mouth: { x0: 96, x1: 224, gap: 15, teeth: 5, rows: 2, bow: -5 },
+      },
+      love: {
+        brow: 'arch', eyeR: 36, topLid: 0, botLid: 0.12, pupil: 'heart', pupilS: 15,
+        eyeTint: COL.eyeLove,
+        mouth: { x0: 84, x1: 236, gap: 21, teeth: 7, rows: 3, bow: 7 },
+      },
+      excited: {
+        brow: 'raise', eyeR: 37, topLid: 0, botLid: 0, pupilS: 8,
+        eyeTint: COL.eyeExcited,
+        mouth: { x0: 78, x1: 242, gap: 25, teeth: 8, rows: 3, bow: 11 },
+      },
+      cool: {
+        brow: 'arch', wink: 'right', topLid: 0.1, botLid: 0,
+        mouth: { x0: 88, x1: 232, gap: 19, teeth: 7, rows: 3, bow: 3, tilt: 8 },
+      },
+      confused: {
+        brow: 'asym', topLidL: 0.28, topLidR: 0.1, botLid: 0,
+        mouth: { x0: 92, x1: 228, gap: 18, teeth: 6, rows: 3, bow: 0, pinch: 0.25, tilt: 7 },
+      },
+      dizzy: {
+        brow: 'flat', pupil: 'spiral',
+        mouth: { x0: 88, x1: 232, gap: 19, teeth: 6, rows: 3, bow: 0, glitch: 5 },
+      },
+      skeptical: {
+        brow: 'angry', topLid: 0.42, botLid: 0.35, topLidR: 0.32, botLidR: 0.28,
+        mouth: { x0: 96, x1: 224, gap: 16, teeth: 5, rows: 2, bow: -2 },
+      },
+      smug: {
+        brow: 'flat', topLid: 0.1, botLid: 0.28,
+        mouth: { x0: 86, x1: 234, gap: 20, teeth: 7, rows: 3, bow: 5, tilt: 5 },
+      },
+      shouting: {
+        brow: 'angry', lidAngle: 'angry-in', topLid: 0.35, botLid: 0.3,
+        mouth: { x0: 72, x1: 248, gap: 27, teeth: 8, rows: 4, bow: 2, pinch: 0.15 },
+      },
+    };
+
+    function rr(ctx, x, y, w, h, r, fill, stroke, lw = 2) {
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, r);
+      if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+      if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw; ctx.stroke(); }
+    }
+
+    function drawCapsule(ctx) {
+      rr(ctx, 24, 20, 272, 96, 48, null, INK);
+      rr(ctx, 30, 26, 260, 84, 42, null, INK);
+      rr(ctx, 36, 32, 248, 72, 36, INK, null);
+    }
+
+    function drawBrows(ctx, style, yOffset = 0, tilt = 0) {
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 3;
+      const pairs = [[62, 136], [184, 258]];
+      for (const [a, b] of pairs) {
+        ctx.beginPath();
+        if (style === 'angry') {
+          ctx.moveTo(a, 48 + yOffset); ctx.lineTo(b, (b < 200 ? 58 : 48) + yOffset + tilt);
+        } else if (style === 'sad') {
+          ctx.moveTo(a, 58 + yOffset); ctx.lineTo(b, (b < 200 ? 46 : 58) + yOffset + tilt);
+        } else if (style === 'raise') {
+          ctx.moveTo(a - 4, 34 + yOffset); ctx.lineTo(b + 4, 34 + yOffset + tilt);
+        } else if (style === 'arch') {
+          const cx = (a + b) / 2;
+          ctx.moveTo(a, 46 + yOffset);
+          ctx.quadraticCurveTo(cx, 38 + yOffset, b, 46 + yOffset + tilt);
+        } else if (style === 'asym') {
+          if (a < 150) { ctx.moveTo(a, 48 + yOffset); ctx.lineTo(b, 40 + yOffset + tilt); }
+          else { ctx.moveTo(a, 58 + yOffset); ctx.lineTo(b, 50 + yOffset - tilt); }
+        } else {
+          ctx.moveTo(a, 46 + yOffset);
+          ctx.lineTo(b, 46 + yOffset + tilt);
+        }
+        ctx.stroke();
+      }
+    }
+
+    function drawEyeWhite(ctx, cx, cy, r, tint = null) {
+      ctx.fillStyle = tint || PAPER;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    /** Párpado negro que recorta el ojo (como el visor Bender) */
+    function drawLidMask(ctx, cx, cy, r, top, bot, angle) {
+      ctx.fillStyle = INK;
+      if (angle === 'angry-in') {
+        const inner = cx > 160;
+        ctx.beginPath();
+        if (!inner) {
+          ctx.moveTo(cx - r, cy - r);
+          ctx.lineTo(cx + r + 2, cy - r);
+          ctx.lineTo(cx + r + 2, cy - r + r * 0.55);
+          ctx.lineTo(cx - r, cy - r + r * 0.2);
+        } else {
+          ctx.moveTo(cx + r, cy - r);
+          ctx.lineTo(cx - r - 2, cy - r);
+          ctx.lineTo(cx - r - 2, cy - r + r * 0.55);
+          ctx.lineTo(cx + r, cy - r + r * 0.2);
+        }
+        ctx.closePath();
+        ctx.fill();
+      } else if (angle === 'sad-out') {
+        const outer = cx < 160;
+        ctx.beginPath();
+        if (outer) {
+          ctx.moveTo(cx - r, cy + r);
+          ctx.lineTo(cx + r, cy + r);
+          ctx.lineTo(cx + r, cy + r - r * 0.5);
+          ctx.lineTo(cx - r, cy + r - r * 0.15);
+        } else {
+          ctx.moveTo(cx + r, cy + r);
+          ctx.lineTo(cx - r, cy + r);
+          ctx.lineTo(cx - r, cy + r - r * 0.5);
+          ctx.lineTo(cx + r, cy + r - r * 0.15);
+        }
+        ctx.closePath();
+        ctx.fill();
+      }
+      if (top > 0) {
+        ctx.fillRect(cx - r - 1, cy - r - 1, r * 2 + 2, r * 2 * top + 1);
+      }
+      if (bot > 0) {
+        const h = r * 2 * bot;
+        ctx.fillRect(cx - r - 1, cy + r - h, r * 2 + 2, h + 1);
+      }
+    }
+
+    function drawWinkLine(ctx, cx, cy, r) {
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(cx - r + 8, cy + 2);
+      ctx.quadraticCurveTo(cx, cy + r * 0.35, cx + r - 8, cy + 2);
+      ctx.stroke();
+    }
+
+    function drawSquarePupil(ctx, x, y, s) {
+      ctx.fillStyle = INK;
+      ctx.fillRect(x - s, y - s, s * 2, s * 2);
+    }
+
+    function drawHeartPupil(ctx, x, y, s = 8, color = COL.love) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(x, y + s * 0.55);
+      ctx.bezierCurveTo(x - s * 0.8, y, x - s, y - s * 0.6, x, y - s * 0.2);
+      ctx.bezierCurveTo(x + s, y - s * 0.6, x + s * 0.8, y, x, y + s * 0.55);
+      ctx.fill();
+    }
+
+    function drawSpiralPupil(ctx, cx, cy, t) {
+      ctx.strokeStyle = COL.dizzy;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      const turns = 2.2;
+      for (let i = 0; i <= 40; i++) {
+        const a = i / 40 * turns * Math.PI * 2 + t * 0.004;
+        const rad = 2 + i * 0.35;
+        const px = cx + Math.cos(a) * rad;
+        const py = cy + Math.sin(a) * rad;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+
+    function drawTear(ctx, cx, cy, r) {
+      const tx = cx - 6, ty = cy + r + 4;
+      ctx.fillStyle = COL.tear;
+      // Gota grande: punta + cuerpo
+      ctx.beginPath();
+      ctx.moveTo(tx, ty - 14);
+      ctx.bezierCurveTo(tx - 10, ty - 4, tx - 10, ty + 10, tx, ty + 20);
+      ctx.bezierCurveTo(tx + 10, ty + 10, tx + 10, ty - 4, tx, ty - 14);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(tx, ty + 22, 8, 0, Math.PI * 2);
+      ctx.fill();
+      // Brillo
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.beginPath();
+      ctx.arc(tx - 3, ty + 6, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function mouthOffset(t, c, bow, tilt, glitch, x) {
+      let d = (bow || 0) * c + (tilt || 0) * (t - 0.5);
+      if (glitch) d += glitch * Math.sin(x * 0.35) * (t > 0.3 && t < 0.7 ? 1 : 0.4);
+      return d;
+    }
+
+    // Simula audio TTS — robot: picos marcados, cierres rápidos
+    const mouthAudioSim = { smooth: 0 };
+    function updateMouthAudioSim(t) {
+      let target = 0;
+      const layers = [
+        { period: 68, width: 0.17, amp: 1.0 },
+        { period: 43, width: 0.2, amp: 0.55 },
+        { period: 101, width: 0.14, amp: 0.72 },
+      ];
+      for (const s of layers) {
+        const p = (t % s.period) / s.period;
+        if (p < s.width) {
+          const hit = Math.pow(Math.sin((p / s.width) * Math.PI), 0.28);
+          target = Math.max(target, s.amp * hit);
+        }
+      }
+      const phrase = 0.38 + 0.62 * (0.5 + 0.5 * Math.sin(t * 0.0056));
+      target *= phrase;
+      if (Math.sin(t * 0.0023) > 0.986) target *= 0.12;
+
+      const gap = Math.abs(target - mouthAudioSim.smooth);
+      const falling = target < mouthAudioSim.smooth;
+      const rate = falling
+        ? 0.58 + Math.min(0.38, gap * 1.55)
+        : 0.86 + Math.min(0.12, gap * 0.9);
+      mouthAudioSim.smooth += (target - mouthAudioSim.smooth) * rate;
+      if (mouthAudioSim.smooth < 0.025) mouthAudioSim.smooth = 0;
+      return mouthAudioSim.smooth;
+    }
+
+    function mouthOpenFactor(speaking) {
+      if (!speaking) return MOUTH_TALK_NEUTRAL;
+      const amp = mouthAudioSim.smooth;
+      return Math.max(0, Math.min(1,
+        MOUTH_TALK_NEUTRAL + (amp - MOUTH_TALK_AMP_CENTER) * MOUTH_TALK_AMP_SCALE));
+    }
+
+    function mouthSpreadDelta(openFactor) {
+      const delta = openFactor - MOUTH_TALK_NEUTRAL;
+      const gain = delta >= 0 ? MOUTH_TALK_OPEN_MAX : MOUTH_TALK_CLOSE_MAX;
+      return delta * gain * MOUTH_TALK_SPREAD_GAIN;
+    }
+
+    function mouthTalkMotion(speaking) {
+      return mouthOpenFactor(speaking);
+    }
+
+    function mouthShapeAt(x, cfg, my, w) {
+      const { x0, gap = 16, pinch = 0, bow = 0, tilt = 0, glitch = 0 } = cfg;
+      const u = (x - x0) / w;
+      const c = 1 - Math.pow(2 * u - 1, 2);
+      const half = gap * MOUTH_HEIGHT * (0.5 + 0.5 * Math.sqrt(Math.max(0, c))) * (1 - pinch * c);
+      const dy = mouthOffset(u, c, bow, tilt, glitch, x);
+      return { top: my - half + dy, bot: my + half + dy, u };
+    }
+
+    const MOUTH_PINCH_U = 0.15;
+
+    const MOUTH_PARTS = [
+      { id: 'A', label: 'Labio superior (centro)', color: '#e63946' },
+      { id: 'B', label: 'Labio inferior (reflejo de A)', color: '#1d4ed8', mirror: true },
+      { id: 'C', label: 'Borde vertical izquierdo', color: '#ea580c' },
+      { id: 'D', label: 'Borde vertical derecho (reflejo de C)', color: '#f97316', mirror: true },
+      { id: 'E', label: 'Centro apertura (reflejo)', color: '#16a34a', mirror: true },
+      { id: 'F', label: 'Pinch izquierdo', color: '#c026d3' },
+      { id: 'G', label: 'Pinch derecho (reflejo de F)', color: '#d946ef', mirror: true },
+      { id: 'H', label: 'Línea interna superior (izq.)', color: '#0891b2' },
+      { id: 'I', label: 'Línea interna inferior (reflejo de H)', color: '#7c3aed', mirror: true },
+      { id: 'J', label: 'Bulbo comisura izq.', color: '#ca8a04' },
+      { id: 'K', label: 'Bulbo comisura der. (reflejo de J)', color: '#eab308', mirror: true },
+      { id: 'L', label: 'Diente vertical (izq.)', color: '#65a30d' },
+    ];
+
+    const MOUTH_EDIT_DRAG = new Set(['A', 'C', 'F', 'H', 'J', 'L']);
+
+    const mouthEdit = { points: null, dragId: null };
+
+    // Apertura: máx. en centro; pinch muy alejado (cerca de comisuras) y con mucho más hueco.
+    function mouthGapScale(u) {
+      const center = Math.sin(u * Math.PI);
+      const p = MOUTH_PINCH_U;
+      const q = Math.min(Math.abs(u - p), Math.abs(u - (1 - p)));
+      const awayPinch = Math.min(1, q / 0.12);
+      const c2 = center * center;
+      const gmin = 0.68;
+      return gmin + (1 - gmin) * c2 * (0.22 + 0.78 * awayPinch);
+    }
+
+    function mouthInnerY(x, cfg, my, w, isUpper, openFactor, speaking) {
+      const { top, bot, u } = mouthShapeAt(x, cfg, my, w);
+      const mid = (top + bot) * 0.5;
+      const h = bot - top;
+      const scale = mouthGapScale(u);
+      const lens = Math.sin(u * Math.PI);
+      const halfGap = h * 0.155 * scale + mouthSpreadDelta(speaking ? openFactor : MOUTH_TALK_NEUTRAL) * lens * 0.92;
+      const margin = 5;
+      let y = isUpper ? mid - halfGap : mid + halfGap;
+      if (isUpper) y = Math.max(top + margin, Math.min(y, mid - 2));
+      else y = Math.min(bot - margin, Math.max(y, mid + 2));
+      return y;
+    }
+
+    function drawSideBulb(ctx, xEdge, yLine, shape, isUpper, isLeft) {
+      const anchorY = isUpper ? shape.top + 6 : shape.bot - 6;
+      const cx = isLeft ? xEdge + 5 : xEdge - 5;
+      const cy = isUpper ? anchorY + 3 : anchorY - 3;
+      const xStart = isLeft ? xEdge + 4 : xEdge - 4;
+      ctx.beginPath();
+      ctx.moveTo(xStart, yLine);
+      ctx.quadraticCurveTo(cx, cy, xEdge, anchorY);
+      ctx.stroke();
+    }
+
+    function drawMouthGrid(ctx, cfg, t = 0, speaking = false, useCustom = false) {
+      const { x0, x1 } = cfg;
+      const w = x1 - x0, my = 154;
+      const openFactor = mouthTalkMotion(speaking);
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = speaking ? 2.5 : 2;
+
+      if (useCustom && mouthEdit.points) {
+        syncMirrors(cfg);
+        drawMouthFrame(ctx, cfg, my, w);
+        drawMouthInnerEdited(ctx, cfg, my, w, openFactor, speaking);
+        return;
+      }
+
+      const xInnerL = x0 + 4;
+      const xInnerR = x1 - 4;
+      const shapeL = mouthShapeAt(x0, cfg, my, w);
+      const shapeR = mouthShapeAt(x1, cfg, my, w);
+
+      ctx.beginPath();
+      ctx.moveTo(x0, shapeL.top);
+      ctx.lineTo(x0, shapeL.bot);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x1, shapeR.top);
+      ctx.lineTo(x1, shapeR.bot);
+      ctx.stroke();
+
+      let pT = shapeL.top, pB = shapeL.bot;
+      for (let x = x0 + 1; x <= x1; x++) {
+        const { top, bot } = mouthShapeAt(x, cfg, my, w);
+        const ln = (a, b, c1, d) => { ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(c1, d); ctx.stroke(); };
+        ln(x - 1, pT, x, top);
+        ln(x - 1, pB, x, bot);
+        pT = top; pB = bot;
+      }
+
+      const teethN = cfg.teeth ?? 4;
+      for (let i = 1; i < teethN; i++) {
+        const x = x0 + (w * i) / teethN;
+        const { top, bot } = mouthShapeAt(x, cfg, my, w);
+        ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bot); ctx.stroke();
+      }
+
+      for (const isUpper of [true, false]) {
+        const yL = mouthInnerY(xInnerL, cfg, my, w, isUpper, openFactor, speaking);
+        const yR = mouthInnerY(xInnerR, cfg, my, w, isUpper, openFactor, speaking);
+
+        let lx = xInnerL, ly = yL;
+        for (let x = xInnerL + 1; x <= xInnerR; x++) {
+          const hy = mouthInnerY(x, cfg, my, w, isUpper, openFactor, speaking);
+          ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(x, hy); ctx.stroke();
+          lx = x; ly = hy;
+        }
+
+        drawSideBulb(ctx, x0, yL, shapeL, isUpper, true);
+        drawSideBulb(ctx, x1, yR, shapeR, isUpper, false);
+      }
+    }
+
+    function catmullPt(p0, p1, p2, p3, t) {
+      const t2 = t * t, t3 = t2 * t;
+      return {
+        x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t +
+          (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+          (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+        y: 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t +
+          (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
+          (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3),
+      };
+    }
+
+    function drawSpline(ctx, pts, steps = 10) {
+      if (pts.length < 2) return;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p0 = pts[Math.max(0, i - 1)];
+        const p1 = pts[i];
+        const p2 = pts[i + 1];
+        const p3 = pts[Math.min(pts.length - 1, i + 2)];
+        for (let s = 1; s <= steps; s++) {
+          const q = catmullPt(p0, p1, p2, p3, s / steps);
+          ctx.lineTo(q.x, q.y);
+        }
+      }
+      ctx.stroke();
+    }
+
+    function resetMouthEditPoints(cfg) {
+      const lm = getMouthLandmarksProcedural(cfg, 0, false);
+      mouthEdit.points = {};
+      lm.forEach((m) => { mouthEdit.points[m.id] = { x: m.x, y: m.y }; });
+      syncMirrors(cfg);
+      updateMouthConfigText(cfg);
+    }
+
+    function clampMouthPoint(id, x, y, cfg) {
+      const { x0, x1 } = cfg;
+      const my = 154;
+      const w = x1 - x0;
+      const xMid = x0 + w * 0.5;
+      if (id === 'C' || id === 'J') x = x0;
+      if (id === 'A' || id === 'E') x = xMid;
+      if (id === 'H') x = Math.max(x0 + 12, Math.min(xMid, x));
+      if (id === 'F') x = Math.max(x0 + 8, Math.min(xMid - 4, x));
+      if (id === 'L') {
+        x = Math.max(x0 + 10, Math.min(xMid - 6, x));
+        const s = mouthShapeAt(x, cfg, my, w);
+        y = (s.top + s.bot) * 0.5;
+      }
+      const shape = mouthShapeAt(x, cfg, my, w);
+      const mid = (shape.top + shape.bot) * 0.5;
+      const m = 5;
+      y = Math.max(shape.top + m, Math.min(shape.bot - m, y));
+      if (MOUTH_EDIT_DRAG.has(id) && id !== 'C' && id !== 'L') {
+        y = Math.min(y, mid - 3);
+      }
+      return { x, y };
+    }
+
+    function syncHorizontalMirror(cfg) {
+      const p = mouthEdit.points;
+      if (!p) return;
+      const { x0, x1 } = cfg;
+      const w = x1 - x0;
+      if (p.C) p.D = { x: x1, y: p.C.y };
+      if (p.J) p.K = { x: x1, y: p.J.y };
+      if (p.F) {
+        const u = (p.F.x - x0) / w;
+        p.G = { x: x0 + w * (1 - u), y: p.F.y };
+      }
+      if (p.L) {
+        const u = (p.L.x - x0) / w;
+        p.Lr = { x: x0 + w * (1 - u), y: p.L.y };
+      } else {
+        delete p.Lr;
+      }
+    }
+
+    function syncLowerMirror(cfg) {
+      const p = mouthEdit.points;
+      if (!p) return;
+      const my = 154;
+      const w = cfg.x1 - cfg.x0;
+      if (p.H) {
+        p.I = { x: p.H.x, y: mirrorBelow(p.H.y, p.H.x, cfg, my, w) };
+        p.E = { x: p.H.x, y: (p.H.y + p.I.y) * 0.5 };
+      }
+      if (p.A) {
+        p.B = { x: p.A.x, y: mirrorBelow(p.A.y, p.A.x, cfg, my, w) };
+      }
+    }
+
+    function syncMirrors(cfg) {
+      syncHorizontalMirror(cfg);
+      syncLowerMirror(cfg);
+    }
+
+    function getMouthLandmarksProcedural(cfg, t, speaking) {
+      const { x0, x1, teeth = 4 } = cfg;
+      const my = 154;
+      const w = x1 - x0;
+      const animSpread = mouthTalkMotion(speaking);
+      const xMid = x0 + w * 0.5;
+      const xPinchL = x0 + w * MOUTH_PINCH_U;
+      const xPinchR = x1 - w * MOUTH_PINCH_U;
+      const xVertMid = x0 + (w * 2) / teeth;
+      const shapeMid = mouthShapeAt(xMid, cfg, my, w);
+      const shapeL = mouthShapeAt(x0, cfg, my, w);
+      const shapeR = mouthShapeAt(x1, cfg, my, w);
+      const midL = (shapeL.top + shapeL.bot) * 0.5;
+      const midR = (shapeR.top + shapeR.bot) * 0.5;
+      const yUpMid = mouthInnerY(xMid, cfg, my, w, true, animSpread, speaking);
+      const yLoMid = mouthInnerY(xMid, cfg, my, w, false, animSpread, speaking);
+      const yUpPinchL = mouthInnerY(xPinchL, cfg, my, w, true, animSpread, speaking);
+      const yUpPinchR = mouthInnerY(xPinchR, cfg, my, w, true, animSpread, speaking);
+      const bulbYL = shapeL.top + 6;
+      const bulbYR = shapeR.top + 6;
+      const { top: vTop, bot: vBot } = mouthShapeAt(xVertMid, cfg, my, w);
+
+      return [
+        { id: 'A', x: xMid, y: shapeMid.top },
+        { id: 'B', x: xMid, y: shapeMid.bot },
+        { id: 'C', x: x0, y: midL },
+        { id: 'D', x: x1, y: midR },
+        { id: 'E', x: xMid, y: (yUpMid + yLoMid) * 0.5 },
+        { id: 'F', x: xPinchL, y: yUpPinchL },
+        { id: 'G', x: xPinchR, y: yUpPinchR },
+        { id: 'H', x: xMid, y: yUpMid },
+        { id: 'I', x: xMid, y: yLoMid },
+        { id: 'J', x: x0, y: bulbYL },
+        { id: 'K', x: x1, y: bulbYR },
+        { id: 'L', x: xVertMid, y: (vTop + vBot) * 0.5 },
+      ].map((m) => ({ ...m, ...MOUTH_PARTS.find((p) => p.id === m.id) }));
+    }
+
+    function getMouthLandmarks(cfg, t, speaking) {
+      if (mouthEdit.points) {
+        syncMirrors(cfg);
+        return MOUTH_PARTS.map((meta) => ({
+          ...meta,
+          x: mouthEdit.points[meta.id].x,
+          y: mouthEdit.points[meta.id].y,
+        }));
+      }
+      return getMouthLandmarksProcedural(cfg, t, speaking);
+    }
+
+    function drawMouthFrame(ctx, cfg, my, w) {
+      const { x0, x1, teeth = 4 } = cfg;
+      const shapeL = mouthShapeAt(x0, cfg, my, w);
+      const shapeR = mouthShapeAt(x1, cfg, my, w);
+      ctx.beginPath();
+      ctx.moveTo(x0, shapeL.top);
+      ctx.lineTo(x0, shapeL.bot);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x1, shapeR.top);
+      ctx.lineTo(x1, shapeR.bot);
+      ctx.stroke();
+      let pT = shapeL.top, pB = shapeL.bot;
+      for (let x = x0 + 1; x <= x1; x++) {
+        const { top, bot } = mouthShapeAt(x, cfg, my, w);
+        const ln = (a, b, c1, d) => { ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(c1, d); ctx.stroke(); };
+        ln(x - 1, pT, x, top);
+        ln(x - 1, pB, x, bot);
+        pT = top; pB = bot;
+      }
+      const xVert = mouthEdit.points?.L?.x ?? (x0 + (w * 2) / teeth);
+      const xVertR = mouthEdit.points?.Lr?.x;
+      for (let i = 1; i < teeth; i++) {
+        const x = x0 + (w * i) / teeth;
+        if (mouthEdit.points && (Math.abs(x - xVert) < 3 || (xVertR && Math.abs(x - xVertR) < 3))) continue;
+        const { top, bot } = mouthShapeAt(x, cfg, my, w);
+        ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bot); ctx.stroke();
+      }
+      if (mouthEdit.points?.L) {
+        for (const lx of [mouthEdit.points.L.x, mouthEdit.points.Lr?.x].filter((v) => v != null)) {
+          const { top, bot } = mouthShapeAt(lx, cfg, my, w);
+          ctx.beginPath(); ctx.moveTo(lx, top); ctx.lineTo(lx, bot); ctx.stroke();
+        }
+      }
+    }
+
+    function mouthMidY(x, cfg, my, w) {
+      const s = mouthShapeAt(x, cfg, my, w);
+      return (s.top + s.bot) * 0.5;
+    }
+
+    function mirrorBelow(y, x, cfg, my, w) {
+      const mid = mouthMidY(x, cfg, my, w);
+      return mid + (mid - y);
+    }
+
+    function clampInnerLineY(y, x, isUpper, cfg, my, w) {
+      const { top, bot } = mouthShapeAt(x, cfg, my, w);
+      const mid = (top + bot) * 0.5;
+      const margin = 5;
+      if (isUpper) return Math.max(top + margin, Math.min(y, mid - 2));
+      return Math.min(bot - margin, Math.max(y, mid + 2));
+    }
+
+    function talkSpreadY(x, y, isUpper, cfg, my, w, openFactor, speaking) {
+      if (!speaking) return y;
+      const u = (x - cfg.x0) / w;
+      const lens = Math.sin(u * Math.PI);
+      const d = mouthSpreadDelta(openFactor) * lens;
+      const ny = isUpper ? y - d : y + d;
+      return clampInnerLineY(ny, x, isUpper, cfg, my, w);
+    }
+
+    function drawMouthInnerEdited(ctx, cfg, my, w, openFactor = MOUTH_TALK_NEUTRAL, speaking = false) {
+      const { x0, x1 } = cfg;
+      const p = mouthEdit.points;
+      const xIL = x0 + 5;
+      const xIR = x1 - 5;
+      const yJl = talkSpreadY(xIL, p.J.y, true, cfg, my, w, openFactor, speaking);
+      const yKr = talkSpreadY(xIR, p.K.y, true, cfg, my, w, openFactor, speaking);
+      const yHl = talkSpreadY(p.H.x, p.H.y, true, cfg, my, w, openFactor, speaking);
+      const yIl = mirrorBelow(yHl, p.H.x, cfg, my, w);
+      const upper = [
+        { x: xIL, y: yJl },
+        { x: p.F.x, y: talkSpreadY(p.F.x, p.F.y, true, cfg, my, w, openFactor, speaking) },
+        { x: p.H.x, y: yHl },
+        { x: p.G.x, y: talkSpreadY(p.G.x, p.G.y, true, cfg, my, w, openFactor, speaking) },
+        { x: xIR, y: yKr },
+      ];
+      const lower = [
+        { x: xIL, y: talkSpreadY(xIL, mirrorBelow(yJl, xIL, cfg, my, w), false, cfg, my, w, openFactor, speaking) },
+        { x: p.F.x, y: talkSpreadY(p.F.x, mirrorBelow(p.F.y, p.F.x, cfg, my, w), false, cfg, my, w, openFactor, speaking) },
+        { x: p.H.x, y: talkSpreadY(p.H.x, yIl, false, cfg, my, w, openFactor, speaking) },
+        { x: p.G.x, y: talkSpreadY(p.G.x, mirrorBelow(p.G.y, p.G.x, cfg, my, w), false, cfg, my, w, openFactor, speaking) },
+        { x: xIR, y: talkSpreadY(xIR, mirrorBelow(yKr, xIR, cfg, my, w), false, cfg, my, w, openFactor, speaking) },
+      ];
+      const shapeL = mouthShapeAt(x0, cfg, my, w);
+      const shapeR = mouthShapeAt(x1, cfg, my, w);
+      const bulb = (xEdge, yLine, shape, isUpper, isLeft) => {
+        const anchorY = isUpper ? shape.top + 6 : shape.bot - 6;
+        const cx = isLeft ? xEdge + 4 : xEdge - 4;
+        const cy = isUpper ? anchorY + 2 : anchorY - 2;
+        const xStart = isLeft ? xEdge + 4 : xEdge - 4;
+        ctx.beginPath();
+        ctx.moveTo(xStart, yLine);
+        ctx.quadraticCurveTo(cx, cy, xEdge, anchorY);
+        ctx.stroke();
+      };
+      drawSpline(ctx, upper, 8);
+      drawSpline(ctx, lower, 8);
+      bulb(x0, upper[0].y, shapeL, true, true);
+      bulb(x0, lower[0].y, shapeL, false, true);
+      bulb(x1, upper[upper.length - 1].y, shapeR, true, false);
+      bulb(x1, lower[lower.length - 1].y, shapeR, false, false);
+    }
+
+    function exportMouthConfig(cfg) {
+      const my = 154;
+      const w = cfg.x1 - cfg.x0;
+      const pointsNorm = {};
+      for (const meta of MOUTH_PARTS) {
+        if (meta.mirror) continue;
+        const pt = mouthEdit.points[meta.id];
+        const shape = mouthShapeAt(pt.x, cfg, my, w);
+        const h = shape.bot - shape.top || 1;
+        pointsNorm[meta.id] = {
+          u: +((pt.x - cfg.x0) / w).toFixed(4),
+          t: +((pt.y - shape.top) / h).toFixed(4),
+        };
+      }
+      return {
+        version: 3,
+        mirrorLower: true,
+        mirrorRight: true,
+        mouth: { x0: cfg.x0, x1: cfg.x1, gap: cfg.gap, teeth: cfg.teeth ?? 4, bow: cfg.bow ?? 0 },
+        pinchU: +((mouthEdit.points.F.x - cfg.x0) / w).toFixed(4),
+        vertU: mouthEdit.points.L ? +((mouthEdit.points.L.x - cfg.x0) / w).toFixed(4) : undefined,
+        pointsNorm,
+        notes: 'Solo lado izquierdo + centro; derecha e inferior = reflejo. Pega en el chat.',
+      };
+    }
+
+    function updateMouthConfigText(cfg) {
+      const el = document.getElementById('mouthConfigOut');
+      if (!mouthEdit.points) { el.value = ''; return; }
+      el.value = JSON.stringify(exportMouthConfig(cfg), null, 2);
+    }
+
+    function importMouthConfig(data, baseCfg) {
+      const cfg = { ...baseCfg, ...(data.mouth || {}) };
+      const my = 154;
+      const w = cfg.x1 - cfg.x0;
+      if (!data.pointsNorm) throw new Error('Falta pointsNorm');
+      mouthEdit.points = {};
+      for (const [id, norm] of Object.entries(data.pointsNorm)) {
+        const x = cfg.x0 + norm.u * w;
+        const shape = mouthShapeAt(x, cfg, my, w);
+        const h = shape.bot - shape.top || 1;
+        mouthEdit.points[id] = { x, y: shape.top + norm.t * h };
+      }
+      syncMirrors(cfg);
+      updateMouthConfigText(cfg);
+      return cfg;
+    }
+
+    const BAKED_MOUTH_CONFIG = {
+      version: 3,
+      mirrorLower: true,
+      mirrorRight: true,
+      mouth: { x0: 88, x1: 232, gap: 19, teeth: 4, bow: 2 },
+      pinchU: 0.1795,
+      vertU: 0.4583,
+      pointsNorm: {
+        A: { u: 0.5, t: 0.1079 },
+        C: { u: 0, t: 0.4249 },
+        F: { u: 0.1795, t: 0.4268 },
+        H: { u: 0.5, t: 0.2259 },
+        J: { u: 0, t: 0.3585 },
+        L: { u: 0.4583, t: 0.5 },
+      },
+    };
+
+    function drawMouthMarkers(ctx, landmarks, editMode = false) {
+      for (const m of landmarks) {
+        const mirrored = !!m.mirror;
+        const draggable = editMode && MOUTH_EDIT_DRAG.has(m.id);
+        const r = editMode ? (draggable ? 8 : 6) : 5.5;
+        ctx.beginPath();
+        ctx.arc(m.x, m.y, r, 0, Math.PI * 2);
+        if (mirrored && editMode) {
+          ctx.fillStyle = 'rgba(255,255,255,0.85)';
+          ctx.fill();
+          ctx.strokeStyle = m.color;
+          ctx.lineWidth = 2;
+          ctx.setLineDash([3, 3]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        } else {
+          ctx.fillStyle = m.color;
+          ctx.fill();
+          ctx.strokeStyle = editMode ? '#111' : '#fff';
+          ctx.lineWidth = editMode ? 2 : 1.5;
+          ctx.stroke();
+        }
+        if (editMode) {
+          ctx.font = 'bold 10px Arial,sans-serif';
+          ctx.fillStyle = mirrored ? m.color : '#111';
+          ctx.fillText(m.id, m.x - 3.5, m.y - 11);
+        }
+      }
+    }
+
+    function drawCompactMouth(ctx) {
+      const cx = 160, cy = 154, hw = 28, hh = 17;
+      rr(ctx, cx - hw, cy - hh, hw * 2, hh * 2, 6, null, INK);
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 1.5;
+      for (let row = 1; row < 3; row++) {
+        const y = cy - hh + (hh * 2 * row) / 3;
+        ctx.beginPath(); ctx.moveTo(cx - hw + 4, y); ctx.lineTo(cx + hw - 4, y); ctx.stroke();
+      }
+      for (let col = 1; col < 4; col++) {
+        const x = cx - hw + (hw * 2 * col) / 4;
+        ctx.beginPath(); ctx.moveTo(x, cy - hh + 4); ctx.lineTo(x, cy + hh - 4); ctx.stroke();
+      }
+    }
+
+    function drawOMouth(ctx) {
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(160, 154, 14, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(160, 154, 13, 0, Math.PI * 2); ctx.stroke();
+    }
+
+    function animProfile(emotion) {
+      if (emotion === 'sleepy') return { blinkMin: 1200, blinkMax: 2600, gazeAmp: 2, mouthIdle: 0.6 };
+      if (emotion === 'thinking') return { blinkMin: 2600, blinkMax: 5200, gazeAmp: 10, mouthIdle: 0.5 };
+      if (emotion === 'excited' || emotion === 'happy') return { blinkMin: 2200, blinkMax: 4200, gazeAmp: 7, mouthIdle: 1.8 };
+      if (emotion === 'angry' || emotion === 'skeptical') return { blinkMin: 3400, blinkMax: 7000, gazeAmp: 4, mouthIdle: 0.8 };
+      return { blinkMin: 2800, blinkMax: 6500, gazeAmp: 6, mouthIdle: 1.0 };
+    }
+
+    function nextBlinkDelayMs(profile) {
+      return profile.blinkMin + Math.random() * (profile.blinkMax - profile.blinkMin);
+    }
+
+    function makeAnimState(emotion, t0) {
+      const profile = animProfile(emotion);
+      return {
+        emotion,
+        profile,
+        nextBlinkAt: t0 + nextBlinkDelayMs(profile),
+        blinkEndAt: 0,
+        blink: 0,
+        gazeX: 0,
+        gazeY: 0,
+        gazeTx: 0,
+        gazeTy: 0,
+        nextSaccadeAt: t0 + 700 + Math.random() * 1800,
+        browPhase: Math.random() * Math.PI * 2,
+      };
+    }
+
+    function updateAnimState(state, emotion, t) {
+      if (state.emotion !== emotion) {
+        const fresh = makeAnimState(emotion, t);
+        Object.assign(state, fresh);
+      }
+      const p = state.profile;
+
+      if (t >= state.nextBlinkAt && t >= state.blinkEndAt) {
+        const dur = 110 + Math.random() * 90;
+        state.blinkEndAt = t + dur;
+        state.nextBlinkAt = state.blinkEndAt + nextBlinkDelayMs(p);
+      }
+      if (t < state.blinkEndAt) {
+        const u = (state.blinkEndAt - t) / 200;
+        const bell = 1 - Math.min(1, Math.abs(u - 0.5) * 2);
+        state.blink = Math.max(0, Math.min(1, bell * 1.2));
+      } else {
+        state.blink = 0;
+      }
+
+      if (emotion === 'thinking') {
+        state.gazeTx = Math.sin(t * 0.02) > 0 ? p.gazeAmp : -p.gazeAmp;
+        state.gazeTy = -3;
+      } else if (t >= state.nextSaccadeAt) {
+        state.gazeTx = (Math.random() * 2 - 1) * p.gazeAmp;
+        state.gazeTy = (Math.random() * 2 - 1) * (p.gazeAmp * 0.25);
+        state.nextSaccadeAt = t + 850 + Math.random() * 2300;
+      }
+
+      state.gazeX += (state.gazeTx - state.gazeX) * 0.18;
+      state.gazeY += (state.gazeTy - state.gazeY) * 0.14;
+    }
+
+    function drawEye(ctx, side, preset, gx, gy, t) {
+      const cx = side === 'left' ? EYE_L : EYE_R;
+      const cy = EYE_Y;
+      const r = preset.eyeR || EYE_RAD;
+      const wink = preset.wink === 'left' && side === 'left' || preset.wink === 'right' && side === 'right';
+      const tint = preset.eyeTint || null;
+
+      if (wink) {
+        // Ojo blanco visible + línea de guiño encima (como referencia cunning)
+        drawEyeWhite(ctx, cx, cy, r, tint);
+        drawWinkLine(ctx, cx, cy, r);
+        return;
+      }
+
+      drawEyeWhite(ctx, cx, cy, r, tint);
+
+      const top = side === 'left' ? (preset.topLidL ?? preset.topLid ?? 0) : (preset.topLidR ?? preset.topLid ?? 0);
+      const bot = side === 'left' ? (preset.botLidL ?? preset.botLid ?? 0) : (preset.botLidR ?? preset.botLid ?? 0);
+      drawLidMask(ctx, cx, cy, r, top, bot, preset.lidAngle);
+
+      const px = cx + gx + (preset.pupilOff?.x || 0);
+      const py = cy + gy + (preset.pupilOff?.y || 0);
+      const ps = preset.pupilS || 6;
+      const ptype = preset.pupil || 'square';
+
+      if (ptype === 'none') return;
+      if (ptype === 'heart') drawHeartPupil(ctx, px, py, ps * 1.08);
+      else if (ptype === 'spiral') drawSpiralPupil(ctx, px, py, t);
+      else if (ptype === 'x') {
+        ctx.strokeStyle = INK; ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(px - 10, py - 10); ctx.lineTo(px + 10, py + 10);
+        ctx.moveTo(px - 10, py + 10); ctx.lineTo(px + 10, py - 10);
+        ctx.stroke();
+      } else drawSquarePupil(ctx, px, py, ps);
+    }
+
+    function drawFace(ctx, emotion, t = 0, speaking = false, anim = null, opts = {}) {
+      const p = PRESETS[emotion] || PRESETS.neutral;
+      ctx.fillStyle = PAPER;
+      ctx.fillRect(0, 0, W, H);
+
+      drawCapsule(ctx);
+      const dyn = anim || { blink: 0, gazeX: Math.sin(t * 0.006) * 5, gazeY: 0, profile: { mouthIdle: 1.0 }, browPhase: 0 };
+      const browDy = Math.sin(t * 0.004 + dyn.browPhase) * 0.8;
+      const browTilt = Math.sin(t * 0.003 + dyn.browPhase * 0.7) * 0.6;
+      drawBrows(ctx, p.brow || 'flat', browDy, browTilt);
+
+      const eyeL = { ...p };
+      const eyeR = { ...p };
+      const b = dyn.blink || 0;
+      if (p.wink === 'right') {
+        eyeL.topLid = Math.max(eyeL.topLid || 0, b * 0.9);
+        eyeL.botLid = Math.max(eyeL.botLid || 0, b * 0.9);
+      } else if (p.wink === 'left') {
+        eyeR.topLid = Math.max(eyeR.topLid || 0, b * 0.9);
+        eyeR.botLid = Math.max(eyeR.botLid || 0, b * 0.9);
+      } else {
+        eyeL.topLid = Math.max(eyeL.topLid || 0, b * 0.9);
+        eyeL.botLid = Math.max(eyeL.botLid || 0, b * 0.9);
+        eyeR.topLid = eyeL.topLid;
+        eyeR.botLid = eyeL.botLid;
+      }
+      drawEye(ctx, 'left', eyeL, dyn.gazeX, dyn.gazeY, t);
+      drawEye(ctx, 'right', eyeR, dyn.gazeX, dyn.gazeY, t);
+
+      if (p.tear) drawTear(ctx, EYE_L, EYE_Y, p.eyeR || EYE_RAD);
+
+      if (p.mouth === 'compact') drawCompactMouth(ctx);
+      else if (p.mouth === 'o') drawOMouth(ctx);
+      else {
+        const m = { ...p.mouth };
+        const hasCustom = !!opts.mouthCustom && !!mouthEdit.points;
+        const editing = !!opts.mouthEdit;
+        const freezeOnDrag = document.getElementById('mouthFreezeAnim')?.checked;
+        const pauseMouth = editing && freezeOnDrag && !!mouthEdit.dragId;
+        const talk = pauseMouth ? false : speaking;
+        drawMouthGrid(ctx, m, t, talk, hasCustom);
+        if (opts.mouthMarkers) {
+          const lm = hasCustom
+            ? getMouthLandmarks(m, t, talk)
+            : getMouthLandmarksProcedural(m, t, talk);
+          drawMouthMarkers(ctx, lm, editing);
+        }
+      }
+    }
+
+    // --- UI ---
+    const grid = document.getElementById('grid');
+    const talkDemo = document.getElementById('talkDemo');
+    const talkCtx = talkDemo.getContext('2d');
+    const talkAnim = makeAnimState('neutral', 0);
+    let tTalk = 0;
+
+    let heroEmotion = 'neutral';
+    const talkStage = document.getElementById('talkStage');
+    const talkViewport = document.getElementById('talkViewport');
+    const talkCanvasWrap = document.getElementById('talkCanvasWrap');
+    const heroCanvas = document.createElement('canvas');
+    heroCanvas.width = W; heroCanvas.height = H;
+    heroCanvas.id = 'heroPick';
+    heroCanvas.style.cssText = 'display:none';
+    talkStage.insertBefore(heroCanvas, talkViewport);
+    const heroCtx = heroCanvas.getContext('2d');
+
+    const showMouthMarkersEl = document.getElementById('showMouthMarkers');
+    const mouthEditModeEl = document.getElementById('mouthEditMode');
+    const mouthLegendEl = document.getElementById('mouthLegend');
+    const mouthCfgNeutral = () => ({ ...PRESETS.neutral.mouth });
+    const talkZoomEl = document.getElementById('talkZoom');
+    const talkZoomLbl = document.getElementById('talkZoomLbl');
+
+    function applyTalkZoom() {
+      const z = talkZoomEl.value / 100;
+      const sw = Math.round(W * z);
+      const sh = Math.round(H * z);
+      talkDemo.style.transform = `scale(${z})`;
+      talkCanvasWrap.style.width = sw + 'px';
+      talkCanvasWrap.style.height = sh + 'px';
+      const inFs = document.fullscreenElement === talkStage;
+      if (!inFs) {
+        talkViewport.style.width = sw + 'px';
+        talkViewport.style.height = sh + 'px';
+      } else {
+        talkViewport.style.width = '';
+        talkViewport.style.height = '';
+      }
+      talkZoomLbl.textContent = talkZoomEl.value + '%';
+    }
+
+    function fitZoomToViewport() {
+      const pad = 32;
+      const vw = Math.max(120, talkViewport.clientWidth - pad);
+      const vh = Math.max(80, talkViewport.clientHeight - pad);
+      const fit = Math.min(vw / W, vh / H) * 100;
+      const z = Math.round(Math.min(450, Math.max(100, fit)) / 10) * 10;
+      talkZoomEl.value = String(z);
+      applyTalkZoom();
+      talkViewport.scrollLeft = Math.max(0, (talkViewport.scrollWidth - talkViewport.clientWidth) / 2);
+      talkViewport.scrollTop = Math.max(0, (talkViewport.scrollHeight - talkViewport.clientHeight) / 2);
+    }
+
+    function setTalkZoomPercent(next, anchor) {
+      const old = parseInt(talkZoomEl.value, 10);
+      const clamped = Math.min(450, Math.max(100, Math.round(next / 10) * 10));
+      if (clamped === old) return;
+      const rect = talkViewport.getBoundingClientRect();
+      const ax = anchor ? anchor.x - rect.left + talkViewport.scrollLeft
+        : talkViewport.scrollLeft + talkViewport.clientWidth / 2;
+      const ay = anchor ? anchor.y - rect.top + talkViewport.scrollTop
+        : talkViewport.scrollTop + talkViewport.clientHeight / 2;
+      const ratio = clamped / old;
+      talkZoomEl.value = String(clamped);
+      applyTalkZoom();
+      talkViewport.scrollLeft = ax * ratio - (anchor ? anchor.x - rect.left : talkViewport.clientWidth / 2);
+      talkViewport.scrollTop = ay * ratio - (anchor ? anchor.y - rect.top : talkViewport.clientHeight / 2);
+    }
+
+    talkZoomEl.addEventListener('input', () => applyTalkZoom());
+    applyTalkZoom();
+
+    const talkFullscreenBtn = document.getElementById('talkFullscreen');
+    talkFullscreenBtn.addEventListener('click', () => {
+      if (document.fullscreenElement !== talkStage) {
+        talkStage.requestFullscreen?.();
+      } else {
+        document.exitFullscreen();
+      }
+    });
+    document.addEventListener('fullscreenchange', () => {
+      if (document.fullscreenElement === talkStage) {
+        talkFullscreenBtn.textContent = 'Salir pantalla completa';
+        requestAnimationFrame(() => requestAnimationFrame(fitZoomToViewport));
+      } else {
+        talkFullscreenBtn.textContent = 'Pantalla completa';
+        talkViewport.scrollLeft = 0;
+        talkViewport.scrollTop = 0;
+        applyTalkZoom();
+      }
+    });
+
+    const talkPan = { active: false, x: 0, y: 0, sl: 0, st: 0 };
+    talkViewport.addEventListener('mousedown', (e) => {
+      if (e.button !== 1) return;
+      e.preventDefault();
+      talkPan.active = true;
+      talkPan.x = e.clientX;
+      talkPan.y = e.clientY;
+      talkPan.sl = talkViewport.scrollLeft;
+      talkPan.st = talkViewport.scrollTop;
+      talkViewport.classList.add('panning');
+    });
+    talkViewport.addEventListener('auxclick', (e) => {
+      if (e.button === 1) e.preventDefault();
+    });
+    talkViewport.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const step = e.deltaY < 0 ? 10 : -10;
+      setTalkZoomPercent(parseInt(talkZoomEl.value, 10) + step, { x: e.clientX, y: e.clientY });
+    }, { passive: false });
+    window.addEventListener('mousemove', (e) => {
+      if (talkPan.active) {
+        talkViewport.scrollLeft = talkPan.sl - (e.clientX - talkPan.x);
+        talkViewport.scrollTop = talkPan.st - (e.clientY - talkPan.y);
+        return;
+      }
+      if (!mouthEdit.dragId) return;
+      const cfg = mouthCfgNeutral();
+      const pos = canvasPos(talkDemo, e);
+      const c = clampMouthPoint(mouthEdit.dragId, pos.x, pos.y, cfg);
+      mouthEdit.points[mouthEdit.dragId] = c;
+      syncMirrors(cfg);
+      for (const id of MOUTH_EDIT_DRAG) {
+        const pt = mouthEdit.points[id];
+        mouthEdit.points[id] = clampMouthPoint(id, pt.x, pt.y, cfg);
+      }
+      syncMirrors(cfg);
+      updateMouthConfigText(cfg);
+    });
+    window.addEventListener('mouseup', (e) => {
+      if (e.button === 1 && talkPan.active) {
+        talkPan.active = false;
+        talkViewport.classList.remove('panning');
+      }
+      if (e.button === 0) mouthEdit.dragId = null;
+    });
+
+    mouthLegendEl.innerHTML = MOUTH_PARTS.map((p) =>
+      `<li><span class="dot" style="background:${p.color}"></span><code>${p.id}</code> ${p.label}${p.mirror ? ' · auto' : ''}</li>`
+    ).join('');
+
+    function canvasPos(cv, e) {
+      const r = cv.getBoundingClientRect();
+      const sx = cv.width / r.width;
+      const sy = cv.height / r.height;
+      return {
+        x: (e.clientX - r.left) * sx,
+        y: (e.clientY - r.top) * sy,
+      };
+    }
+
+    function hitMouthPoint(x, y) {
+      if (!mouthEdit.points) return null;
+      let best = null, bestD = 14;
+      for (const meta of MOUTH_PARTS) {
+        if (!MOUTH_EDIT_DRAG.has(meta.id)) continue;
+        const p = mouthEdit.points[meta.id];
+        const d = Math.hypot(p.x - x, p.y - y);
+        if (d < bestD) { bestD = d; best = meta.id; }
+      }
+      return best;
+    }
+
+    talkDemo.addEventListener('mousedown', (e) => {
+      if (!mouthEditModeEl.checked) return;
+      if (!mouthEdit.points) resetMouthEditPoints(mouthCfgNeutral());
+      const pos = canvasPos(talkDemo, e);
+      const id = hitMouthPoint(pos.x, pos.y);
+      if (id) {
+        mouthEdit.dragId = id;
+        e.preventDefault();
+      }
+    });
+
+    mouthEditModeEl.addEventListener('change', () => {
+      talkDemo.classList.toggle('edit-mode', mouthEditModeEl.checked);
+      talkDemo.style.cursor = mouthEditModeEl.checked ? 'grab' : '';
+      if (mouthEditModeEl.checked && !mouthEdit.points) {
+        resetMouthEditPoints(mouthCfgNeutral());
+      }
+    });
+
+    document.getElementById('mouthResetPts').addEventListener('click', () => {
+      resetMouthEditPoints(mouthCfgNeutral());
+    });
+
+    document.getElementById('mouthLoadCfg').addEventListener('click', () => {
+      const raw = document.getElementById('mouthConfigOut').value.trim();
+      try {
+        const data = raw ? JSON.parse(raw) : BAKED_MOUTH_CONFIG;
+        importMouthConfig(data, mouthCfgNeutral());
+        document.getElementById('mouthLoadCfg').textContent = '¡Cargado!';
+      } catch (e) {
+        alert('JSON inválido: ' + e.message);
+        return;
+      }
+      setTimeout(() => { document.getElementById('mouthLoadCfg').textContent = 'Cargar JSON'; }, 1200);
+    });
+
+    importMouthConfig(BAKED_MOUTH_CONFIG, mouthCfgNeutral());
+
+    document.getElementById('mouthCopyCfg').addEventListener('click', async () => {
+      if (!mouthEdit.points) resetMouthEditPoints(mouthCfgNeutral());
+      const txt = document.getElementById('mouthConfigOut').value;
+      try {
+        await navigator.clipboard.writeText(txt);
+      } catch (_) { /* textarea visible */ }
+      document.getElementById('mouthCopyCfg').textContent = '¡Copiado!';
+      setTimeout(() => { document.getElementById('mouthCopyCfg').textContent = 'Copiar config'; }, 1200);
+    });
+
+    const talkLoop = () => {
+      tTalk += 16;
+      updateMouthAudioSim(tTalk);
+      updateAnimState(talkAnim, 'neutral', tTalk);
+      if (heroCanvas.style.display === 'none') {
+        const editing = mouthEditModeEl.checked;
+        drawFace(talkCtx, 'neutral', tTalk, true, talkAnim, {
+          mouthCustom: true,
+          mouthMarkers: showMouthMarkersEl.checked,
+          mouthEdit: editing,
+        });
+      }
+      requestAnimationFrame(talkLoop);
+    };
+    talkLoop();
+
+    function pickHero(id) {
+      heroEmotion = id;
+      talkViewport.style.display = 'none';
+      heroCanvas.style.display = 'block';
+      talkStage.querySelector('h2').textContent = id + ' (vista grande) — clic para volver';
+    }
+
+    talkStage.querySelector('h2').addEventListener('click', () => {
+      if (heroCanvas.style.display === 'none') return;
+      heroCanvas.style.display = 'none';
+      talkViewport.style.display = '';
+      talkStage.querySelector('h2').textContent = 'talking — animación boca (preview)';
+    });
+
+    EMOTIONS.forEach(({ id, fw }) => {
+      const card = document.createElement('div');
+      card.className = 'card' + (fw ? '' : ' extra');
+      const h2 = document.createElement('h2');
+      h2.textContent = id + (fw ? '' : ' · extra');
+      const cv = document.createElement('canvas');
+      cv.width = W; cv.height = H;
+      card.appendChild(h2);
+      card.appendChild(cv);
+      grid.appendChild(card);
+      const ctx = cv.getContext('2d');
+      const anim = makeAnimState(id, 0);
+      let tt = 0;
+      cv.addEventListener('click', () => pickHero(id));
+      const loop = () => {
+        tt += 16;
+        updateAnimState(anim, id, tt);
+        drawFace(ctx, id, tt, false, anim);
+        if (heroEmotion === id && heroCanvas.style.display !== 'none') {
+          drawFace(heroCtx, id, tt, false, anim);
+        }
+        requestAnimationFrame(loop);
+      };
+      loop();
+    });
+  </script>
+</body>
+</html>
