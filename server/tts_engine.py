@@ -360,13 +360,26 @@ def _decode_mp3_to_wav(mp3: bytes) -> bytes:
     return _pcm_to_wav(samples, TTS_SAMPLE_RATE)
 
 
-async def _synthesize_edge(text: str, sing: bool, *, sing_strong: bool = False, voice: str | None = None) -> bytes:
+async def _synthesize_edge(
+    text: str,
+    sing: bool,
+    *,
+    sing_strong: bool = False,
+    voice: str | None = None,
+    speed_rate: str = "+0%",
+) -> bytes:
     """edge-tts en subproceso: timeout mata el proceso si se cuelga (Windows)."""
     edge_voice = voice or EDGE_VOICE
 
     def _edge_subprocess() -> bytes:
         payload = json.dumps(
-            {"text": text, "sing": sing, "sing_strong": sing_strong, "voice": edge_voice},
+            {
+                "text": text,
+                "sing": sing,
+                "sing_strong": sing_strong,
+                "voice": edge_voice,
+                "speed_rate": speed_rate,
+            },
             ensure_ascii=False,
         ).encode("utf-8")
         proc = subprocess.run(
@@ -459,9 +472,18 @@ async def synthesize_wav_16k(text: str, sing: bool = False, *, sing_strong: bool
     async def _run() -> bytes:
         engine = srv_cfg.get_tts_engine(TTS_ENGINE)
         edge_voice = srv_cfg.get_edge_voice(EDGE_VOICE)
+
+        # M11: personality voice speed — convert 0.7–1.3 multiplier to Edge-TTS rate string
+        speed_base = float(srv_cfg.get_behavior_config().get("voice_speed_base", 1.0))
+        speed_pct = int(round((speed_base - 1.0) * 100))
+        sign = "+" if speed_pct >= 0 else ""
+        speed_rate = f"{sign}{speed_pct}%"
+
         if engine == "edge":
             try:
-                wav = await _synthesize_edge(text, sing, sing_strong=sing_strong, voice=edge_voice)
+                wav = await _synthesize_edge(
+                    text, sing, sing_strong=sing_strong, voice=edge_voice, speed_rate=speed_rate
+                )
                 log.info("TTS engine: edge (%s), %d bytes", edge_voice, len(wav))
                 return wav
             except Exception as e:

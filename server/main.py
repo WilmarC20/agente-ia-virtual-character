@@ -5,6 +5,7 @@ Run with: .\\start.ps1  (usa el venv, NO Python global)
 
 import asyncio
 import concurrent.futures
+import datetime
 import io
 import json
 import logging
@@ -943,6 +944,17 @@ async def ask_ollama(user_text: str, *, use_history: bool = False,
                      system_prompt_override: str | None = None) -> dict:
     ctx_name = context_manager.get()
     ctx_cfg = context_manager.config(ctx_name)
+
+    # M11: personality behavior config
+    pid = srv_cfg.load().get("personality", "bender")
+    beh = srv_cfg.get_behavior_config(pid)
+
+    # M11: night_mode_auto — switch idle context to night_mode during quiet hours
+    if beh.get("night_mode_auto") and ctx_name == "idle":
+        hour = datetime.datetime.now().hour
+        if hour >= 22 or hour < 7:
+            ctx_name = context_manager.set_context("night_mode")
+            ctx_cfg = context_manager.config(ctx_name)
     system_content = system_prompt_override if system_prompt_override else build_system_prompt()
     if ha.ha_enabled() and _wants_ha_context(user_text):
         devices = await asyncio.to_thread(ha.devices_prompt, OLLAMA_HA_MAX_DEVICES)
@@ -1034,10 +1046,17 @@ async def ask_ollama(user_text: str, *, use_history: bool = False,
     if reply:
         reply = cap_speech_text(reply, sing=sing)
 
+    # M11: emotion_biases — per-personality intensity nudge per emotion
+    biases = beh.get("emotion_biases", {})
+    if emotion in biases:
+        intensity = max(0.0, min(1.0, intensity + biases[emotion]))
+
     # M7: apply session memory modifiers
     mods = _memory.get_modifiers()
     intensity = max(0.0, min(1.0, intensity + mods["intensity_boost"]))
-    expressivity = min(1.0, ctx_cfg["expressivity"] + mods["expressivity_boost"])
+
+    # M11 + M7: expressivity = personality-anchored blend + memory boost
+    expressivity = min(1.0, context_manager.get_effective_expressivity(beh, ctx_name) + mods["expressivity_boost"])
 
     # M5 Rhythm: pre/post response timing from context, adjusted by tone and intensity
     pre_response_ms = ctx_cfg["pre_response_ms"]
@@ -1066,6 +1085,8 @@ async def ask_ollama(user_text: str, *, use_history: bool = False,
         "sing": sing,
         "speak": speak,
         "sound_effect": sound_effect,
+        "emotion_recovery_ms": beh.get("emotion_recovery_ms", 8000),
+        "microexp_rate": round(float(beh.get("microexp_rate", 0.6)), 3),
     }
 
     actions = data.get("actions")
