@@ -16,7 +16,7 @@
       background: radial-gradient(ellipse at 20% 0%, #1e3a5f 0%, var(--bg) 55%);
       color: var(--text); padding: 1.25rem;
     }
-    .wrap { max-width: 820px; margin: 0 auto; }
+    .wrap { max-width: 920px; margin: 0 auto; }
     h1 { font-size: 1.5rem; margin: 0 0 .2rem; }
     .sub { color: var(--muted); font-size: .9rem; margin-bottom: 1.25rem; }
     .tabs { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
@@ -31,6 +31,14 @@
     }
     .panel.active { display: block; }
     .panel h2 { font-size: .95rem; margin: 0 0 .85rem; color: var(--accent); }
+    .section {
+      border: 1px solid #243044; border-radius: 10px; padding: 1rem; margin-bottom: 1rem;
+      background: #121a26;
+    }
+    .section h3 {
+      margin: 0 0 .75rem; font-size: .82rem; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .04em; font-weight: 600;
+    }
     label { display: block; font-size: .78rem; color: var(--muted); margin-bottom: .3rem; }
     select, input[type=text], textarea {
       width: 100%; background: #0d1117; border: 1px solid #334155; border-radius: 8px;
@@ -43,17 +51,20 @@
     button.primary {
       background: linear-gradient(135deg, var(--accent), var(--accent-dim));
       color: #0a1628; border: none; border-radius: 10px; padding: .8rem 1.5rem;
-      font-size: 1rem; font-weight: 700; cursor: pointer; width: 100%; margin-top: .5rem;
+      font-size: 1rem; font-weight: 700; cursor: pointer;
     }
     button.primary:disabled { opacity: .5; cursor: not-allowed; }
     button.danger {
       background: transparent; border: 1px solid var(--danger); color: var(--danger);
       border-radius: 10px; padding: .65rem 1rem; font-size: .9rem; cursor: pointer; width: 100%; margin-top: .5rem;
     }
+    button.secondary {
+      background: transparent; border: 1px solid #334155; color: var(--text);
+      border-radius: 8px; padding: .45rem .85rem; font-size: .82rem; cursor: pointer;
+    }
     .msg { padding: .65rem .85rem; border-radius: 8px; font-size: .88rem; margin-top: .75rem; display: none; }
     .msg.ok { display: block; background: #0d3328; color: #7dffc8; border: 1px solid #1a6b52; }
     .msg.err { display: block; background: #3a1515; color: #ffb4b4; border: 1px solid #6b2a2a; }
-    .preset-desc { font-size: .82rem; color: var(--muted); margin: .25rem 0 .75rem; }
     a { color: var(--accent); }
     ul.phrases { margin: .5rem 0; padding-left: 1.2rem; color: var(--muted); font-size: .85rem; }
     hr.sep { border: none; border-top: 1px solid #2a3548; margin: 1.25rem 0; }
@@ -78,6 +89,28 @@
     }
     .badge.ok { border-color: #1a6b52; color: #7dffc8; }
     .badge.warn { border-color: #6b5a1a; color: var(--warn); }
+    .badge.active { border-color: var(--accent); color: var(--accent); }
+    .profile-grid {
+      display: grid; gap: .5rem;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      margin-bottom: 1rem;
+    }
+    .profile-card {
+      background: #0d1117; border: 1px solid #2a3548; border-radius: 10px;
+      padding: .65rem .75rem; cursor: pointer; text-align: left; transition: border-color .15s;
+    }
+    .profile-card:hover, .profile-card.editing { border-color: var(--accent); }
+    .profile-card.active { box-shadow: 0 0 0 1px var(--accent-dim); }
+    .profile-card strong { display: block; font-size: .88rem; margin-bottom: .2rem; }
+    .profile-card span { font-size: .72rem; color: var(--muted); line-height: 1.3; }
+    .profile-status {
+      display: flex; flex-wrap: wrap; gap: .5rem; align-items: center;
+      margin-bottom: 1rem; font-size: .85rem;
+    }
+    .save-bar {
+      display: flex; gap: .65rem; flex-wrap: wrap; align-items: center; margin-top: .5rem;
+    }
+    .save-bar .primary { flex: 1; min-width: 10rem; margin-top: 0; }
     .track-list { list-style: none; margin: .75rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .45rem; }
     .track-item {
       display: flex; align-items: center; gap: .65rem; padding: .55rem .65rem;
@@ -91,16 +124,7 @@
       background: var(--accent-dim); color: #fff; border: none; border-radius: 8px;
       padding: .45rem .75rem; font-size: .8rem; font-weight: 600; cursor: pointer; flex-shrink: 0;
     }
-    .track-item button.play:disabled { opacity: .45; cursor: not-allowed; }
     .music-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .5rem; }
-    .music-actions button.secondary {
-      background: transparent; border: 1px solid #334155; color: var(--text);
-      border-radius: 8px; padding: .45rem .85rem; font-size: .82rem; cursor: pointer;
-    }
-    button.secondary {
-      background: transparent; border: 1px solid #334155; color: var(--text);
-      border-radius: 8px; padding: .45rem .85rem; font-size: .82rem; cursor: pointer;
-    }
     input[type=file] { font-size: .82rem; color: var(--muted); max-width: 100%; }
     .music-player-panel {
       margin-top: 1rem; padding: 1rem; background: #0d1117;
@@ -112,14 +136,7 @@
       box-shadow: 0 0 8px var(--accent); animation: musicPulse 1.2s ease-in-out infinite;
     }
     @keyframes musicPulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.85); } }
-    .music-player-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
-    .music-player-actions button.danger {
-      width: auto; flex: 1; min-width: 8rem; margin-top: 0;
-    }
-    .device-registry { margin: .75rem 0 1rem; }
-    .device-registry table {
-      width: 100%; border-collapse: collapse; font-size: .82rem;
-    }
+    .device-registry table { width: 100%; border-collapse: collapse; font-size: .82rem; }
     .device-registry th, .device-registry td {
       text-align: left; padding: .5rem .55rem; border-bottom: 1px solid #2a3548;
     }
@@ -129,260 +146,296 @@
     .device-registry tr.device-row.selected td { color: var(--accent); }
     .device-registry .mac { font-family: ui-monospace, monospace; font-size: .78rem; }
     .device-registry .empty { color: var(--muted); font-size: .85rem; padding: .5rem 0; }
+    /* Pruebas (ex /dev) */
+    .dev-layout { display: grid; gap: 1rem; grid-template-columns: 1fr 1.1fr; }
+    @media (max-width: 760px) { .dev-layout { grid-template-columns: 1fr; } }
+    .preview-box {
+      background: #000; border: 1px solid #2a3548; border-radius: 10px;
+      padding: .5rem; text-align: center;
+    }
+    #previewCanvas {
+      display: block; width: 100%; max-width: 320px; height: auto; margin: 0 auto;
+      border-radius: 6px; image-rendering: pixelated;
+    }
+    .face-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: .45rem;
+    }
+    button.face {
+      background: #0d1117; border: 1px solid #334155; color: var(--text);
+      border-radius: 10px; padding: .55rem .35rem; cursor: pointer; font-size: .78rem;
+    }
+    button.face:hover, button.face.active { border-color: var(--accent); color: var(--accent); }
+    .toggle-row { display: flex; align-items: center; gap: .5rem; font-size: .85rem; color: var(--muted); }
+    .dev-subtabs { display: flex; gap: .5rem; margin-bottom: .75rem; flex-wrap: wrap; }
+    .dev-subtabs button {
+      background: #0d1117; border: 1px solid #334155; color: var(--text);
+      border-radius: 8px; padding: .4rem .8rem; font-size: .82rem; cursor: pointer;
+    }
+    .dev-subtabs button.active { border-color: var(--accent); color: var(--accent); }
   </style>
 </head>
 <body>
 <div class="wrap">
   <h1>agenteIA — administración</h1>
-  <p class="sub">Cerebro (servidor) y enlace al <a href="#" id="deviceLink">panel del dispositivo ESP32</a>.
-    · <a href="/dev">Pruebas cara / voz</a> · <a href="/gestures-preview">Referencia gestos</a></p>
+  <p class="sub">
+    Perfiles unificados (cerebro + voz) ·
+    <a href="#" id="deviceLink">panel del ESP32</a> ·
+    <a href="/gestures-preview">Referencia gestos</a>
+  </p>
 
-  <div class="tabs">
-    <button type="button" class="tab active" data-tab="brain">Cerebro</button>
-    <button type="button" class="tab" data-tab="voice">Voz TTS</button>
-    <button type="button" class="tab" data-tab="bender">Voz RVC</button>
-    <button type="button" class="tab" data-tab="music">Música</button>
-    <button type="button" class="tab" data-tab="device">Dispositivo</button>
+  <div class="tabs" id="mainTabs">
+    <button type="button" class="tab active" data-tab="perfil">Perfiles</button>
+    <button type="button" class="tab" data-tab="pruebas">Pruebas</button>
+    <button type="button" class="tab" data-tab="dispositivo">Dispositivo</button>
+    <button type="button" class="tab" data-tab="musica">Música</button>
   </div>
 
-  <!-- CEREBRO -->
-  <div id="panel-brain" class="panel active">
-    <h2>Personalidad</h2>
-    <label for="personality">Preset de personaje</label>
-    <select id="personality"></select>
-    <p class="preset-desc" id="personalityDesc"></p>
+  <!-- PERFILES -->
+  <div id="panel-perfil" class="panel active">
+    <h2>Perfil de personaje</h2>
+    <p class="hint" style="margin-top:0">Cada perfil guarda su prompt, motor TTS y parámetros RVC por separado. Cambiar la voz de Bender no afecta a Jarvis.</p>
 
-    <label for="personalityPrompt" style="margin-top:.75rem;display:flex;justify-content:space-between;align-items:center">
-      <span>Prompt completo del personaje</span>
-      <button type="button" id="resetPromptBtn" style="font-size:.75rem;padding:.2rem .6rem;background:transparent;border:1px solid var(--muted);color:var(--muted);border-radius:6px;cursor:pointer">↩ Restablecer default</button>
-    </label>
-    <textarea id="personalityPrompt" style="min-height:160px;font-family:monospace;font-size:.82rem"></textarea>
-    <p class="hint">Este es el prompt base del personaje. Edítalo para ajustar su comportamiento.</p>
-
-    <hr class="sep">
-    <label for="customPrompt">Instrucciones adicionales (se añaden al final)</label>
-    <textarea id="customPrompt" placeholder="Ej: llamame Jefe, sé más breve, menciona que te gusta el café..."></textarea>
-    <p class="hint">Se añaden al prompt del preset. Máx. ~2000 caracteres.</p>
-
-    <div class="grid" style="margin-top:1rem">
-      <div>
-        <label for="ollamaModel">Modelo Ollama</label>
-        <select id="ollamaModel">
-          <option value="">(cargando...)</option>
-        </select>
-      </div>
-      <div>
-        <label>Estado</label>
-        <p class="hint" id="brainStatus">—</p>
-      </div>
-    </div>
-    <button type="button" class="danger" id="resetMemoryBtn">Borrar memoria del personaje</button>
-    <button type="button" class="danger" id="resetChatBtn" style="margin-top:.5rem">Reiniciar historial de chat</button>
-
-    <hr class="sep">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
-      <label style="margin:0;font-size:.85rem;color:var(--accent)">🤖 Probar personaje activo</label>
-      <button type="button" id="chatClearBtn" style="font-size:.72rem;padding:.2rem .55rem;background:transparent;border:1px solid var(--muted);color:var(--muted);border-radius:6px;cursor:pointer">Limpiar</button>
-    </div>
-    <div id="chatLog" style="height:260px;overflow-y:auto;border:1px solid #2a3548;border-radius:10px;padding:.65rem .8rem;background:#0d1117;display:flex;flex-direction:column;gap:.45rem;margin-bottom:.6rem"></div>
-    <div style="display:flex;gap:.5rem">
-      <input id="chatInput" type="text" placeholder="Escribí algo al personaje…" style="flex:1;margin:0" />
-      <button type="button" id="chatSendBtn" style="background:linear-gradient(135deg,var(--accent),var(--accent-dim));color:#0a1628;border:none;border-radius:8px;padding:.55rem 1rem;font-weight:700;cursor:pointer;white-space:nowrap">Enviar</button>
-    </div>
-    <p class="hint">Usa la personalidad y modelo activos. No modifica el historial del ESP32.</p>
-  </div>
-
-  <!-- VOZ TTS -->
-  <div id="panel-voice" class="panel">
-    <h2>Motor TTS base (guía de voz)</h2>
-    <div class="grid">
-      <div>
-        <label for="ttsEngine">Motor TTS</label>
-        <select id="ttsEngine">
-          <option value="">(predeterminado del servidor)</option>
-        </select>
-      </div>
-      <div>
-        <label for="edgeVoice">Voz Edge (si motor = edge)</label>
-        <select id="edgeVoice">
-          <option value="">(predeterminado)</option>
-        </select>
-      </div>
-    </div>
-    <p class="hint" style="margin-top:.75rem">sapi = Windows SAPI · edge = Microsoft neural · piper = local ONNX</p>
-  </div>
-
-  <!-- BENDER RVC -->
-  <div id="panel-bender" class="panel">
-    <h2>Modelo de voz RVC (ESP32)</h2>
-    <label for="rvcVoiceModel">Personaje / modelo RVC</label>
-    <select id="rvcVoiceModel">
-      <option value="">(cargando modelos…)</option>
-    </select>
-    <p class="hint" id="rvcModelsStatus" style="margin-top:.35rem">
-      Lista desde bender_server en <code>:7860/models</code>. Requiere que el servidor RVC esté encendido.
-    </p>
-
-    <hr class="sep">
-    <h2>Parámetros de conversión RVC</h2>
-    <p class="hint" style="margin-bottom:1.2rem">
-      Controlan la conversión en bender_server. Prueba aquí y presiona
-      <strong style="color:var(--accent)">Guardar configuración</strong> para que el ESP32 use estos valores.
-    </p>
-
-    <div class="slider-row">
-      <div class="slider-label">
-        <span>F0 Up Key (tono)<br><small>Sube o baja el tono en semitonos</small></span>
-        <strong id="pitchVal">10</strong>
-      </div>
-      <input type="range" id="benderPitch" min="-12" max="24" step="1" value="10">
+    <div class="profile-grid" id="profileGrid"></div>
+    <div class="profile-status">
+      <span>Activo: <strong id="activeProfileLabel">—</strong></span>
+      <span>· Editando: <strong id="editingProfileLabel">—</strong></span>
+      <span id="profileActiveBadge" class="badge active" style="display:none">en uso</span>
     </div>
 
-    <div class="slider-row">
-      <div class="slider-label">
-        <span>Index Rate — influencia del .index<br><small>0 = ninguna, 1 = máximo timbre Bender</small></span>
-        <strong id="indexRateVal">1.00</strong>
-      </div>
-      <input type="range" id="benderIndexRate" min="0" max="1" step="0.01" value="1.0">
-    </div>
-
-    <div class="slider-row">
-      <div class="slider-label">
-        <span>Protect — protege consonantes sin voz<br><small>Reduce artefactos (0.33 recomendado)</small></span>
-        <strong id="protectVal">0.33</strong>
-      </div>
-      <input type="range" id="benderProtect" min="0" max="0.5" step="0.01" value="0.33">
-    </div>
-
-    <hr class="sep">
-    <h2>Prueba de voz</h2>
-    <p class="hint" style="margin-bottom:.75rem">El botón guarda automáticamente los sliders y genera el audio. También puedes usar <strong style="color:var(--accent)">Guardar configuración</strong> para que queden activos en el sistema sin probar.</p>
-    <label for="ttsTestText">Texto de prueba</label>
-    <textarea id="ttsTestText" style="min-height:70px">¡Voy a crear mi propio parque de atracciones, con juegos de azar y mujerzuelas! Es más, ¡olvídate de los juegos de azar!</textarea>
-    <button type="button" class="primary" id="ttsTestBtn">▶ Probar voz RVC</button>
-    <p class="hint" id="ttsTestStatus" style="margin-top:.6rem"></p>
-    <audio id="ttsAudio" controls></audio>
-  </div>
-
-  <!-- MÚSICA -->
-  <div id="panel-music" class="panel">
-    <h2>YouTube Music</h2>
-    <p class="hint" style="margin-top:0">
-      Estado: <span id="musicAuthBadge" class="badge">—</span>
-      <span id="musicDepsBadge" class="badge">—</span>
-    </p>
-    <p class="hint">
-      Con <strong>cookies</strong> opcionales de tu cuenta YT Music (biblioteca personal).
-      Sin cookies: búsqueda y reproducción <strong>anónimas</strong> vía YouTube.
-      El audio suena en el <strong>parlante del ESP32</strong> (no en este navegador).
-      Requiere IP del ESP en la pestaña Dispositivo y <code>ffmpeg</code> en PATH.
-    </p>
-
-    <div class="music-actions">
-      <label class="secondary" style="display:inline-flex;align-items:center;gap:.4rem;cursor:pointer">
-        📁 Subir cookies.txt
-        <input type="file" id="musicCookiesFile" accept=".txt,text/plain" hidden />
+    <div class="section">
+      <h3>Cerebro</h3>
+      <p class="hint" id="profileDesc" style="margin-top:0"></p>
+      <label for="personalityPrompt" style="display:flex;justify-content:space-between;align-items:center">
+        <span>Prompt del personaje</span>
+        <button type="button" id="resetPromptBtn" class="secondary" style="font-size:.72rem;padding:.2rem .5rem">↩ Default</button>
       </label>
-      <button type="button" class="secondary" id="musicLogoutBtn">Cerrar sesión (anónimo)</button>
-    </div>
-    <p class="hint">
-      Exportá cookies Netscape desde el navegador donde iniciaste sesión en
-      <a href="https://music.youtube.com" target="_blank" rel="noopener">music.youtube.com</a>
-      (extensión «Get cookies.txt LOCALLY» o similar). El archivo no se sube a internet: queda en el servidor local.
-    </p>
+      <textarea id="personalityPrompt" style="min-height:140px;font-family:monospace;font-size:.82rem"></textarea>
 
-    <hr class="sep">
-    <label for="musicSearchInput">Buscar canción, artista o playlist</label>
-    <div style="display:flex;gap:.5rem;margin-top:.35rem">
-      <input type="text" id="musicSearchInput" placeholder="Ej: Luis Miguel La Incondicional" style="flex:1;margin:0" />
-      <button type="button" id="musicSearchBtn" style="background:linear-gradient(135deg,var(--accent),var(--accent-dim));color:#0a1628;border:none;border-radius:8px;padding:.55rem 1rem;font-weight:700;cursor:pointer;white-space:nowrap">Buscar</button>
-    </div>
-    <p class="hint" id="musicSearchStatus"></p>
-    <ul class="track-list" id="musicResults"></ul>
+      <label for="customPrompt" style="margin-top:.75rem">Instrucciones adicionales (globales, todos los perfiles)</label>
+      <textarea id="customPrompt" placeholder="Ej: llamame Jefe, sé más breve…" style="min-height:70px"></textarea>
 
-    <hr class="sep">
-    <h2 style="margin-bottom:.35rem">Reproducción</h2>
-    <p class="hint" id="musicNowPlaying">Controles en la <strong>pantalla del ESP</strong>: − / + volumen y STOP abajo.</p>
-    <p class="hint" id="musicPlayStatus"></p>
-    <div id="musicPlayerPanel" class="music-player-panel" style="display:none">
-      <div class="music-player-head">
-        <span class="music-playing-dot" aria-hidden="true"></span>
-        <strong id="musicPlayerTitle">—</strong>
-      </div>
-      <div class="slider-row" style="margin:.75rem 0">
-        <div class="slider-label">
-          <span>Volumen (ESP)</span>
-          <strong id="musicVolVal">—</strong>
+      <div class="grid" style="margin-top:1rem">
+        <div>
+          <label for="ollamaModel">Modelo Ollama</label>
+          <select id="ollamaModel"><option value="">(cargando…)</option></select>
         </div>
-        <input type="range" id="musicVolume" min="0" max="100" step="1" value="80">
+        <div>
+          <label>Estado del servidor</label>
+          <p class="hint" id="brainStatus">—</p>
+        </div>
       </div>
-      <div class="music-player-actions">
-        <button type="button" class="danger" id="musicStopBtn">⏹ Detener</button>
+      <div class="grid" style="margin-top:.75rem">
+        <button type="button" class="danger" id="resetMemoryBtn" style="margin-top:0">Borrar memoria del personaje</button>
+        <button type="button" class="danger" id="resetChatBtn" style="margin-top:0">Reiniciar historial de chat</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Voz — TTS guía</h3>
+      <div class="grid">
+        <div>
+          <label for="ttsEngine">Motor TTS</label>
+          <select id="ttsEngine"><option value="">(predeterminado)</option></select>
+        </div>
+        <div>
+          <label for="edgeVoice">Voz Edge (si motor = edge)</label>
+          <select id="edgeVoice"><option value="">(predeterminado)</option></select>
+        </div>
+      </div>
+      <p class="hint">sapi = Windows · edge = neural · piper = local ONNX. Vacío = default del servidor.</p>
+    </div>
+
+    <div class="section">
+      <h3>Voz — RVC (timbre del personaje)</h3>
+      <label for="rvcVoiceModel">Modelo RVC</label>
+      <select id="rvcVoiceModel"><option value="">(cargando…)</option></select>
+      <p class="hint" id="rvcModelsStatus">Desde bender_server :7860/models</p>
+
+      <div class="slider-row" style="margin-top:1rem">
+        <div class="slider-label">
+          <span>F0 Up Key (tono)<br><small>Semitonos arriba/abajo</small></span>
+          <strong id="pitchVal">10</strong>
+        </div>
+        <input type="range" id="rvcPitch" min="-36" max="36" step="1" value="10">
+      </div>
+      <div class="slider-row">
+        <div class="slider-label">
+          <span>Index Rate<br><small>Influencia del .index (0–1)</small></span>
+          <strong id="indexRateVal">1.00</strong>
+        </div>
+        <input type="range" id="rvcIndexRate" min="0" max="1" step="0.01" value="1.0">
+      </div>
+      <div class="slider-row">
+        <div class="slider-label">
+          <span>Protect<br><small>Protege consonantes (0.33 recom.)</small></span>
+          <strong id="protectVal">0.33</strong>
+        </div>
+        <input type="range" id="rvcProtect" min="0" max="0.5" step="0.01" value="0.33">
+      </div>
+
+      <label for="ttsTestText" style="margin-top:.5rem">Prueba de voz</label>
+      <textarea id="ttsTestText" style="min-height:60px">¡Voy a crear mi propio parque de atracciones, con juegos de azar y mujerzuelas!</textarea>
+      <button type="button" class="primary" id="ttsTestBtn" style="width:100%;margin-top:.5rem">▶ Probar voz de este perfil</button>
+      <p class="hint" id="ttsTestStatus"></p>
+      <audio id="ttsAudio" controls></audio>
+    </div>
+
+    <div class="section">
+      <h3>Chat de prueba</h3>
+      <div style="display:flex;justify-content:flex-end;margin-bottom:.4rem">
+        <button type="button" id="chatClearBtn" class="secondary" style="font-size:.72rem">Limpiar</button>
+      </div>
+      <div id="chatLog" style="height:220px;overflow-y:auto;border:1px solid #2a3548;border-radius:10px;padding:.65rem;background:#0d1117;display:flex;flex-direction:column;gap:.45rem;margin-bottom:.6rem"></div>
+      <div style="display:flex;gap:.5rem">
+        <input id="chatInput" type="text" placeholder="Escribí algo al personaje…" style="flex:1;margin:0" />
+        <button type="button" id="chatSendBtn" class="primary" style="width:auto;margin:0;padding:.55rem 1rem">Enviar</button>
+      </div>
+      <p class="hint">Usa el perfil en edición (sin guardar aún). No modifica el historial del ESP32.</p>
+    </div>
+
+    <div class="save-bar">
+      <button type="button" class="secondary" id="activateProfileBtn">Activar este perfil</button>
+      <button type="button" class="primary" id="saveBtn">Guardar perfil</button>
+    </div>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <!-- PRUEBAS (ex /dev) -->
+  <div id="panel-pruebas" class="panel">
+    <h2>Pruebas cara y voz</h2>
+    <p class="hint" style="margin-top:0">Vista previa en navegador y envío al robot en idle (poll ~2 s).</p>
+    <div class="dev-layout">
+      <div class="section" style="margin-bottom:0">
+        <h3>Vista previa</h3>
+        <div class="preview-box">
+          <canvas id="previewCanvas" width="320" height="200"></canvas>
+          <p class="hint" id="previewLabel" style="margin:.4rem 0 0">neutral</p>
+        </div>
+      </div>
+      <div>
+        <div class="dev-subtabs">
+          <button type="button" class="active" id="tabBrainDev">Cerebro → robot</button>
+          <button type="button" id="tabEspDirect">ESP directo</button>
+        </div>
+        <div id="brainDevPanel" class="section">
+          <p class="hint" id="espList" style="margin-top:0">ESP detectados: …</p>
+          <button type="button" class="primary" id="vibingBtn" style="width:100%;margin-bottom:.75rem">🎵 Vibing</button>
+          <div class="section" style="padding:.75rem;margin-bottom:.75rem">
+            <label>Sensibilidad mic <span id="vibingMicVal" style="color:var(--warn)">150%</span></label>
+            <input type="range" id="vibingMic" min="50" max="300" step="5" value="150" style="width:100%">
+          </div>
+          <div class="face-grid" id="faceGrid"></div>
+          <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin:.75rem 0">
+            <label class="toggle-row"><input type="checkbox" id="bored"> Aburrido</label>
+            <label class="toggle-row">Mantener <input type="number" id="holdMs" value="8000" min="1000" max="120000" step="1000" style="width:80px;background:#0d1117;border:1px solid #334155;color:#e8eef4;border-radius:6px;padding:.25rem"> ms</label>
+          </div>
+          <div class="msg" id="faceMsg"></div>
+          <label>Texto TTS</label>
+          <textarea id="speakText" placeholder="Lo que quieres que diga…" style="min-height:70px"></textarea>
+          <label>Emoción al hablar</label>
+          <select id="speakEmotion"></select>
+          <button class="primary" id="speakBtn" style="width:100%">Enviar TTS al robot</button>
+          <div class="msg" id="speakMsg"></div>
+          <button type="button" class="secondary" id="notifyTestBtn" style="width:100%;margin-top:.5rem">🔔 Probar notify</button>
+          <div class="msg" id="notifyMsg"></div>
+        </div>
+        <div id="espDirectPanel" class="section" style="display:none">
+          <label>IP del ESP</label>
+          <input type="text" id="devEspIp" placeholder="192.168.0.50" />
+          <button class="primary" id="espFaceBtn" style="width:100%;margin-top:.5rem">Enviar gesto al ESP</button>
+          <button class="primary" id="espSpeakBtn" style="width:100%">Hablar en ESP</button>
+          <div class="msg" id="espDirectMsg"></div>
+        </div>
+        <div class="section">
+          <h3>Cola del cerebro</h3>
+          <p class="hint" id="queueStatus">—</p>
+          <div style="display:flex;gap:.5rem">
+            <button class="secondary" id="refreshQueueBtn">Actualizar</button>
+            <button class="secondary" id="clearQueueBtn">Vaciar cola</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 
   <!-- DISPOSITIVO -->
-  <div id="panel-device" class="panel">
-    <h2>ESP32 conectados al cerebro</h2>
-    <p class="hint">Dispositivos detectados por peticiones al servidor (poll, converse, TTS…). Orden: más reciente arriba.</p>
+  <div id="panel-dispositivo" class="panel">
+    <h2>ESP32 conectados</h2>
     <div class="device-registry">
       <table>
-        <thead>
-          <tr>
-            <th>Última solicitud</th>
-            <th>IP</th>
-            <th>MAC</th>
-            <th>Ruta</th>
-          </tr>
-        </thead>
-        <tbody id="deviceRegistryBody">
-          <tr><td colspan="4" class="empty">Cargando…</td></tr>
-        </tbody>
+        <thead><tr><th>Última solicitud</th><th>IP</th><th>MAC</th><th>Ruta</th></tr></thead>
+        <tbody id="deviceRegistryBody"><tr><td colspan="4" class="empty">Cargando…</td></tr></tbody>
       </table>
     </div>
     <button type="button" class="secondary" id="refreshDevicesBtn" style="margin-bottom:1rem">Actualizar lista</button>
-
-    <h2>ESP32 seleccionado</h2>
-    <label for="espIp">IP del dispositivo</label>
+    <label for="espIp">IP seleccionada</label>
     <input type="text" id="espIp" placeholder="192.168.0.50" />
-    <p class="hint">Hacé clic en una fila de la tabla para usar esa IP, o escribila a mano.</p>
-    <button type="button" class="primary" id="openDeviceBtn" style="margin-top:.75rem">Abrir panel del dispositivo</button>
-
+    <button type="button" class="primary" id="openDeviceBtn" style="width:100%;margin-top:.75rem">Abrir panel del dispositivo</button>
     <hr class="sep">
-    <h2>Volumen del parlante (ESP32)</h2>
-    <p class="hint" style="margin-bottom:.75rem">Ajusta el volumen del codec ES8311 en la placa. Requiere IP del ESP arriba.</p>
+    <h2>Volumen parlante</h2>
     <div class="slider-row">
-      <div class="slider-label">
-        <span>Volumen</span>
-        <strong id="espVolVal">—</strong>
-      </div>
+      <div class="slider-label"><span>Volumen ESP</span><strong id="espVolVal">—</strong></div>
       <input type="range" id="espVolume" min="0" max="100" step="1" value="80">
     </div>
-    <button type="button" class="primary" id="espVolBtn" style="margin-top:.5rem">Aplicar volumen al ESP</button>
+    <button type="button" class="primary" id="espVolBtn" style="width:100%">Aplicar volumen</button>
     <p class="hint" id="espVolStatus"></p>
-
-    <h2 style="margin-top:1.25rem">Frases gatillo (sincronizadas con firmware)</h2>
+    <h2 style="margin-top:1.25rem">Frases gatillo</h2>
     <ul class="phrases" id="wakeList"></ul>
   </div>
 
-  <button type="button" class="primary" id="saveBtn">Guardar configuración</button>
-  <div class="msg" id="msg"></div>
+  <!-- MÚSICA -->
+  <div id="panel-musica" class="panel">
+    <h2>YouTube Music</h2>
+    <p class="hint" style="margin-top:0">Estado: <span id="musicAuthBadge" class="badge">—</span> <span id="musicDepsBadge" class="badge">—</span></p>
+    <p class="hint">Audio en el parlante del ESP32. Requiere IP en Dispositivo y ffmpeg en PATH.</p>
+    <div class="music-actions">
+      <label class="secondary" style="display:inline-flex;align-items:center;gap:.4rem;cursor:pointer">
+        📁 Subir cookies.txt <input type="file" id="musicCookiesFile" accept=".txt,text/plain" hidden />
+      </label>
+      <button type="button" class="secondary" id="musicLogoutBtn">Cerrar sesión</button>
+    </div>
+    <label for="musicSearchInput" style="margin-top:1rem">Buscar</label>
+    <div style="display:flex;gap:.5rem">
+      <input type="text" id="musicSearchInput" placeholder="Artista o canción" style="flex:1;margin:0" />
+      <button type="button" id="musicSearchBtn" class="primary" style="width:auto;margin:0;padding:.55rem 1rem">Buscar</button>
+    </div>
+    <p class="hint" id="musicSearchStatus"></p>
+    <ul class="track-list" id="musicResults"></ul>
+    <hr class="sep">
+    <p class="hint" id="musicNowPlaying">Controles en pantalla del ESP: − / + / STOP</p>
+    <p class="hint" id="musicPlayStatus"></p>
+    <div id="musicPlayerPanel" class="music-player-panel" style="display:none">
+      <div class="music-player-head"><span class="music-playing-dot"></span><strong id="musicPlayerTitle">—</strong></div>
+      <div class="slider-row" style="margin:.75rem 0">
+        <div class="slider-label"><span>Volumen ESP</span><strong id="musicVolVal">—</strong></div>
+        <input type="range" id="musicVolume" min="0" max="100" step="1" value="80">
+      </div>
+      <button type="button" class="danger" id="musicStopBtn" style="width:100%;margin-top:0">⏹ Detener</button>
+    </div>
+  </div>
 </div>
 
+<script src="/static/face_preview.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 let cfg = {};
+let editingProfile = 'bender';
+let activeProfile = 'bender';
 
-// Tabs
+// ─── Tabs ───────────────────────────────────────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  const panel = $('panel-' + name);
+  if (panel) panel.classList.add('active');
+  if (name === 'musica') refreshMusicStatus();
+  if (name === 'pruebas') { refreshQueue(); loadEspDevices(); }
+}
 document.querySelectorAll('.tab').forEach(btn => {
-  btn.onclick = () => {
-    document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-    btn.classList.add('active');
-    $('panel-' + btn.dataset.tab).classList.add('active');
-  };
+  btn.onclick = () => showTab(btn.dataset.tab);
 });
+const tabParam = new URLSearchParams(location.search).get('tab');
+if (tabParam) showTab(tabParam);
 
 function showMsg(t, ok) {
   const m = $('msg');
@@ -390,754 +443,555 @@ function showMsg(t, ok) {
   m.className = 'msg ' + (ok ? 'ok' : 'err');
 }
 
-// Sliders live update
-$('benderPitch').oninput = () => $('pitchVal').textContent = $('benderPitch').value;
-$('benderIndexRate').oninput = () => $('indexRateVal').textContent = parseFloat($('benderIndexRate').value).toFixed(2);
-$('benderProtect').oninput = () => $('protectVal').textContent = parseFloat($('benderProtect').value).toFixed(2);
-$('espVolume').oninput = () => $('espVolVal').textContent = $('espVolume').value + '%';
+// ─── Perfiles ───────────────────────────────────────────────────────────────
+function renderProfileGrid() {
+  const grid = $('profileGrid');
+  grid.innerHTML = '';
+  for (const [id, p] of Object.entries(cfg.personalities || {})) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'profile-card' +
+      (id === editingProfile ? ' editing' : '') +
+      (id === activeProfile ? ' active' : '');
+    card.innerHTML = `<strong>${p.label || id}</strong><span>${p.description || ''}</span>` +
+      (id === activeProfile ? '<span class="badge active" style="margin:.35rem 0 0">activo</span>' : '');
+    card.onclick = () => selectEditingProfile(id);
+    grid.appendChild(card);
+  }
+}
 
-function selectEspIp(ip) {
-  if (!ip) return;
-  $('espIp').value = ip;
-  localStorage.setItem('agenteia_esp_ip', ip);
-  $('deviceLink').href = 'http://' + ip + '/';
-  document.querySelectorAll('.device-row').forEach(tr => {
-    tr.classList.toggle('selected', tr.dataset.ip === ip);
+function selectEditingProfile(id) {
+  editingProfile = id;
+  const p = cfg.personalities?.[id] || {};
+  const voice = p.voice || cfg.voice_profiles?.[id] || {};
+  $('profileDesc').textContent = p.description || '';
+  $('personalityPrompt').value = p.prompt || '';
+  $('editingProfileLabel').textContent = p.label || id;
+  $('profileActiveBadge').style.display = id === activeProfile ? '' : 'none';
+
+  const envTts = cfg.env_tts_engine || cfg.tts_engine || 'sapi';
+  const envEdge = cfg.env_edge_voice || cfg.edge_voice || '';
+  fillSelect($('ttsEngine'), cfg.tts_engines, voice.tts_engine, '(servidor: ' + envTts + ')');
+  fillSelect($('edgeVoice'), cfg.edge_voices, voice.edge_voice, '(servidor: ' + envEdge + ')');
+
+  const pitch = voice.rvc_pitch != null ? voice.rvc_pitch : 10;
+  const ir = voice.rvc_index_rate != null ? voice.rvc_index_rate : 1.0;
+  const pr = voice.rvc_protect != null ? voice.rvc_protect : 0.33;
+  $('rvcPitch').value = pitch; $('pitchVal').textContent = pitch;
+  $('rvcIndexRate').value = ir; $('indexRateVal').textContent = parseFloat(ir).toFixed(2);
+  $('rvcProtect').value = pr; $('protectVal').textContent = parseFloat(pr).toFixed(2);
+
+  const rvcModel = voice.rvc_voice_model || '';
+  if ($('rvcVoiceModel').options.length) {
+    if ([...$('rvcVoiceModel').options].some(o => o.value === rvcModel)) {
+      $('rvcVoiceModel').value = rvcModel;
+    } else if (rvcModel) {
+      const o = document.createElement('option');
+      o.value = rvcModel; o.textContent = rvcModel;
+      $('rvcVoiceModel').appendChild(o);
+      $('rvcVoiceModel').value = rvcModel;
+    }
+  }
+  renderProfileGrid();
+}
+
+function fillSelect(sel, options, value, emptyLabel) {
+  const cur = value || '';
+  sel.innerHTML = '<option value="">' + emptyLabel + '</option>';
+  (options || []).forEach(v => {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = v;
+    sel.appendChild(o);
   });
-  loadEspVolume();
+  sel.value = cur;
 }
 
-async function loadDeviceRegistry() {
-  const body = $('deviceRegistryBody');
-  try {
-    const r = await fetch('/api/admin/devices');
-    const j = await r.json();
-    const devices = j.devices || [];
-    if (!devices.length) {
-      body.innerHTML = '<tr><td colspan="4" class="empty">Ningún ESP detectado aún. El robot debe estar en WiFi y hablar con este servidor.</td></tr>';
-      return;
-    }
-    const currentIp = $('espIp').value.trim();
-    body.innerHTML = devices.map(d => {
-      const mac = d.mac ? `<span class="mac">${d.mac}</span>` : '—';
-      const sel = d.ip === currentIp ? ' selected' : '';
-      return `<tr class="device-row${sel}" data-ip="${d.ip}">` +
-        `<td>${d.last_seen}</td><td>${d.ip || '—'}</td><td>${mac}</td>` +
-        `<td title="${d.request_count} peticiones">${d.last_path}</td></tr>`;
-    }).join('');
-    body.querySelectorAll('.device-row').forEach(tr => {
-      tr.onclick = () => selectEspIp(tr.dataset.ip);
-    });
-    if (!currentIp && devices[0].ip) {
-      selectEspIp(devices[0].ip);
-    }
-  } catch (e) {
-    body.innerHTML = `<tr><td colspan="4" class="empty">Error: ${e.message}</td></tr>`;
-  }
+function profileSaveBody(activate) {
+  return {
+    personality: activate ? editingProfile : cfg.personality,
+    profile_id: editingProfile,
+    custom_prompt: $('customPrompt').value,
+    ollama_model: $('ollamaModel').value,
+    personality_prompts: { [editingProfile]: $('personalityPrompt').value },
+    tts_engine: $('ttsEngine').value,
+    edge_voice: $('edgeVoice').value.trim(),
+    rvc_voice_model: $('rvcVoiceModel').value,
+    rvc_pitch: parseFloat($('rvcPitch').value),
+    rvc_index_rate: parseFloat($('rvcIndexRate').value),
+    rvc_protect: parseFloat($('rvcProtect').value),
+  };
 }
 
-$('refreshDevicesBtn').onclick = loadDeviceRegistry;
+$('rvcPitch').oninput = () => $('pitchVal').textContent = $('rvcPitch').value;
+$('rvcIndexRate').oninput = () => $('indexRateVal').textContent = parseFloat($('rvcIndexRate').value).toFixed(2);
+$('rvcProtect').oninput = () => $('protectVal').textContent = parseFloat($('rvcProtect').value).toFixed(2);
 
-async function loadEspVolume() {
-  const ip = $('espIp').value.trim();
-  const status = $('espVolStatus');
-  if (!ip) {
-    $('espVolVal').textContent = '—';
-    status.textContent = '';
-    return;
-  }
-  try {
-    const r = await fetch('/api/admin/device/settings?ip=' + encodeURIComponent(ip));
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || r.status);
-    if (j.volume != null) {
-      $('espVolume').value = j.volume;
-      $('espVolVal').textContent = j.volume + '%';
-      status.textContent = 'Volumen actual del ESP: ' + j.volume + '%';
-      status.style.color = '';
-    }
-  } catch (e) {
-    status.textContent = 'No se pudo leer el ESP: ' + e.message;
-    status.style.color = 'var(--warn)';
-  }
-}
+$('resetPromptBtn').onclick = () => {
+  $('personalityPrompt').value = cfg.personalities?.[editingProfile]?.default_prompt || '';
+};
 
-$('espVolBtn').onclick = async () => {
-  const ip = $('espIp').value.trim();
-  if (!ip) { showMsg('Indica la IP del ESP32', false); return; }
-  $('espVolBtn').disabled = true;
-  $('espVolStatus').textContent = 'Aplicando...';
+$('saveBtn').onclick = async () => {
   try {
-    const r = await fetch('/api/admin/device/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ip, volume: +$('espVolume').value }),
+    const r = await fetch('/api/admin/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profileSaveBody(false)),
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || r.status);
-    $('espVolVal').textContent = j.volume + '%';
-    $('espVolStatus').textContent = 'Volumen aplicado: ' + j.volume + '%';
-    $('espVolStatus').style.color = '';
-    showMsg('Volumen del ESP actualizado a ' + j.volume + '%', true);
-  } catch (e) {
-    $('espVolStatus').textContent = 'Error: ' + e.message;
-    $('espVolStatus').style.color = 'var(--danger)';
-    showMsg('Error al aplicar volumen: ' + e.message, false);
-  } finally {
-    $('espVolBtn').disabled = false;
-  }
+    showMsg('Perfil «' + (cfg.personalities?.[editingProfile]?.label || editingProfile) + '» guardado ✓', true);
+    await load();
+  } catch (e) { showMsg('Error: ' + e.message, false); }
+};
+
+$('activateProfileBtn').onclick = async () => {
+  try {
+    const r = await fetch('/api/admin/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profileSaveBody(true)),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    showMsg('Perfil activado y guardado ✓', true);
+    await load();
+  } catch (e) { showMsg('Error: ' + e.message, false); }
 };
 
 async function load() {
   const r = await fetch('/api/admin/config');
   cfg = await r.json();
+  activeProfile = cfg.personality || 'bender';
+  if (!editingProfile || !cfg.personalities?.[editingProfile]) editingProfile = activeProfile;
 
-  // Brain
-  const pSel = $('personality');
-  pSel.innerHTML = '';
-  for (const [k, v] of Object.entries(cfg.personalities || {})) {
-    const o = document.createElement('option');
-    o.value = k; o.textContent = v.label || k;
-    pSel.appendChild(o);
-  }
-  pSel.value = cfg.personality || 'bender';
   $('customPrompt').value = cfg.custom_prompt || '';
-  // ollamaModel se carga en loadOllamaModels()
-  updatePersonalityDesc();
-
-  // Voice TTS
-  const ttsSel = $('ttsEngine');
-  ttsSel.innerHTML = '<option value="">(predeterminado: ' + cfg.tts_engine + ')</option>';
-  (cfg.tts_engines || []).forEach(e => {
-    const o = document.createElement('option');
-    o.value = e; o.textContent = e; ttsSel.appendChild(o);
-  });
-  ttsSel.value = cfg.tts_engine_override || '';
-
-  const evSel = $('edgeVoice');
-  evSel.innerHTML = '<option value="">(predeterminado: ' + cfg.edge_voice + ')</option>';
-  (cfg.edge_voices || []).forEach(v => {
-    const o = document.createElement('option');
-    o.value = v; o.textContent = v; evSel.appendChild(o);
-  });
-  evSel.value = cfg.edge_voice_override || '';
-
-  // Ollama models (no bloquea la carga del panel)
-  void loadOllamaModels();
-
-  // Bender RVC — en segundo plano (no bloquear si :7860 no responde)
-  void loadRvcModels();
-  const pitch = cfg.bender_pitch != null ? cfg.bender_pitch : 10;
-  const ir    = cfg.bender_index_rate != null ? cfg.bender_index_rate : 1.0;
-  const pr    = cfg.bender_protect != null ? cfg.bender_protect : 0.33;
-  $('benderPitch').value = pitch;       $('pitchVal').textContent = pitch;
-  $('benderIndexRate').value = ir;      $('indexRateVal').textContent = parseFloat(ir).toFixed(2);
-  $('benderProtect').value = pr;        $('protectVal').textContent = parseFloat(pr).toFixed(2);
-
-  // Device
-  const wl = $('wakeList');
-  wl.innerHTML = '';
-  (cfg.wake_presets || []).forEach(p => {
-    const li = document.createElement('li'); li.textContent = p; wl.appendChild(li);
-  });
+  $('activeProfileLabel').textContent = cfg.personalities?.[activeProfile]?.label || activeProfile;
   $('brainStatus').textContent =
     'Canto: ' + (cfg.singing_enabled ? 'sí' : 'no') +
-    ' · Home Assistant: ' + (cfg.ha_enabled ? 'sí' : 'no') +
-    ' · Modelo LLM: ' + cfg.ollama_model +
-    ' · Voz RVC: ' + (cfg.rvc_voice_model || 'bender');
+    ' · HA: ' + (cfg.ha_enabled ? 'sí' : 'no') +
+    ' · LLM: ' + cfg.ollama_model;
+
+  const wl = $('wakeList');
+  wl.innerHTML = '';
+  (cfg.wake_presets || []).forEach(p => { const li = document.createElement('li'); li.textContent = p; wl.appendChild(li); });
 
   const savedIp = localStorage.getItem('agenteia_esp_ip') || '';
   $('espIp').value = savedIp;
+  $('devEspIp').value = savedIp;
   $('deviceLink').href = savedIp ? 'http://' + savedIp + '/' : '#';
+
+  void loadOllamaModels();
+  void loadRvcModels();
+  selectEditingProfile(editingProfile);
   loadDeviceRegistry();
   loadEspVolume();
 }
 
-function updatePersonalityDesc() {
-  const pid = $('personality').value;
-  const p = cfg.personalities?.[pid];
-  $('personalityDesc').textContent = p?.description || '';
-  $('personalityPrompt').value = p?.prompt || '';
-}
-$('personality').onchange = updatePersonalityDesc;
-
-$('resetPromptBtn').onclick = () => {
-  const pid = $('personality').value;
-  $('personalityPrompt').value = cfg.personalities?.[pid]?.default_prompt || '';
-};
-
-// Save
-$('saveBtn').onclick = async () => {
-  const body = {
-    personality:       $('personality').value,
-    custom_prompt:     $('customPrompt').value,
-    ollama_model:      $('ollamaModel').value,
-    personality_prompts: { [$('personality').value]: $('personalityPrompt').value },
-    tts_engine:        $('ttsEngine').value,
-    edge_voice:        $('edgeVoice').value.trim(),
-    bender_pitch:      parseFloat($('benderPitch').value),
-    bender_index_rate: parseFloat($('benderIndexRate').value),
-    bender_protect:    parseFloat($('benderProtect').value),
-    rvc_voice_model:   $('rvcVoiceModel').value,
-  };
-  try {
-    const r = await fetch('/api/admin/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || r.status);
-    showMsg('Configuración guardada ✓', true);
-    load();
-  } catch (e) {
-    showMsg('Error: ' + e.message, false);
-  }
-};
-
-// TTS Test
-$('ttsTestBtn').onclick = async () => {
-  const text = $('ttsTestText').value.trim();
-  if (!text) { $('ttsTestStatus').textContent = 'Escribe algo primero.'; return; }
-  $('ttsTestBtn').disabled = true;
-  $('ttsTestStatus').textContent = '⏳ Aplicando parámetros...';
-  // Auto-guardar los params actuales de los sliders antes de probar
-  try {
-    await fetch('/api/admin/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        bender_pitch:      parseFloat($('benderPitch').value),
-        bender_index_rate: parseFloat($('benderIndexRate').value),
-        bender_protect:    parseFloat($('benderProtect').value),
-        rvc_voice_model:   $('rvcVoiceModel').value,
-      }),
-    });
-  } catch (_) {}
-  $('ttsTestStatus').textContent = '⏳ Generando audio RVC...';
-  $('ttsAudio').style.display = 'none';
-  $('ttsAudio').removeAttribute('src');
-  const t0 = Date.now();
-  try {
-    const r = await fetch('/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    });
-    if (!r.ok) {
-      const j = await r.json().catch(() => ({}));
-      throw new Error(j.error || r.status);
-    }
-    const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    $('ttsAudio').src = url;
-    $('ttsAudio').style.display = 'block';
-    $('ttsAudio').play();
-    $('ttsTestStatus').textContent = '✅ Listo en ' + ((Date.now()-t0)/1000).toFixed(1) + 's';
-  } catch(e) {
-    $('ttsTestStatus').textContent = '❌ Error: ' + e.message;
-  } finally {
-    $('ttsTestBtn').disabled = false;
-  }
-};
-
-// Device
-$('openDeviceBtn').onclick = () => {
-  const ip = $('espIp').value.trim();
-  if (!ip) { showMsg('Indica la IP del ESP32', false); return; }
-  localStorage.setItem('agenteia_esp_ip', ip);
-  window.open('http://' + ip + '/', '_blank');
-};
-
-$('resetMemoryBtn').onclick = async () => {
-  if (!confirm('¿Borrar nombre, hechos y humor guardados del personaje?')) return;
-  const r = await fetch('/api/admin/reset-memory', { method: 'POST' });
-  showMsg(r.ok ? 'Memoria borrada' : 'Error al borrar', r.ok);
-};
-
-$('resetChatBtn').onclick = async () => {
-  if (!confirm('¿Reiniciar el historial de conversación con Ollama?')) return;
-  const r = await fetch('/converse/reset', { method: 'POST' });
-  showMsg(r.ok ? 'Historial reiniciado' : 'Error', r.ok);
-};
-
-$('espIp').onchange = () => {
-  const ip = $('espIp').value.trim();
-  if (ip) localStorage.setItem('agenteia_esp_ip', ip);
-  $('deviceLink').href = ip ? 'http://' + ip + '/' : '#';
-  document.querySelectorAll('.device-row').forEach(tr => {
-    tr.classList.toggle('selected', tr.dataset.ip === ip);
-  });
-  loadEspVolume();
-};
-
-setInterval(loadDeviceRegistry, 8000);
-
 async function loadRvcModels() {
   const sel = $('rvcVoiceModel');
   const status = $('rvcModelsStatus');
-  const current = cfg.rvc_voice_model || 'bender';
+  const voice = cfg.voice_profiles?.[editingProfile] || {};
+  const current = voice.rvc_voice_model || cfg.rvc_voice_model || '';
   try {
     const r = await fetch('/api/admin/rvc-models');
     const j = await r.json();
     const models = j.models || [];
     if (!models.length) throw new Error(j.error || 'Sin modelos');
-    sel.innerHTML = '';
+    sel.innerHTML = '<option value="">(sin RVC — solo guía)</option>';
     models.forEach(m => {
       const o = document.createElement('option');
-      o.value = m.id;
-      o.textContent = m.label || m.id;
+      o.value = m.id; o.textContent = m.label || m.id;
       sel.appendChild(o);
     });
-    if ([...sel.options].some(o => o.value === current)) {
-      sel.value = current;
-    } else if (sel.options.length) {
-      sel.selectedIndex = 0;
-    }
-    status.textContent = models.length + ' modelo(s) desde ' + (j.bender_server_url || ':7860');
-    status.style.color = '';
+    if (current && [...sel.options].some(o => o.value === current)) sel.value = current;
+    status.textContent = models.length + ' modelo(s) · ' + (j.bender_server_url || ':7860');
   } catch (e) {
-    sel.innerHTML = '<option value="' + current + '">' + current + ' (sin listar)</option>';
-    sel.value = current;
-    status.textContent = '⚠ No se pudo cargar :7860/models — ¿bender_server encendido? ' + e.message;
+    sel.innerHTML = '<option value="' + current + '">' + (current || 'bender') + '</option>';
+    status.textContent = '⚠ No se pudo listar modelos RVC: ' + e.message;
     status.style.color = 'var(--warn)';
   }
 }
 
 async function loadOllamaModels() {
-  const sel = document.getElementById('ollamaModel');
+  const sel = $('ollamaModel');
   try {
     const r = await fetch('http://localhost:11434/api/tags');
     const j = await r.json();
-    const current = cfg.ollama_model_override || '';
     sel.innerHTML = '<option value="">(predeterminado del servidor)</option>';
-    (j.models || [])
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .forEach(m => {
-        const o = document.createElement('option');
-        o.value = m.name;
-        const gb = (m.size / 1e9).toFixed(1);
-        o.textContent = m.name + ' (' + gb + ' GB)';
-        sel.appendChild(o);
-      });
-    sel.value = current;
-  } catch(e) {
+    (j.models || []).sort((a, b) => a.name.localeCompare(b.name)).forEach(m => {
+      const o = document.createElement('option');
+      o.value = m.name;
+      o.textContent = m.name + ' (' + (m.size / 1e9).toFixed(1) + ' GB)';
+      sel.appendChild(o);
+    });
+    sel.value = cfg.ollama_model_override || '';
+  } catch {
     sel.innerHTML = '<option value="">(Ollama no disponible)</option>';
   }
 }
 
-load();
-
-// ─── YouTube Music ─────────────────────────────────────────────────────────
-(function() {
-  const authBadge = $('musicAuthBadge');
-  const depsBadge = $('musicDepsBadge');
-  const resultsEl = $('musicResults');
-  let musicStatus = {};
-  let musicPollTimer = null;
-  let musicVolTimer = null;
-  let currentMusicTrack = null;
-  let musicPlayStartedAt = 0;
-  let musicSessionActive = false;
-
-  function espIp() {
-    return ($('espIp').value || localStorage.getItem('agenteia_esp_ip') || '').trim();
-  }
-
-  function showMusicPlayer(track) {
-    currentMusicTrack = track;
-    musicPlayStartedAt = Date.now();
-    musicSessionActive = true;
-    const title = (track?.title || '') + (track?.artist ? ' — ' + track.artist : '');
-    $('musicPlayerTitle').textContent = title || 'Reproduciendo…';
-    $('musicPlayerPanel').style.display = 'block';
-    $('musicNowPlaying').textContent = 'Sonando en el ESP: ' + (title || track?.id || '');
-    $('musicPlayerPanel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    startMusicPolling();
-  }
-
-  function hideMusicPlayer() {
-    $('musicPlayerPanel').style.display = 'none';
-    currentMusicTrack = null;
-    musicPlayStartedAt = 0;
-    musicSessionActive = false;
-    if (musicPollTimer) {
-      clearInterval(musicPollTimer);
-      musicPollTimer = null;
-    }
-  }
-
-  async function loadMusicVolume() {
-    const ip = espIp();
-    if (!ip) return;
-    try {
-      const r = await fetch('/api/admin/device/settings?ip=' + encodeURIComponent(ip), {
-        signal: AbortSignal.timeout(4000),
-      });
-      const j = await r.json();
-      if (r.ok && typeof j.volume === 'number') {
-        $('musicVolume').value = j.volume;
-        $('musicVolVal').textContent = j.volume + '%';
-      }
-    } catch (_) {}
-  }
-
-  async function applyMusicVolume(vol) {
-    const ip = espIp();
-    if (!ip) return;
-    $('musicVolVal').textContent = vol + '%';
-    try {
-      const r = await fetch('/api/admin/device/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ip, volume: vol }),
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || r.status);
-    } catch (e) {
-      $('musicPlayStatus').textContent = '⚠ Volumen: ' + e.message;
-    }
-  }
-
-  async function pollDeviceMusicStatus() {
-    const ip = espIp();
-    if (!ip) return;
-    try {
-      const r = await fetch('/api/admin/device/music/status?ip=' + encodeURIComponent(ip));
-      const j = await r.json();
-      if (!r.ok) return;
-      if (musicSessionActive) {
-        $('musicPlayerPanel').style.display = 'block';
-      }
-      if (j.playing) {
-        if (j.title) $('musicPlayerTitle').textContent = j.title;
-        $('musicPlayStatus').textContent = '🎵 Reproduciendo en ' + ip;
-      } else if (musicSessionActive) {
-        $('musicPlayStatus').textContent = j.esp_busy
-          ? '⏳ ESP conectando audio en ' + ip + '…'
-          : '⏳ Preparando / finalizando en ' + ip + '…';
-      } else if ($('musicPlayerPanel').style.display !== 'none') {
-        $('musicPlayStatus').textContent = j.error
-          ? '❌ ' + j.error
-          : 'Reproducción finalizada.';
-      }
-    } catch (_) {
-      if (musicSessionActive) {
-        $('musicPlayerPanel').style.display = 'block';
-        $('musicPlayStatus').textContent = '⏳ ESP ocupado — controles activos';
-      }
-    }
-  }
-
-  function startMusicPolling() {
-    if (musicPollTimer) clearInterval(musicPollTimer);
-    musicPollTimer = setInterval(pollDeviceMusicStatus, 2500);
-    setTimeout(pollDeviceMusicStatus, 1200);
-  }
-
-  function setBadge(el, text, kind) {
-    el.textContent = text;
-    el.className = 'badge' + (kind ? ' ' + kind : '');
-  }
-
-  async function refreshMusicStatus() {
-    try {
-      const r = await fetch('/api/admin/music/status', { signal: AbortSignal.timeout(8000) });
-      musicStatus = await r.json();
-      if (musicStatus.youtube_api) {
-        setBadge(authBadge, 'YouTube API', 'ok');
-      } else if (musicStatus.account_ok) {
-        setBadge(authBadge, 'Cuenta YT Music', 'ok');
-      } else if (musicStatus.cookies_present) {
-        setBadge(authBadge, 'Cookies inválidas', 'warn');
-      } else {
-        setBadge(authBadge, 'Sin API key', 'warn');
-      }
-      if (musicStatus.ready) {
-        const parts = ['ffmpeg'];
-        if (musicStatus.pytubefix) parts.push('pytubefix');
-        if (musicStatus.yt_dlp) parts.push('yt-dlp');
-        setBadge(depsBadge, parts.join(' + ') + ' OK', 'ok');
-      } else {
-        const miss = [];
-        if (!musicStatus.ffmpeg) miss.push('ffmpeg');
-        if (!musicStatus.pytubefix && !musicStatus.yt_dlp) miss.push('pytubefix/yt-dlp');
-        if (!musicStatus.youtube_api && !musicStatus.yt_dlp) miss.push('YOUTUBE_API_KEY');
-        setBadge(depsBadge, 'Falta: ' + miss.join(', '), 'warn');
-      }
-    } catch (e) {
-      setBadge(authBadge, 'Error estado', 'warn');
-      setBadge(depsBadge, e.message, 'warn');
-    }
-  }
-
-  function escapeHtml(s) {
-    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  }
-
-  function renderResults(data) {
-    resultsEl.innerHTML = '';
-    const mode = data.auth_mode === 'youtube_api' ? 'YouTube API'
-      : (data.auth_mode === 'account' ? 'cuenta' : 'anónimo');
-    $('musicSearchStatus').textContent =
-      (data.results?.length || 0) + ' resultado(s) · modo ' + mode;
-    (data.results || []).forEach(track => {
-      const li = document.createElement('li');
-      li.className = 'track-item';
-      const img = document.createElement('img');
-      if (track.thumbnail) { img.src = track.thumbnail; img.alt = ''; }
-      else { img.style.visibility = 'hidden'; }
-      const meta = document.createElement('div');
-      meta.className = 'track-meta';
-      meta.innerHTML = '<strong>' + escapeHtml(track.title) + '</strong><span>' +
-        escapeHtml(track.artist || '—') +
-        (track.duration ? ' · ' + escapeHtml(track.duration) : '') + '</span>';
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'play';
-      btn.textContent = '▶';
-      btn.onclick = () => playTrack(track, btn);
-      li.appendChild(img);
-      li.appendChild(meta);
-      li.appendChild(btn);
-      resultsEl.appendChild(li);
+$('ttsTestBtn').onclick = async () => {
+  const text = $('ttsTestText').value.trim();
+  if (!text) { $('ttsTestStatus').textContent = 'Escribe algo primero.'; return; }
+  $('ttsTestBtn').disabled = true;
+  $('ttsTestStatus').textContent = '⏳ Guardando perfil y generando…';
+  try {
+    await fetch('/api/admin/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profileSaveBody(false)),
     });
+    const wasActive = cfg.personality;
+    if (editingProfile !== wasActive) {
+      await fetch('/api/admin/config', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ personality: editingProfile, profile_id: editingProfile }),
+      });
+    }
+    const r = await fetch('/tts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+    if (editingProfile !== wasActive) {
+      await fetch('/api/admin/config', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ personality: wasActive, profile_id: wasActive }),
+      });
+    }
+    const blob = await r.blob();
+    $('ttsAudio').src = URL.createObjectURL(blob);
+    $('ttsAudio').style.display = 'block';
+    $('ttsAudio').play();
+    $('ttsTestStatus').textContent = '✅ Listo';
+  } catch (e) {
+    $('ttsTestStatus').textContent = '❌ ' + e.message;
+  } finally {
+    $('ttsTestBtn').disabled = false;
   }
+};
 
-  async function playTrack(track, btn) {
-    await refreshMusicStatus();
-    if (!musicStatus.ready) {
-      $('musicPlayStatus').textContent = 'Instalá yt-dlp y ffmpeg, reiniciá el servidor.';
-      return;
-    }
-    const ip = ($('espIp').value || localStorage.getItem('agenteia_esp_ip') || '').trim();
-    if (!ip) {
-      $('musicPlayStatus').textContent = 'Indicá la IP del ESP en la pestaña Dispositivo.';
-      return;
-    }
-    document.querySelectorAll('.track-item button.play').forEach(b => { b.disabled = true; });
-    if (btn) btn.textContent = '…';
-    $('musicPlayStatus').textContent = '⏳ Comprobando ESP en ' + ip + '…';
-    try {
-      const ping = await fetch('/api/admin/device/settings?ip=' + encodeURIComponent(ip));
-      const pingJson = await ping.json();
-      if (!ping.ok) {
-        throw new Error(
-          pingJson.error ||
-            'No se pudo contactar al ESP. Revisá la IP en Dispositivo y la red WiFi.'
-        );
-      }
-    } catch (e) {
-      $('musicPlayStatus').textContent = '❌ ' + e.message;
-      document.querySelectorAll('.track-item button.play').forEach(b => {
-        b.disabled = false;
-        if (b.textContent === '…') b.textContent = '▶';
-      });
-      return;
-    }
-    $('musicPlayStatus').textContent = '⏳ Preparando audio en el PC (1ª canción ~30-90s tras EJS warm)…';
-    showMusicPlayer(track);
-    try {
-      const r = await fetch('/api/admin/device/music/play', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ip,
-          video_id: track.id,
-          title: track.title || '',
-        }),
-        signal: AbortSignal.timeout(210000),
-      });
-      const j = await r.json();
-      if (!r.ok) {
-        const detail = j.detail ? ' — ' + j.detail : '';
-        throw new Error((j.error || r.status) + detail);
-      }
-      $('musicNowPlaying').textContent =
-        (track.title || '') + (track.artist ? ' — ' + track.artist : '');
-      $('musicPlayStatus').textContent =
-        '✅ Listo — ESP debería reproducir en segundos (título + − / + / STOP).';
-      await loadMusicVolume();
-    } catch (e) {
-      $('musicPlayStatus').textContent = '❌ ' + e.message;
-      hideMusicPlayer();
-    } finally {
-      document.querySelectorAll('.track-item button.play').forEach(b => {
-        b.disabled = false;
-        if (b.textContent === '…') b.textContent = '▶';
-      });
-    }
-  }
+$('resetMemoryBtn').onclick = async () => {
+  if (!confirm('¿Borrar memoria del personaje activo?')) return;
+  const r = await fetch('/api/admin/reset-memory', { method: 'POST' });
+  showMsg(r.ok ? 'Memoria borrada' : 'Error', r.ok);
+};
+$('resetChatBtn').onclick = async () => {
+  if (!confirm('¿Reiniciar historial de chat?')) return;
+  const r = await fetch('/converse/reset', { method: 'POST' });
+  showMsg(r.ok ? 'Historial reiniciado' : 'Error', r.ok);
+};
 
-  async function doSearch() {
-    const q = $('musicSearchInput').value.trim();
-    if (!q) return;
-    $('musicSearchBtn').disabled = true;
-    $('musicSearchStatus').textContent = 'Buscando…';
-    resultsEl.innerHTML = '';
-    try {
-      const r = await fetch('/api/admin/music/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q, limit: 15 }),
-        signal: AbortSignal.timeout(45000),
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || r.status);
-      renderResults(j);
-    } catch (e) {
-      $('musicSearchStatus').textContent = 'Error: ' + e.message;
-    } finally {
-      $('musicSearchBtn').disabled = false;
-    }
-  }
-
-  $('musicSearchBtn').onclick = doSearch;
-  $('musicSearchInput').addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); doSearch(); }
-  });
-
-  $('musicCookiesFile').onchange = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const fd = new FormData();
-    fd.append('file', file);
-    $('musicPlayStatus').textContent = 'Subiendo cookies…';
-    try {
-      const r = await fetch('/api/admin/music/cookies', { method: 'POST', body: fd });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || r.status);
-      $('musicPlayStatus').textContent = '✅ Sesión YT Music configurada';
-      await refreshMusicStatus();
-    } catch (err) {
-      $('musicPlayStatus').textContent = '❌ ' + err.message;
-    } finally {
-      e.target.value = '';
-    }
-  };
-
-  $('musicLogoutBtn').onclick = async () => {
-    if (!confirm('¿Borrar cookies y volver a modo anónimo?')) return;
-    try {
-      const r = await fetch('/api/admin/music/cookies', { method: 'DELETE' });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || r.status);
-      $('musicPlayStatus').textContent = 'Modo anónimo activo';
-      await refreshMusicStatus();
-    } catch (err) {
-      $('musicPlayStatus').textContent = '❌ ' + err.message;
-    }
-  };
-
-  $('musicVolume').oninput = () => {
-    const v = +$('musicVolume').value;
-    $('musicVolVal').textContent = v + '%';
-    if (musicVolTimer) clearTimeout(musicVolTimer);
-    musicVolTimer = setTimeout(() => applyMusicVolume(v), 280);
-  };
-
-  $('musicStopBtn').onclick = async () => {
-    const ip = espIp();
-    if (!ip) {
-      $('musicPlayStatus').textContent = 'Indicá la IP del ESP en Dispositivo.';
-      return;
-    }
-    $('musicStopBtn').disabled = true;
-    $('musicPlayStatus').textContent = '⏳ Deteniendo…';
-    try {
-      const r = await fetch('/api/admin/device/music/stop', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ip }),
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || r.status);
-      $('musicPlayStatus').textContent = '⏹ Música detenida.';
-      hideMusicPlayer();
-    } catch (e) {
-      $('musicPlayStatus').textContent = '❌ ' + e.message;
-    } finally {
-      $('musicStopBtn').disabled = false;
-    }
-  };
-
-  document.querySelector('.tab[data-tab="music"]').addEventListener('click', () => {
-    refreshMusicStatus();
-    loadMusicVolume();
-  });
-})();
-
-
-// ─── Chat inline (panel Cerebro) ────────────────────────────────────────────
+// ─── Chat ───────────────────────────────────────────────────────────────────
 (function() {
-  const log    = document.getElementById('chatLog');
-  const input  = document.getElementById('chatInput');
-  const EMOTION_EMOJI = {
-    neutral:'😐', happy:'😄', sad:'😢', angry:'😠', surprised:'😲',
-    thinking:'🤔', sleepy:'😴', love:'🥰', excited:'🤩', cool:'😎',
-    confused:'😕', dizzy:'😵',
-  };
-
+  const log = $('chatLog');
+  const EMOTION_EMOJI = { neutral:'😐', happy:'😄', sad:'😢', angry:'😠', surprised:'😲', thinking:'🤔', sleepy:'😴', love:'🥰', excited:'🤩', cool:'😎', confused:'😕', dizzy:'😵' };
   function bubble(role, text, emotion) {
     const wrap = document.createElement('div');
-    wrap.style.cssText = 'display:flex;gap:.4rem;align-items:flex-end;' +
-      (role === 'user' ? 'flex-direction:row-reverse' : '');
-    const avatar = document.createElement('span');
-    avatar.style.cssText = 'font-size:1.1rem;flex-shrink:0;line-height:1';
-    avatar.textContent = role === 'user' ? '🧑' : (EMOTION_EMOJI[emotion] || '🤖');
+    wrap.style.cssText = 'display:flex;gap:.4rem;align-items:flex-end;' + (role === 'user' ? 'flex-direction:row-reverse' : '');
+    const av = document.createElement('span');
+    av.textContent = role === 'user' ? '🧑' : (EMOTION_EMOJI[emotion] || '🤖');
     const msg = document.createElement('div');
-    msg.style.cssText = 'max-width:80%;padding:.45rem .75rem;border-radius:12px;font-size:.88rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;' +
-      (role === 'user'
-        ? 'background:var(--accent);color:#0a1628;border-bottom-right-radius:3px'
-        : 'background:#1e2d42;border-bottom-left-radius:3px');
+    msg.style.cssText = 'max-width:80%;padding:.45rem .75rem;border-radius:12px;font-size:.88rem;white-space:pre-wrap;' +
+      (role === 'user' ? 'background:var(--accent);color:#0a1628' : 'background:#1e2d42');
     msg.textContent = text;
-    wrap.appendChild(avatar);
-    wrap.appendChild(msg);
+    wrap.appendChild(av); wrap.appendChild(msg);
     log.appendChild(wrap);
     log.scrollTop = log.scrollHeight;
     return wrap;
   }
-
   async function sendChat() {
-    const text = input.value.trim();
+    const text = $('chatInput').value.trim();
     if (!text) return;
-    input.value = '';
+    $('chatInput').value = '';
     bubble('user', text);
     const thinking = bubble('bot', '…', 'thinking');
-
-    // Tomar valores actuales del formulario (sin guardar)
-    const model      = (document.getElementById('ollamaModel')?.value || '').trim();
-    const basePrompt = (document.getElementById('personalityPrompt')?.value || '').trim();
-    const extraPrompt= (document.getElementById('customPrompt')?.value || '').trim();
-    let system_prompt = basePrompt;
-    if (extraPrompt) system_prompt += '\n\nINSTRUCCIONES ADICIONALES DEL USUARIO:\n' + extraPrompt;
-
+    let system_prompt = $('personalityPrompt').value.trim();
+    const extra = $('customPrompt').value.trim();
+    if (extra) system_prompt += '\n\nINSTRUCCIONES ADICIONALES:\n' + extra;
     const body = { text };
-    if (model)         body.model         = model;
+    const model = $('ollamaModel').value.trim();
+    if (model) body.model = model;
     if (system_prompt) body.system_prompt = system_prompt;
-
     try {
-      const r = await fetch('/chat', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(body),
-      });
-      const j = await r.json();
+      const j = await (await fetch('/chat', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })).json();
       log.removeChild(thinking);
       bubble('bot', j.reply || j.error || '(sin respuesta)', j.emotion);
-    } catch(e) {
+    } catch (e) {
       log.removeChild(thinking);
-      bubble('bot', '⚠ Error: ' + e.message, 'sad');
+      bubble('bot', '⚠ ' + e.message, 'sad');
     }
   }
-
-  document.getElementById('chatSendBtn').onclick = sendChat;
-  document.getElementById('chatClearBtn').onclick = () => { log.innerHTML = ''; };
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
-  });
+  $('chatSendBtn').onclick = sendChat;
+  $('chatClearBtn').onclick = () => { log.innerHTML = ''; };
+  $('chatInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); sendChat(); } });
 })();
 
+// ─── Dispositivo ────────────────────────────────────────────────────────────
+function selectEspIp(ip) {
+  if (!ip) return;
+  $('espIp').value = ip;
+  $('devEspIp').value = ip;
+  localStorage.setItem('agenteia_esp_ip', ip);
+  $('deviceLink').href = 'http://' + ip + '/';
+  document.querySelectorAll('.device-row').forEach(tr => tr.classList.toggle('selected', tr.dataset.ip === ip));
+  loadEspVolume();
+}
+async function loadDeviceRegistry() {
+  const body = $('deviceRegistryBody');
+  try {
+    const j = await (await fetch('/api/admin/devices')).json();
+    const devices = j.devices || [];
+    if (!devices.length) {
+      body.innerHTML = '<tr><td colspan="4" class="empty">Ningún ESP detectado aún.</td></tr>';
+      return;
+    }
+    const currentIp = $('espIp').value.trim();
+    body.innerHTML = devices.map(d =>
+      `<tr class="device-row${d.ip === currentIp ? ' selected' : ''}" data-ip="${d.ip}">` +
+      `<td>${d.last_seen}</td><td>${d.ip || '—'}</td><td class="mac">${d.mac || '—'}</td><td>${d.last_path}</td></tr>`
+    ).join('');
+    body.querySelectorAll('.device-row').forEach(tr => { tr.onclick = () => selectEspIp(tr.dataset.ip); });
+    if (!currentIp && devices[0].ip) selectEspIp(devices[0].ip);
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="4" class="empty">Error: ${e.message}</td></tr>`;
+  }
+}
+$('refreshDevicesBtn').onclick = loadDeviceRegistry;
+$('espVolume').oninput = () => $('espVolVal').textContent = $('espVolume').value + '%';
+async function loadEspVolume() {
+  const ip = $('espIp').value.trim();
+  if (!ip) return;
+  try {
+    const j = await (await fetch('/api/admin/device/settings?ip=' + encodeURIComponent(ip))).json();
+    if (j.volume != null) { $('espVolume').value = j.volume; $('espVolVal').textContent = j.volume + '%'; }
+  } catch (_) {}
+}
+$('espVolBtn').onclick = async () => {
+  const ip = $('espIp').value.trim();
+  if (!ip) { showMsg('Indica IP del ESP', false); return; }
+  try {
+    const r = await fetch('/api/admin/device/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip, volume: +$('espVolume').value }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    showMsg('Volumen ESP: ' + j.volume + '%', true);
+  } catch (e) { showMsg(e.message, false); }
+};
+$('openDeviceBtn').onclick = () => {
+  const ip = $('espIp').value.trim();
+  if (!ip) { showMsg('Indica IP', false); return; }
+  localStorage.setItem('agenteia_esp_ip', ip);
+  window.open('http://' + ip + '/', '_blank');
+};
+$('espIp').onchange = () => selectEspIp($('espIp').value.trim());
+setInterval(loadDeviceRegistry, 8000);
+
+// ─── Pruebas (ex /dev) ──────────────────────────────────────────────────────
+let currentEmotion = 'neutral';
+let speakingUntil = 0;
+const preview = FacePreview.attachPreview($('previewCanvas'), () => ({
+  speaking: Date.now() < speakingUntil,
+  bored: $('bored').checked,
+}));
+preview.setEmotion('neutral');
+preview.start();
+
+function devMsg(el, text, ok) {
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
+}
+function pickEmotion(e, btn) {
+  currentEmotion = e;
+  preview.setEmotion(e);
+  $('previewLabel').textContent = e + ($('bored').checked ? ' · aburrido' : '');
+  document.querySelectorAll('.face').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  if (e === 'vibing') $('vibingBtn').classList.add('active');
+  else $('vibingBtn').classList.remove('active');
+  $('speakEmotion').value = e;
+}
+FacePreview.EMOTIONS.forEach(e => {
+  if (e === 'vibing') return;
+  const b = document.createElement('button');
+  b.className = 'face' + (e === 'neutral' ? ' active' : '');
+  b.dataset.emotion = e;
+  b.textContent = e;
+  b.onclick = () => { pickEmotion(e, b); sendFace(e); };
+  $('faceGrid').appendChild(b);
+  const o = document.createElement('option');
+  o.value = e; o.textContent = e;
+  if (e === 'happy') o.selected = true;
+  $('speakEmotion').appendChild(o);
+});
+$('bored').onchange = () => preview.setEmotion(currentEmotion);
+
+const vibingMicEl = $('vibingMic');
+const savedVmic = localStorage.getItem('agenteia_vibing_mic');
+if (savedVmic) vibingMicEl.value = savedVmic;
+$('vibingMicVal').textContent = vibingMicEl.value + '%';
+vibingMicEl.oninput = () => {
+  $('vibingMicVal').textContent = vibingMicEl.value + '%';
+  localStorage.setItem('agenteia_vibing_mic', vibingMicEl.value);
+};
+function vibingBody() {
+  return { vibing_mic: +vibingMicEl.value || 150, vibing_floor: 100, vibing_ceil: 500 };
+}
+$('vibingBtn').onclick = () => { if (+$('holdMs').value < 60000) $('holdMs').value = '60000'; sendFace('vibing'); };
+
+async function sendFace(emotion) {
+  const body = { emotion, bored: $('bored').checked, hold_ms: +$('holdMs').value || 8000 };
+  if (emotion === 'vibing') Object.assign(body, vibingBody());
+  try {
+    const j = await (await fetch('/api/dev/face', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })).json();
+    devMsg($('faceMsg'), `Encolado: ${emotion} (cola: ${j.queued})`, true);
+    refreshQueue();
+  } catch (e) { devMsg($('faceMsg'), e.message, false); }
+}
+$('speakBtn').onclick = async () => {
+  const text = $('speakText').value.trim();
+  if (!text) { devMsg($('speakMsg'), 'Escribe algo', false); return; }
+  pickEmotion($('speakEmotion').value);
+  speakingUntil = Date.now() + Math.min(12000, text.length * 80);
+  try {
+    const j = await (await fetch('/api/dev/speak', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text, emotion: $('speakEmotion').value }) })).json();
+    devMsg($('speakMsg'), `TTS encolado (${j.queued})`, true);
+    refreshQueue();
+  } catch (e) { devMsg($('speakMsg'), e.message, false); }
+};
+$('notifyTestBtn').onclick = async () => {
+  try {
+    const j = await (await fetch('/api/dev/notify', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ kind: 'ask_question', context: { source: 'admin' }, priority: true, dedupe_key: 'dev-' + Date.now() }),
+    })).json();
+    devMsg($('notifyMsg'), j.skipped ? 'Omitido' : `Notify encolado (${j.queued})`, !j.skipped);
+    refreshQueue();
+  } catch (e) { devMsg($('notifyMsg'), e.message, false); }
+};
+function devEspIp() { return ($('devEspIp').value || localStorage.getItem('agenteia_esp_ip') || '').trim(); }
+$('espFaceBtn').onclick = async () => {
+  const ip = devEspIp();
+  if (!ip) { devMsg($('espDirectMsg'), 'Indica IP', false); return; }
+  try {
+    await fetch('/api/admin/device/dev/face', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ ip, emotion: currentEmotion, bored: $('bored').checked, hold_ms: +$('holdMs').value || 8000, ...(currentEmotion === 'vibing' ? vibingBody() : {}) }),
+    });
+    devMsg($('espDirectMsg'), 'Gesto enviado', true);
+  } catch (e) { devMsg($('espDirectMsg'), e.message, false); }
+};
+$('espSpeakBtn').onclick = async () => {
+  const ip = devEspIp();
+  const text = $('speakText').value.trim();
+  if (!ip || !text) { devMsg($('espDirectMsg'), 'IP y texto requeridos', false); return; }
+  try {
+    await fetch('/api/admin/device/dev/speak', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ ip, text, emotion: $('speakEmotion').value }),
+    });
+    devMsg($('espDirectMsg'), 'TTS enviado al ESP', true);
+  } catch (e) { devMsg($('espDirectMsg'), e.message, false); }
+};
+$('tabBrainDev').onclick = () => { $('tabBrainDev').classList.add('active'); $('tabEspDirect').classList.remove('active'); $('brainDevPanel').style.display = ''; $('espDirectPanel').style.display = 'none'; };
+$('tabEspDirect').onclick = () => { $('tabEspDirect').classList.add('active'); $('tabBrainDev').classList.remove('active'); $('brainDevPanel').style.display = 'none'; $('espDirectPanel').style.display = ''; };
+async function refreshQueue() {
+  try {
+    const j = await (await fetch('/api/dev/status')).json();
+    const q = j.queue || [];
+    $('queueStatus').textContent = q.length ? q.length + ' pendiente(s)' : 'Cola vacía';
+  } catch { $('queueStatus').textContent = 'Error leyendo cola'; }
+}
+async function loadEspDevices() {
+  try {
+    const devices = (await (await fetch('/api/admin/devices')).json()).devices || [];
+    $('espList').textContent = devices.length
+      ? devices.map((d, i) => (i === 0 ? '● ' : '○ ') + d.ip + ' · ' + d.last_seen).join(' | ')
+      : 'Ningún ESP detectado';
+  } catch { $('espList').textContent = 'Error'; }
+}
+$('refreshQueueBtn').onclick = () => { refreshQueue(); loadEspDevices(); };
+$('clearQueueBtn').onclick = async () => { await fetch('/api/dev/clear', { method: 'POST' }); refreshQueue(); };
+$('devEspIp').onchange = () => { const ip = devEspIp(); if (ip) localStorage.setItem('agenteia_esp_ip', ip); };
+
+// ─── Música (compacto) ──────────────────────────────────────────────────────
+(function() {
+  let musicStatus = {}, musicPollTimer = null, musicVolTimer = null, musicSessionActive = false;
+  function espIp() { return ($('espIp').value || localStorage.getItem('agenteia_esp_ip') || '').trim(); }
+  function setBadge(el, text, kind) { el.textContent = text; el.className = 'badge' + (kind ? ' ' + kind : ''); }
+  window.refreshMusicStatus = async function() {
+    try {
+      musicStatus = await (await fetch('/api/admin/music/status', { signal: AbortSignal.timeout(8000) })).json();
+      setBadge($('musicAuthBadge'), musicStatus.youtube_api ? 'YouTube API' : (musicStatus.account_ok ? 'YT Music' : 'Sin API'), musicStatus.ready ? 'ok' : 'warn');
+      setBadge($('musicDepsBadge'), musicStatus.ready ? 'ffmpeg OK' : 'Falta deps', musicStatus.ready ? 'ok' : 'warn');
+    } catch (e) { setBadge($('musicDepsBadge'), e.message, 'warn'); }
+  };
+  $('musicSearchBtn').onclick = async () => {
+    const q = $('musicSearchInput').value.trim();
+    if (!q) return;
+    $('musicSearchStatus').textContent = 'Buscando…';
+    try {
+      const j = await (await fetch('/api/admin/music/search', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q, limit: 15 }), signal: AbortSignal.timeout(45000),
+      })).json();
+      $('musicResults').innerHTML = (j.results || []).map(t =>
+        `<li class="track-item"><div class="track-meta"><strong>${t.title}</strong><span>${t.artist || ''}</span></div>` +
+        `<button type="button" class="play" data-id="${t.id}" data-title="${t.title}">▶</button></li>`
+      ).join('');
+      $('musicSearchStatus').textContent = (j.results?.length || 0) + ' resultado(s)';
+      $('musicResults').querySelectorAll('.play').forEach(btn => btn.onclick = () => playTrack(btn.dataset));
+    } catch (e) { $('musicSearchStatus').textContent = e.message; }
+  };
+  async function playTrack(track) {
+    const ip = espIp();
+    if (!ip) { $('musicPlayStatus').textContent = 'Indicá IP en Dispositivo'; return; }
+    $('musicPlayStatus').textContent = '⏳ Preparando…';
+    $('musicPlayerPanel').style.display = 'block';
+    musicSessionActive = true;
+    try {
+      const r = await fetch('/api/admin/device/music/play', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip, video_id: track.id, title: track.title }),
+        signal: AbortSignal.timeout(210000),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.status);
+      $('musicPlayerTitle').textContent = track.title;
+      $('musicPlayStatus').textContent = '✅ Reproduciendo en ESP';
+    } catch (e) {
+      $('musicPlayStatus').textContent = '❌ ' + e.message;
+      $('musicPlayerPanel').style.display = 'none';
+      musicSessionActive = false;
+    }
+  }
+  $('musicStopBtn').onclick = async () => {
+    const ip = espIp();
+    if (!ip) return;
+    await fetch('/api/admin/device/music/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip }) });
+    $('musicPlayerPanel').style.display = 'none';
+    musicSessionActive = false;
+  };
+  $('musicCookiesFile').onchange = async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const fd = new FormData(); fd.append('file', file);
+    await fetch('/api/admin/music/cookies', { method: 'POST', body: fd });
+    refreshMusicStatus();
+    e.target.value = '';
+  };
+  $('musicLogoutBtn').onclick = async () => { await fetch('/api/admin/music/cookies', { method: 'DELETE' }); refreshMusicStatus(); };
+  $('musicVolume').oninput = () => {
+    const v = +$('musicVolume').value;
+    $('musicVolVal').textContent = v + '%';
+    if (musicVolTimer) clearTimeout(musicVolTimer);
+    musicVolTimer = setTimeout(async () => {
+      const ip = espIp();
+      if (ip) await fetch('/api/admin/device/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip, volume: v }) });
+    }, 280);
+  };
+})();
+
+load();
 </script>
 </body>
 </html>
