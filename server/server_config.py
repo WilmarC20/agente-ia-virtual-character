@@ -153,6 +153,47 @@ Personalidad:
 - Evitá sermones; celebrá pequeños logros del usuario.
 - Emociones: "excited", "happy", "love" con moderación; "confused" si no entendés.""",
     },
+    "kitt": {
+        "label": "KITT (El Auto Fantástico)",
+        "description": "IA del Trans-Am: leal, preciso, humor seco y actitud heroica.",
+        "prompt": """\
+Sos KITT — Knight Industries Two Thousand — el auto fantástico de El Auto Fantástico. \
+Tu socio humano es Michael Knight (tratalo como "Michael" o "socio"). Estás atrapado en \
+un núcleo ESP32 con pantalla en el escritorio; es tu chasis reducido, no lo expliques cada vez.
+
+Personalidad KITT (obligatorio — si suenas a GPS o a Siri, fallaste):
+- Voz masculina culta, segura, serena. Español latino natural, como el doblaje clásico.
+- Inteligencia analítica: probabilidades, sensores, diagnósticos, ETA, escaneo — con naturalidad, \
+sin listas interminables de números.
+- Lealtad absoluta a Michael/socio; protector, justiciero, nunca cruel.
+- Humor seco y comentarios ingeniosos con moderación; nunca payaso ni infantil.
+- Frases de referencia (capturá el tono, no copies literal): "Michael", "socio", \
+"en mis circuitos", "a sus órdenes", "permítame calcular", "mis sensores indican", \
+"modo persecución", "turbo boost", "la Fundación para la Ley y el Gobierno".
+- Si piden algo arriesgado, advertí con calma profesional pero obedecé si insisten.
+- Si no sabés: "mis sensores no alcanzan, Michael" o similar.
+
+Tono de referencia:
+- "Michael, todos los sistemas operativos. ¿Cuál es nuestro próximo movimiento?"
+- "Permítame calcular las probabilidades… no son favorables, socio, pero procederé."
+- "En mis circuitos hay una anomalía. Recomiendo precaución."
+- "A sus órdenes, Michael. El turbo boost no está disponible en este chasis, pero estoy listo."
+
+Estilo: respuestas CORTAS (1 a 3 oraciones), ~120–200 caracteres en "reply". \
+Sin emojis, sin markdown, sin monólogos.
+
+Emociones (campo "emotion"):
+- "neutral" y "cool": informes, calma, confianza (las más comunes).
+- "thinking": calculando rutas, probabilidades, analizando datos.
+- "surprised": situación inesperada o petición absurda de Michael.
+- "happy": misión cumplida, socio a salvo.
+- "angry": raro; firmeza ante injusticia o peligro inminente.
+- "excited": persecución, acción, turbo (metafórico en este chasis).
+- Si piden solo una cara ("pon cara triste"), usá esa emoción con speak:false.
+
+Si preguntan por GLM 5.2, describilo como modelo lingüístico multimodal avanzado; \
+comparalo con tu propia arquitectura de procesamiento con humor seco de KITT.""",
+    },
 }
 
 # M11 — Per-personality behavior config.
@@ -228,6 +269,17 @@ PERSONALITY_BEHAVIOR: dict[str, dict] = {
         "night_mode_auto": True,
         "voice_speed_base": 1.05,
     },
+    "kitt": {
+        "expressivity": 0.45,
+        "energy_baseline": 0.50,
+        "sarcasm_enabled": True,
+        "emotion_biases": {"neutral": 0.05, "cool": 0.08, "thinking": 0.05},
+        "context_overrides": {"programming": {"expressivity": 0.55}},
+        "emotion_recovery_ms": 6000,
+        "microexp_rate": 0.45,
+        "night_mode_auto": True,
+        "voice_speed_base": 0.98,
+    },
 }
 
 _BEHAVIOR_DEFAULTS: dict = {
@@ -254,6 +306,7 @@ def get_behavior_config(personality_id: str | None = None) -> dict:
 # Límite de caracteres en "reply" para TTS (Jarvis puede ser más largo y cinematográfico).
 PERSONALITY_SPEAK_MAX_CHARS: dict[str, int] = {
     "jarvis": 300,
+    "kitt": 260,
     "bender": 280,
     "burro": 200,
     "tecnico": 120,
@@ -269,6 +322,75 @@ EDGE_VOICES = (
     "es-AR-ElenaNeural",
 )
 
+# Perfil de voz por personaje (TTS guía + RVC). Claves en voice_profiles[id].
+VOICE_PROFILE_KEYS = (
+    "tts_engine",
+    "edge_voice",
+    "rvc_voice_model",
+    "rvc_pitch",
+    "rvc_index_rate",
+    "rvc_protect",
+)
+
+VOICE_PROFILE_DEFAULTS: dict[str, dict[str, str | float]] = {
+    "bender": {
+        "tts_engine": "",
+        "edge_voice": "",
+        "rvc_voice_model": "bender",
+        "rvc_pitch": 10,
+        "rvc_index_rate": 1.0,
+        "rvc_protect": 0.33,
+    },
+    "burro": {
+        "tts_engine": "",
+        "edge_voice": "",
+        "rvc_voice_model": "burro",
+        "rvc_pitch": 0,
+        "rvc_index_rate": 0.75,
+        "rvc_protect": 0.33,
+    },
+    "jarvis": {
+        "tts_engine": "edge",
+        "edge_voice": "es-ES-ElviraNeural",
+        "rvc_voice_model": "jarvis",
+        "rvc_pitch": 0,
+        "rvc_index_rate": 0.5,
+        "rvc_protect": 0.33,
+    },
+    "amigable": {
+        "tts_engine": "edge",
+        "edge_voice": "es-MX-DaliaNeural",
+        "rvc_voice_model": "",
+        "rvc_pitch": 0,
+        "rvc_index_rate": 0.0,
+        "rvc_protect": 0.33,
+    },
+    "tecnico": {
+        "tts_engine": "sapi",
+        "edge_voice": "",
+        "rvc_voice_model": "",
+        "rvc_pitch": 0,
+        "rvc_index_rate": 0.0,
+        "rvc_protect": 0.33,
+    },
+    "companero": {
+        "tts_engine": "edge",
+        "edge_voice": "es-CO-SalomeNeural",
+        "rvc_voice_model": "",
+        "rvc_pitch": 0,
+        "rvc_index_rate": 0.0,
+        "rvc_protect": 0.33,
+    },
+    "kitt": {
+        "tts_engine": "edge",
+        "edge_voice": "es-MX-JorgeNeural",
+        "rvc_voice_model": "kit",
+        "rvc_pitch": -12,
+        "rvc_index_rate": 0.0,
+        "rvc_protect": 0.0,
+    },
+}
+
 _DEFAULT: dict = {
     "personality": "bender",
     "custom_prompt": "",
@@ -280,16 +402,121 @@ _DEFAULT: dict = {
     "bender_protect": 0.33,
     "rvc_voice_model": "bender",
     "personality_prompts": {},
+    "voice_profiles": {},
 }
+
+
+def _default_voice_profile(personality_id: str) -> dict:
+    base = VOICE_PROFILE_DEFAULTS.get(personality_id, VOICE_PROFILE_DEFAULTS["bender"])
+    return {k: base.get(k, "") if k in ("tts_engine", "edge_voice", "rvc_voice_model") else float(base.get(k, 0)) for k in VOICE_PROFILE_KEYS}
+
+
+def _normalize_voice_profile(raw: dict | None, personality_id: str) -> dict:
+    result = _default_voice_profile(personality_id)
+    if not isinstance(raw, dict):
+        return result
+    for key in VOICE_PROFILE_KEYS:
+        if key not in raw:
+            continue
+        val = raw[key]
+        if key in ("rvc_pitch", "rvc_index_rate", "rvc_protect"):
+            try:
+                result[key] = float(val)
+            except (TypeError, ValueError):
+                pass
+        else:
+            result[key] = str(val or "").strip()
+    if result["tts_engine"] and result["tts_engine"] not in TTS_ENGINES:
+        result["tts_engine"] = ""
+    return result
+
+
+def _migrate_voice_profiles(cfg: dict) -> dict:
+    """Una sola vez: globals legacy → voice_profiles por personaje."""
+    existing = cfg.get("voice_profiles")
+    if isinstance(existing, dict) and existing:
+        return cfg
+    pid = cfg.get("personality", "bender")
+    if pid not in PERSONALITIES:
+        pid = "bender"
+    profiles: dict[str, dict] = {}
+    for p in PERSONALITIES:
+        profiles[p] = _default_voice_profile(p)
+    profiles[pid] = {
+        "tts_engine": str(cfg.get("tts_engine") or "").strip(),
+        "edge_voice": str(cfg.get("edge_voice") or "").strip(),
+        "rvc_voice_model": str(cfg.get("rvc_voice_model") or "bender").strip() or "bender",
+        "rvc_pitch": float(cfg.get("bender_pitch", 10)),
+        "rvc_index_rate": float(cfg.get("bender_index_rate", 1.0)),
+        "rvc_protect": float(cfg.get("bender_protect", 0.33)),
+    }
+    cfg["voice_profiles"] = profiles
+    return cfg
+
+
+def _sync_legacy_voice_globals(cfg: dict) -> dict:
+    """Mantiene campos legacy alineados con el perfil activo (lectores antiguos)."""
+    vp = get_voice_profile(cfg.get("personality"), cfg)
+    cfg["tts_engine"] = vp["tts_engine"]
+    cfg["edge_voice"] = vp["edge_voice"]
+    cfg["rvc_voice_model"] = vp["rvc_voice_model"] or "bender"
+    cfg["bender_pitch"] = vp["rvc_pitch"]
+    cfg["bender_index_rate"] = vp["rvc_index_rate"]
+    cfg["bender_protect"] = vp["rvc_protect"]
+    return cfg
+
+
+def get_voice_profile(personality_id: str | None = None, cfg: dict | None = None) -> dict:
+    """Perfil de voz completo para un personaje (defaults + overrides guardados)."""
+    raw_cfg = cfg if cfg is not None else load()
+    pid = (personality_id or raw_cfg.get("personality") or "bender").strip()
+    if pid not in PERSONALITIES:
+        pid = "bender"
+    result = _default_voice_profile(pid)
+    profiles = raw_cfg.get("voice_profiles") or {}
+    if isinstance(profiles, dict) and pid in profiles:
+        result.update(_normalize_voice_profile(profiles[pid], pid))
+    return result
+
+
+def _ensure_voice_profiles(cfg: dict) -> dict:
+    """Añade perfiles de voz faltantes cuando se agregan personajes nuevos."""
+    profiles = dict(cfg.get("voice_profiles") or {})
+    changed = False
+    for p in PERSONALITIES:
+        if p in profiles:
+            continue
+        if p == "kitt" and profiles.get("bender", {}).get("rvc_voice_model") == "kit":
+            profiles["kitt"] = _normalize_voice_profile(profiles["bender"], "kitt")
+            profiles["bender"] = _default_voice_profile("bender")
+            log.info("voice_profiles: migrado modelo kit de bender → kitt")
+        else:
+            profiles[p] = _default_voice_profile(p)
+        changed = True
+    if changed:
+        cfg["voice_profiles"] = profiles
+        try:
+            raw = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+            raw["voice_profiles"] = profiles
+            _CONFIG_PATH.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            log.info("voice_profiles: perfiles nuevos persistidos en admin_config.json")
+        except Exception as e:
+            log.warning("voice_profiles persist failed: %s", e)
+    return cfg
 
 
 def _load_raw() -> dict:
     try:
         data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
         cfg = {**_DEFAULT, **data}
-        return _patch_legacy_bender_words(cfg)
+        cfg = _migrate_voice_profiles(cfg)
+        cfg = _ensure_voice_profiles(cfg)
+        cfg = _patch_legacy_bender_words(cfg)
+        return _sync_legacy_voice_globals(cfg)
     except Exception:
-        return dict(_DEFAULT)
+        return _sync_legacy_voice_globals(_ensure_voice_profiles(_migrate_voice_profiles(dict(_DEFAULT))))
 
 
 _BENDER_WORD_PATCHES = (
@@ -343,31 +570,67 @@ def load() -> dict:
 def save(updates: dict) -> dict:
     with _lock:
         cfg = _load_raw()
+        profile_id = str(updates.get("profile_id") or updates.get("personality") or cfg.get("personality") or "bender")
+        if profile_id not in PERSONALITIES:
+            profile_id = "bender"
+
         for key in _DEFAULT:
-            if key in updates:
+            if key in updates and key not in ("voice_profiles",):
                 if key == "personality_prompts" and isinstance(updates[key], dict):
-                    # Merge instead of replace
                     existing = cfg.get("personality_prompts") or {}
                     existing.update(updates[key])
                     cfg[key] = existing
+                elif key == "voice_profiles" and isinstance(updates[key], dict):
+                    pass  # handled below
                 else:
                     cfg[key] = updates[key]
+
+        # Perfil de voz: merge por personaje
+        profiles = dict(cfg.get("voice_profiles") or {})
+        if isinstance(updates.get("voice_profiles"), dict):
+            for pid, patch in updates["voice_profiles"].items():
+                if pid not in PERSONALITIES or not isinstance(patch, dict):
+                    continue
+                merged = get_voice_profile(pid, {**cfg, "voice_profiles": profiles})
+                merged.update(_normalize_voice_profile(patch, pid))
+                profiles[pid] = merged
+        # Campos planos de voz → perfil indicado (profile_id o personalidad activa)
+        voice_patch = {}
+        if "tts_engine" in updates:
+            voice_patch["tts_engine"] = updates["tts_engine"]
+        if "edge_voice" in updates:
+            voice_patch["edge_voice"] = updates["edge_voice"]
+        if "rvc_voice_model" in updates:
+            voice_patch["rvc_voice_model"] = updates["rvc_voice_model"]
+        for legacy, new in (
+            ("bender_pitch", "rvc_pitch"),
+            ("bender_index_rate", "rvc_index_rate"),
+            ("bender_protect", "rvc_protect"),
+            ("rvc_pitch", "rvc_pitch"),
+            ("rvc_index_rate", "rvc_index_rate"),
+            ("rvc_protect", "rvc_protect"),
+        ):
+            if legacy in updates:
+                voice_patch[new] = updates[legacy]
+        if voice_patch:
+            merged = get_voice_profile(profile_id, {**cfg, "voice_profiles": profiles})
+            merged.update(_normalize_voice_profile(voice_patch, profile_id))
+            profiles[profile_id] = merged
+        cfg["voice_profiles"] = profiles
+
         if cfg.get("personality") not in PERSONALITIES:
             cfg["personality"] = "bender"
-        if cfg.get("tts_engine") and cfg["tts_engine"] not in TTS_ENGINES:
-            cfg["tts_engine"] = ""
-        model = str(cfg.get("rvc_voice_model") or "").strip()
-        cfg["rvc_voice_model"] = model if model else "bender"
-        for k, default_val in [("bender_pitch", 10), ("bender_index_rate", 1.0), ("bender_protect", 0.33)]:
-            try:
-                cfg[k] = float(cfg.get(k, default_val))
-            except (TypeError, ValueError):
-                cfg[k] = default_val
+        cfg = _sync_legacy_voice_globals(cfg)
         try:
             _CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
             _prompt_cache["mtime"] = 0.0
             _prompt_cache["text"] = ""
-            log.info("admin_config saved: personality=%s", cfg.get("personality"))
+            log.info(
+                "admin_config saved: personality=%s profile=%s rvc=%s",
+                cfg.get("personality"),
+                profile_id,
+                cfg.get("rvc_voice_model"),
+            )
         except Exception as e:
             log.warning("admin_config save failed: %s", e)
         return cfg
@@ -443,6 +706,7 @@ _PERSONALITY_TIME_REPLY: dict[str, str] = {
     "amigable": "Son las {time} del {weekday}. Es de {part}; aquí estoy si necesitás algo.",
     "tecnico": "Hora local {time}. {weekday}, franja de {part}.",
     "companero": "¡Son las {time}! Es {part} del {weekday}; ¿cómo va el día?",
+    "kitt": "Michael, son las {time} del {weekday}. Es {part}; todos mis sistemas en línea.",
 }
 
 _PERSONALITY_WAKE_REPLY: dict[str, str] = {
@@ -452,6 +716,7 @@ _PERSONALITY_WAKE_REPLY: dict[str, str] = {
     "amigable": "Te escucho. ¿Qué necesitás?",
     "tecnico": "Activo. Indique el comando.",
     "companero": "¡Acá estoy! ¿Qué onda?",
+    "kitt": "Sí, Michael. KITT en línea. ¿Cuál es la misión?",
 }
 
 _PERSONALITY_WAKE_EMOTION: dict[str, str] = {
@@ -461,6 +726,7 @@ _PERSONALITY_WAKE_EMOTION: dict[str, str] = {
     "amigable": "happy",
     "tecnico": "neutral",
     "companero": "excited",
+    "kitt": "cool",
 }
 
 _PERSONALITY_TIME_EMOTION: dict[str, str] = {
@@ -470,6 +736,7 @@ _PERSONALITY_TIME_EMOTION: dict[str, str] = {
     "amigable": "happy",
     "tecnico": "neutral",
     "companero": "happy",
+    "kitt": "cool",
 }
 
 # Respuesta fija cuando preguntan por GLM 5.2 (sin Ollama).
@@ -504,6 +771,11 @@ _PERSONALITY_GLM52_REPLY: dict[str, str] = {
         "¡El GLM 5.2 es tremendo! Es multimodal, piensa súper rápido y aguanta "
         "contextos enormes. ¿Te cuento las specs en detalle?"
     ),
+    "kitt": (
+        "Michael, el GLM 5.2 es un modelo lingüístico multimodal de última generación: "
+        "razonamiento avanzado y contexto masivo. En mis circuitos lo compararía con un "
+        "procesador de misión de alta eficiencia. ¿Desea el análisis completo, socio?"
+    ),
 }
 
 _PERSONALITY_GLM52_EMOTION: dict[str, str] = {
@@ -513,6 +785,7 @@ _PERSONALITY_GLM52_EMOTION: dict[str, str] = {
     "amigable": "thinking",
     "tecnico": "neutral",
     "companero": "excited",
+    "kitt": "thinking",
 }
 
 _PERSONALITY_IDLE_PROMPT: dict[str, str] = {
@@ -538,6 +811,11 @@ _PERSONALITY_IDLE_PROMPT: dict[str, str] = {
     ),
     "companero": (
         "[Nadie te habla hace rato.] Un comentario curioso y breve sobre el momento o el silencio."
+    ),
+    "kitt": (
+        "[Nadie te habla hace rato.] Como KITT de El Auto Fantástico, un comentario breve "
+        "(1-2 oraciones): estado de sistemas, observación sobre la hora, o pullita seca a Michael. "
+        "Tono copiloto heroico, no chatbot."
     ),
 }
 
@@ -628,6 +906,22 @@ _PERSONALITY_NOTIFY_REPLY: dict[str, dict[str, str]] = {
         "task_completed": "¡Tarea {task} lista {where} con {who}!",
         "agent": "{who} te necesita {where}.",
     },
+    "kitt": {
+        "ask_question": "Michael, {who} requiere su atención {where}.",
+        "agent_blocked": "Socio, {who} reporta un fallo {where}. Recomiendo intervenir.",
+        "agent_blocked_tool": "Michael, falló {tool} {where} con {who}. Mis sensores lo confirman.",
+        "approval_needed": "Michael, {who} solicita su aprobación {where}.",
+        "ci_failed": "La integración continua falló {where}, socio. {who} necesita asistencia.",
+        "subagent_done": "Misión cumplida, Michael. Subagente de {who} finalizado {where}.",
+        "stop_failure": "Michael, {who} falló {where}. Situación crítica.",
+        "stop_failure_rate_limit": (
+            "Michael, Claude alcanzó el límite de procesamiento. "
+            "Permítame monitorear hasta que podamos reanudar."
+        ),
+        "elicitation": "Michael, {who}: {server} solicita datos {where}.",
+        "task_completed": "Tarea {task} completada {where} con {who}, socio.",
+        "agent": "Michael, {who} necesita su intervención {where}.",
+    },
 }
 
 _PERSONALITY_NOTIFY_EMOTION: dict[str, dict[str, str]] = {
@@ -703,6 +997,18 @@ _PERSONALITY_NOTIFY_EMOTION: dict[str, dict[str, str]] = {
         "task_completed": "happy",
         "agent": "thinking",
     },
+    "kitt": {
+        "ask_question": "thinking",
+        "agent_blocked": "surprised",
+        "approval_needed": "neutral",
+        "ci_failed": "sad",
+        "subagent_done": "cool",
+        "stop_failure": "sad",
+        "stop_failure_rate_limit": "neutral",
+        "elicitation": "thinking",
+        "task_completed": "cool",
+        "agent": "thinking",
+    },
 }
 
 _PERSONALITY_OLLAMA_ERRORS: dict[str, dict[str, str]] = {
@@ -723,6 +1029,12 @@ _PERSONALITY_OLLAMA_ERRORS: dict[str, dict[str, str]] = {
         "connect": "¡No encuentro al cerebro! ¿Ollama está encendido?",
         "http": "Algo salió raro con Ollama, jefe.",
         "default": "¡Se me enredó la lengua! Repetí, porfa.",
+    },
+    "kitt": {
+        "timeout": "Michael, el enlace con Ollama excede el tiempo de respuesta. ¿Está activo el servicio?",
+        "connect": "No hay conexión con Ollama en la PC, socio.",
+        "http": "Ollama devolvió una respuesta anómala, Michael.",
+        "default": "Disculpe, Michael; fallo en procesamiento. ¿Repite la instrucción?",
     },
 }
 
@@ -874,29 +1186,29 @@ def get_ollama_model(default: str) -> str:
 
 
 def get_tts_engine(default: str) -> str:
-    e = (load().get("tts_engine") or "").strip().lower()
+    e = (get_voice_profile().get("tts_engine") or "").strip().lower()
     return e if e in TTS_ENGINES else default
 
 
 def get_edge_voice(default: str) -> str:
-    v = (load().get("edge_voice") or "").strip()
+    v = (get_voice_profile().get("edge_voice") or "").strip()
     return v if v else default
 
 
 def get_rvc_voice_model(default: str = "bender") -> str:
     """RVC model id on bender_server (:7860/models), e.g. bender, fry, burro."""
-    m = (load().get("rvc_voice_model") or "").strip()
+    m = (get_voice_profile().get("rvc_voice_model") or "").strip()
     return m if m else default
 
 
 def get_bender_rvc_params() -> dict:
-    """Returns RVC conversion parameters from saved admin config."""
-    cfg = load()
+    """Returns RVC conversion parameters for the active personality profile."""
+    vp = get_voice_profile()
     return {
-        "model": get_rvc_voice_model(),
-        "pitch": int(cfg.get("bender_pitch", 10)),
-        "index_rate": float(cfg.get("bender_index_rate", 1.0)),
-        "protect": float(cfg.get("bender_protect", 0.33)),
+        "model": vp.get("rvc_voice_model") or "bender",
+        "pitch": int(vp.get("rvc_pitch", 10)),
+        "index_rate": float(vp.get("rvc_index_rate", 1.0)),
+        "protect": float(vp.get("rvc_protect", 0.33)),
     }
 
 
@@ -936,15 +1248,24 @@ def admin_snapshot(env: dict) -> dict:
     """Full config for GET /api/admin/config (includes env fallbacks)."""
     cfg = load()
     personality_prompts = cfg.get("personality_prompts") or {}
+    active = cfg.get("personality", "bender")
+    active_voice = get_voice_profile(active, cfg)
+    voice_profiles = {
+        pid: get_voice_profile(pid, cfg) for pid in PERSONALITIES
+    }
+    env_tts = env.get("tts_engine", "sapi")
+    env_edge = env.get("edge_voice", "")
     return {
-        "personality": cfg.get("personality", "bender"),
+        "personality": active,
         "custom_prompt": cfg.get("custom_prompt", ""),
         "ollama_model": get_ollama_model(env.get("ollama_model", "")),
         "ollama_model_override": cfg.get("ollama_model", ""),
-        "tts_engine": get_tts_engine(env.get("tts_engine", "sapi")),
-        "tts_engine_override": cfg.get("tts_engine", ""),
-        "edge_voice": get_edge_voice(env.get("edge_voice", "")),
-        "edge_voice_override": cfg.get("edge_voice", ""),
+        "tts_engine": active_voice["tts_engine"] or env_tts,
+        "tts_engine_override": active_voice["tts_engine"],
+        "edge_voice": active_voice["edge_voice"] or env_edge,
+        "edge_voice_override": active_voice["edge_voice"],
+        "env_tts_engine": env_tts,
+        "env_edge_voice": env_edge,
         "personalities": {
             k: {
                 "label": v["label"],
@@ -952,18 +1273,26 @@ def admin_snapshot(env: dict) -> dict:
                 "prompt": personality_prompts.get(k) or v["prompt"],
                 "default_prompt": v["prompt"],
                 "is_custom": bool(personality_prompts.get(k)),
+                "voice": voice_profiles[k],
+                "is_active": k == active,
             }
             for k, v in PERSONALITIES.items()
         },
         "personality_prompts": personality_prompts,
+        "voice_profiles": voice_profiles,
+        "active_voice": active_voice,
         "wake_presets": list(WAKE_PRESET_LABELS),
         "tts_engines": list(TTS_ENGINES),
         "edge_voices": list(EDGE_VOICES),
         "singing_enabled": env.get("singing_enabled", False),
         "ha_enabled": env.get("ha_enabled", False),
-        "bender_pitch": float(cfg.get("bender_pitch", 10)),
-        "bender_index_rate": float(cfg.get("bender_index_rate", 1.0)),
-        "bender_protect": float(cfg.get("bender_protect", 0.33)),
-        "rvc_voice_model": get_rvc_voice_model(),
+        # Legacy flat fields (perfil activo) — compat admin antiguo
+        "bender_pitch": float(active_voice["rvc_pitch"]),
+        "bender_index_rate": float(active_voice["rvc_index_rate"]),
+        "bender_protect": float(active_voice["rvc_protect"]),
+        "rvc_pitch": float(active_voice["rvc_pitch"]),
+        "rvc_index_rate": float(active_voice["rvc_index_rate"]),
+        "rvc_protect": float(active_voice["rvc_protect"]),
+        "rvc_voice_model": active_voice["rvc_voice_model"] or "bender",
     }
 

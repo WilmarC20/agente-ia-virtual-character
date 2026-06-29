@@ -22,7 +22,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 
 # Un solo hilo OpenMP evita cuelgues de faster-whisper en Windows.
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -1189,10 +1189,8 @@ _VALID_DEV_EMOTIONS = frozenset({
 
 @app.get("/dev", response_class=HTMLResponse)
 async def dev_panel_page():
-    """Panel para probar caras y TTS en el robot desde el PC."""
-    if not DEV_PANEL_HTML.is_file():
-        return HTMLResponse("<h1>dev_panel.html not found</h1>", status_code=404)
-    return HTMLResponse(DEV_PANEL_HTML.read_text(encoding="utf-8"))
+    """Redirige al panel unificado (pestaña Pruebas)."""
+    return RedirectResponse(url="/admin?tab=pruebas", status_code=302)
 
 
 @app.get("/gestures-preview", response_class=HTMLResponse)
@@ -1856,9 +1854,11 @@ async def admin_config_post(request: Request):
     except Exception:
         return JSONResponse(status_code=400, content={"error": "invalid json"})
     allowed = {
-        "personality", "custom_prompt", "ollama_model", "tts_engine", "edge_voice",
-        "bender_pitch", "bender_index_rate", "bender_protect", "rvc_voice_model",
-        "personality_prompts",
+        "personality", "custom_prompt", "ollama_model", "profile_id",
+        "tts_engine", "edge_voice",
+        "bender_pitch", "bender_index_rate", "bender_protect",
+        "rvc_pitch", "rvc_index_rate", "rvc_protect", "rvc_voice_model",
+        "personality_prompts", "voice_profiles",
     }
     updates = {k: body[k] for k in allowed if k in body}
     cfg = srv_cfg.save(updates)
