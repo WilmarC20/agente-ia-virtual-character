@@ -38,6 +38,7 @@ static void addBrainDeviceHeaders(HTTPClient &http) {
 
 LGFX_ES3C28P gfx;
 Face face(gfx);
+uint8_t g_activeDisplayRotation = DISPLAY_ROTATION;
 ES8311 codec;
 I2SClass i2s;
 AudioRecorder recorder;
@@ -260,6 +261,7 @@ void resumeWakeListener() {
 bool askBrain(const uint8_t *wav, size_t size, BrainReply &out);
 void speak(const String &text, bool sing, const String &emotion = "happy");
 void playMusic(const String &videoId, const String &title);
+void queueMusicPlay(const String &videoId, const String &title, bool keepRadio);
 void playStory(const String &storyId, const String &title);
 bool checkWakePhrase(const uint8_t *wav, size_t size, String *commandOut = nullptr);
 void proactiveIdleRemark();
@@ -287,6 +289,104 @@ volatile bool g_musicPlaying = false;
 volatile bool g_musicStreaming = false;
 volatile bool g_musicStopRequested = false;
 static TaskHandle_t g_musicTaskHandle = nullptr;
+
+static constexpr int kMusicQueueMax = 12;
+struct MusicQueueItem {
+  String videoId;
+  String title;
+};
+static MusicQueueItem g_musicQueue[kMusicQueueMax];
+static int g_musicQueueLen = 0;
+static int g_musicQueuePos = 0;
+static volatile bool g_musicAutoplay = false;
+
+static String g_serverPresentation = "bender";
+
+static void applyServerPresentation(JsonVariantConst root) {
+  const char *pres = root["presentation"] | "";
+  if (!pres[0]) pres = root["personality"] | "bender";
+  if (g_serverPresentation.equalsIgnoreCase(pres)) {
+    face.setPresentationId(pres);
+    return;
+  }
+  g_serverPresentation = pres;
+  face.setPresentationId(pres);
+  face.update();
+  Serial.printf("presentation -> %s\n", pres);
+}
+
+static void musicRadioReset() {
+  g_musicQueueLen = 0;
+  g_musicQueuePos = 0;
+  g_musicAutoplay = false;
+}
+
+static void musicQueueAppend(const String &videoId, const String &title) {
+  if (g_musicQueueLen >= kMusicQueueMax) return;
+  g_musicQueue[g_musicQueueLen].videoId = videoId;
+  g_musicQueue[g_musicQueueLen].title = title.length() ? title : videoId;
+  g_musicQueueLen++;
+}
+
+static bool fetchNextRadioTrack() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  HTTPClient http;
+  http.setTimeout(15000);
+  if (!http.begin(String(BRAIN_SERVER_URL) + "/music/radio/next")) return false;
+  addBrainDeviceHeaders(http);
+  const int code = http.GET();
+  if (code != 200) {
+    http.end();
+    return false;
+  }
+  JsonDocument doc;
+  deserializeJson(doc, http.getString());
+  http.end();
+  const String id = doc["video_id"] | "";
+  if (!id.length()) return false;
+  musicQueueAppend(id, doc["title"] | id);
+  return true;
+}
+
+static void musicAutoplayAdvance() {
+  if (g_musicStopRequested || !g_musicAutoplay) return;
+  while (g_musicQueuePos < g_musicQueueLen) {
+    const int i = g_musicQueuePos++;
+    g_musicVideoId = g_musicQueue[i].videoId;
+    g_musicTitle = g_musicQueue[i].title;
+    g_musicPlayPending = true;
+    Serial.printf("Music radio next: %s (%s)\n", g_musicTitle.c_str(), g_musicVideoId.c_str());
+    face.setEmotion(Emotion::Happy);
+    face.setTopTitle(String("Siguiente: ") + g_musicTitle);
+    face.update();
+    return;
+  }
+  if (fetchNextRadioTrack() && g_musicQueuePos < g_musicQueueLen) {
+    const int i = g_musicQueuePos++;
+    g_musicVideoId = g_musicQueue[i].videoId;
+    g_musicTitle = g_musicQueue[i].title;
+    g_musicPlayPending = true;
+    Serial.printf("Music radio fetched: %s (%s)\n", g_musicTitle.c_str(), g_musicVideoId.c_str());
+  }
+}
+
+static void applyMusicFromBrain(JsonDocument &doc) {
+  const String musicId = doc["music"]["video_id"] | "";
+  if (!musicId.length()) return;
+  const String musicTitle = doc["music"]["title"] | "";
+  musicRadioReset();
+  g_musicAutoplay = doc["music_autoplay"] | false;
+  JsonArray q = doc["music_queue"].as<JsonArray>();
+  if (!q.isNull()) {
+    for (JsonObject t : q) {
+      const String id = t["video_id"] | "";
+      if (id.length()) musicQueueAppend(id, t["title"] | id);
+    }
+  }
+  Serial.printf("Music intent -> %s (%s) autoplay=%d queue=%d\n",
+                musicTitle.c_str(), musicId.c_str(), (int)g_musicAutoplay, g_musicQueueLen);
+  queueMusicPlay(musicId, musicTitle, true);
+}
 
 struct StoryCue {
   uint32_t atMs;
@@ -469,9 +569,26 @@ static void startMusicAsync() {
   xTaskCreatePinnedToCore(playMusicTask, "music", 32768, a, 5, &g_musicTaskHandle, 1);
 }
 
-void queueMusicPlay(const String &videoId, const String &title) {
+void queueMusicPlay(const String &videoId, const String &title, bool keepRadio) {
   if (g_musicTaskHandle) {
-    requestMusicStop();
+    requestMusicStop(false);
+    // Esperar a que la tarea termine tras pedir stop (evita colisión I2S).
+    for (int i = 0; i < 40 && g_musicTaskHandle; ++i) {
+      vTaskDelay(pdMS_TO_TICKS(50));
+    }
+  }
+  if (!keepRadio) {
+    musicRadioReset();
+    // Avisar al servidor que no siga encolando radio anterior.
+    if (WiFi.status() == WL_CONNECTED) {
+      HTTPClient http;
+      if (http.begin(String(BRAIN_SERVER_URL) + "/music/radio/stop")) {
+        http.setTimeout(3000);
+        addBrainDeviceHeaders(http);
+        http.POST((uint8_t *)"", 0);
+        http.end();
+      }
+    }
   }
   g_musicVideoId = videoId;
   g_musicTitle = title.length() > 0 ? title : videoId;
@@ -483,9 +600,21 @@ void queueMusicPlay(const String &videoId, const String &title) {
   face.update();
 }
 
-void requestMusicStop() {
+void requestMusicStop(bool clearRadio) {
   g_musicStopRequested = true;
   g_musicPlayPending = false;
+  if (clearRadio) {
+    musicRadioReset();
+    if (WiFi.status() == WL_CONNECTED) {
+      HTTPClient http;
+      if (http.begin(String(BRAIN_SERVER_URL) + "/music/radio/stop")) {
+        http.setTimeout(3000);
+        addBrainDeviceHeaders(http);
+        http.POST((uint8_t *)"", 0);
+        http.end();
+      }
+    }
+  }
 }
 
 // Physical-touch feelings (instant, no LLM): petting him = tender; poking/hitting = startled.
@@ -1078,10 +1207,13 @@ void loop() {
           pressing = false;
           if (!longHandled) {              // short gesture
             int moved = abs(lastX - pressX) + abs(lastY - pressY);
-            bool gear = Face::gearHit(pressX, pressY, gfx.width()) || Face::gearHit(lastX, lastY, gfx.width());
-            bool onBody = Face::bodyHit(pressX, pressY, gfx.width());
+            bool kittCfg = face.kittSettingsHit(pressX, pressY) || face.kittSettingsHit(lastX, lastY);
+            bool gear = !kittCfg && (Face::gearHit(pressX, pressY, gfx.width()) || Face::gearHit(lastX, lastY, gfx.width()));
+            bool onBody = !kittCfg && Face::bodyHit(pressX, pressY, gfx.width(), gfx.height());
             static uint32_t lastBodyTapMs = 0;
-            if (gear) {
+            if (kittCfg) {
+              openSettings();             // KITT: botón "P4" -> ajustes
+            } else if (gear) {
               openSettings();
             } else if (onBody && moved > 34) {
               touchCaress();                 // swipe across his face -> caress
@@ -1558,7 +1690,8 @@ void playMusic(const String &videoId, const String &title) {
   endPlayback(i2s);
   g_musicPlaying = false;
   Serial.printf("music played %u bytes PCM stop=%d\n", pcmWritten, (int)g_musicStopRequested);
-  if (g_musicStopRequested) {
+  const bool userStopped = g_musicStopRequested;
+  if (userStopped) {
     face.showText("Musica detenida", TFT_YELLOW);
     face.update();
   } else if (pcmWritten == 0) {
@@ -1571,6 +1704,9 @@ void playMusic(const String &videoId, const String &title) {
   delay(400);
   wakeIgnoreUntil = millis() + WAKE_COOLDOWN_MS;
   resumeWakeListener();
+  if (!userStopped && pcmWritten > 0) {
+    musicAutoplayAdvance();
+  }
 }
 
 void playStory(const String &storyId, const String &title) {
@@ -1730,6 +1866,8 @@ bool askBrain(const uint8_t *wav, size_t size, BrainReply &out) {
   http.end();
   if (err) return false;
 
+  applyServerPresentation(doc.as<JsonVariantConst>());
+
   out.emotion           = doc["emotion"].as<String>();
   out.intensity         = max(0.0f, min(1.0f, doc["intensity"] | 0.7f));
   out.tone              = doc["tone"] | "neutral";
@@ -1745,11 +1883,8 @@ bool askBrain(const uint8_t *wav, size_t size, BrainReply &out) {
   out.microexpRate      = max(0.0f, min(1.0f, doc["microexp_rate"] | 0.6f));
 
   // Smart speaker: the brain resolved a song to play -> stream it instead of speaking.
-  String musicId = doc["music"]["video_id"] | "";
-  if (musicId.length() > 0) {
-    String musicTitle = doc["music"]["title"] | "";
-    Serial.printf("Music intent -> %s (%s)\n", musicTitle.c_str(), musicId.c_str());
-    queueMusicPlay(musicId, musicTitle);
+  if (doc["music"].is<JsonObject>()) {
+    applyMusicFromBrain(doc);
     out.doSpeak = false;
     out.reply = "";
   }
@@ -1782,7 +1917,10 @@ void pollDevCommand() {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, http.getString());
   http.end();
-  if (err || doc["cmd"].isNull()) return;
+  if (err) return;
+
+  applyServerPresentation(doc.as<JsonVariantConst>());
+  if (doc["cmd"].isNull()) return;
 
   JsonObject cmd = doc["cmd"];
   const char *type = cmd["type"];
@@ -1854,6 +1992,8 @@ void proactiveIdleRemark() {
   DeserializationError err = deserializeJson(doc, http.getString());
   http.end();
   if (err) return;
+
+  applyServerPresentation(doc.as<JsonVariantConst>());
 
   String emotion = doc["emotion"].as<String>();
   float intensity = max(0.0f, min(1.0f, doc["intensity"] | 0.7f));

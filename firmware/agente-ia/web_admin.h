@@ -11,8 +11,8 @@
 #include "secrets.h"
 
 // Cola de reproducción musical (implementado en agente-ia.ino).
-void queueMusicPlay(const String &videoId, const String &title);
-void requestMusicStop();
+void queueMusicPlay(const String &videoId, const String &title, bool keepRadio = false);
+void requestMusicStop(bool clearRadio = true);
 extern volatile bool g_musicPlaying;
 extern String g_musicNowTitle;
 extern String g_musicNowVideoId;

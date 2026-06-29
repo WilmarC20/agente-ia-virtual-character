@@ -1851,3 +1851,146 @@ def logged_pcm_stream(video_id: str) -> Iterator[bytes]:
 def iter_wav_16k_stream(video_id: str) -> Iterator[bytes]:
     """Alias legacy — preferir iter_pcm_16k_stream."""
     yield from iter_pcm_16k_stream(video_id)
+
+
+# --- Radio / autoplay (parlante inteligente) ---------------------------------
+
+RADIO_QUEUE_SIZE = max(3, min(20, int(os.environ.get("MUSIC_RADIO_QUEUE", "10"))))
+
+
+def track_payload(track: dict[str, Any]) -> dict[str, str]:
+    """Formato unificado para firmware y sesiones."""
+    vid = str(track.get("video_id") or track.get("id") or "").strip()
+    return {
+        "video_id": vid,
+        "title": str(track.get("title") or "").strip(),
+        "artist": str(track.get("artist") or "").strip(),
+    }
+
+
+def build_radio_queue(
+    seed: dict[str, Any],
+    query: str,
+    *,
+    limit: int | None = None,
+    exclude_ids: set[str] | None = None,
+) -> list[dict[str, str]]:
+    """Canciones siguientes del mismo estilo (artista + búsqueda relacionada)."""
+    lim = limit or RADIO_QUEUE_SIZE
+    exclude = set(exclude_ids or [])
+    seed_pay = track_payload(seed)
+    if seed_pay["video_id"]:
+        exclude.add(seed_pay["video_id"])
+
+    out: list[dict[str, str]] = []
+    seen = set(exclude)
+    artist = seed_pay["artist"]
+    title = seed_pay["title"]
+    q0 = (query or "").strip()
+
+    queries: list[str] = []
+    if artist:
+        queries.append(artist)
+        queries.append(f"{artist} mix")
+        queries.append(f"más canciones de {artist}")
+    if q0 and q0.lower() not in {artist.lower(), title.lower()}:
+        queries.append(q0)
+    if artist and title:
+        queries.append(f"{artist} {title}")
+
+    for q in queries:
+        if len(out) >= lim:
+            break
+        try:
+            sr = search(q, limit=15)
+        except Exception as e:
+            log.warning("radio search %r: %s", q, e)
+            continue
+        for item in sr.get("results") or []:
+            pay = track_payload(item)
+            vid = pay["video_id"]
+            if not vid or vid in seen:
+                continue
+            seen.add(vid)
+            out.append(pay)
+            if len(out) >= lim:
+                break
+    return out
+
+
+_radio_lock = threading.Lock()
+_radio_sessions: dict[str, dict[str, Any]] = {}
+
+
+def start_radio_session(device_key: str, seed: dict[str, Any], query: str) -> list[dict[str, str]]:
+    """Inicia modo radio para un dispositivo; devuelve cola inicial (sin la pista actual)."""
+    key = (device_key or "default").strip()
+    seed_pay = track_payload(seed)
+    queue = build_radio_queue(seed_pay, query, exclude_ids={seed_pay["video_id"]} if seed_pay["video_id"] else None)
+    with _radio_lock:
+        _radio_sessions[key] = {
+            "query": (query or "").strip(),
+            "seed": seed_pay,
+            "queue": list(queue),
+            "played": [seed_pay["video_id"]] if seed_pay["video_id"] else [],
+            "autoplay": True,
+        }
+    if queue:
+        prefetch_pcm_stream(queue[0]["video_id"])
+    log.info(
+        "music radio start device=%s seed=%r queue=%d",
+        key,
+        seed_pay.get("title"),
+        len(queue),
+    )
+    return queue
+
+
+def stop_radio_session(device_key: str) -> None:
+    key = (device_key or "default").strip()
+    with _radio_lock:
+        _radio_sessions.pop(key, None)
+
+
+def radio_next_track(device_key: str) -> dict[str, str] | None:
+    """Siguiente pista del modo radio (refill automático si se agota la cola)."""
+    key = (device_key or "default").strip()
+    with _radio_lock:
+        sess = _radio_sessions.get(key)
+        if not sess or not sess.get("autoplay"):
+            return None
+        queue: list[dict[str, str]] = sess["queue"]
+        played: list[str] = sess["played"]
+
+    if not queue:
+        seed = sess["seed"]
+        more = build_radio_queue(
+            seed,
+            sess.get("query", ""),
+            exclude_ids=set(played),
+        )
+        with _radio_lock:
+            sess = _radio_sessions.get(key)
+            if not sess:
+                return None
+            sess["queue"].extend(more)
+            queue = sess["queue"]
+
+    if not queue:
+        return None
+
+    with _radio_lock:
+        sess = _radio_sessions.get(key)
+        if not sess or not sess["queue"]:
+            return None
+        track = sess["queue"].pop(0)
+        vid = track.get("video_id", "")
+        if vid:
+            sess["played"].append(vid)
+        if sess["queue"]:
+            prefetch_pcm_stream(sess["queue"][0]["video_id"])
+
+    if not track.get("video_id"):
+        return None
+    log.info("music radio next device=%s -> %s", key, track.get("title"))
+    return track

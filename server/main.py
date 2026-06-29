@@ -180,11 +180,49 @@ async def _resolve_music_track(query: str) -> dict | None:
         tracks = (sr or {}).get("results") or []
         if not tracks:
             return None
-        vid = tracks[0].get("id") or tracks[0].get("video_id") or ""
-        return {"video_id": vid, "title": tracks[0].get("title") or query} if vid else None
+        pay = music.track_payload(tracks[0])
+        if not pay.get("video_id"):
+            return None
+        if not pay.get("title"):
+            pay["title"] = query
+        return pay
     except Exception as e:
         log.warning("music search '%s' failed: %s", query, e)
         return None
+
+
+def _device_key(request: Request | None) -> str:
+    if request is None:
+        return "default"
+    mac = (request.headers.get("X-Device-MAC") or "").strip().upper()
+    if mac and mac != "00:00:00:00:00:00":
+        return mac
+    host = request.client.host if request.client else ""
+    return f"ip:{host or 'unknown'}"
+
+
+def _attach_music_radio(result: dict, query: str, device_key: str) -> dict:
+    """Añade cola y autoplay tras resolver la primera pista."""
+    track = result.get("music")
+    if not isinstance(track, dict):
+        return result
+    pay = music.track_payload(track)
+    if not pay.get("video_id"):
+        return result
+    q = (query or pay.get("title") or "").strip()
+    queue = music.start_radio_session(device_key, pay, q)
+    result["music"] = pay
+    result["music_autoplay"] = True
+    if queue:
+        result["music_queue"] = queue
+    return result
+
+
+def _with_device_context(payload: dict) -> dict:
+    """Añade personality + presentation para sincronizar la UI del ESP."""
+    payload["personality"] = srv_cfg.current_personality_id()
+    payload["presentation"] = srv_cfg.get_presentation()
+    return payload
 
 
 async def synthesize_character_wav(text: str, *, sing_flag: bool = False, log_label: str = "TTS") -> bytes:
@@ -1100,6 +1138,7 @@ async def ask_ollama(user_text: str, *, use_history: bool = False,
         track = await _resolve_music_track(music_query.strip()[:120])
         if track:
             result["music"] = track
+            result["_music_query"] = music_query.strip()[:120]
             _memory.log("music_played", severity=0.7)
             log.info("music intent (llm) '%s' -> %s (%s)", music_query.strip(), track["title"], track["video_id"])
         else:
@@ -1178,7 +1217,7 @@ async def idle():
     """Spontaneous in-character remark (the board calls this after a while idle)."""
     result = await ask_ollama(srv_cfg.get_idle_user_prompt())
     log.info("idle remark [%s]: %s", result["emotion"], result["reply"])
-    return result
+    return _with_device_context(result)
 
 
 _VALID_DEV_EMOTIONS = frozenset({
@@ -1212,9 +1251,12 @@ async def face_preview_js():
 async def dev_poll():
     """El ESP32 consulta cada ~2 s; devuelve el siguiente comando en cola o cmd=null."""
     async with _dev_lock:
+        payload = _with_device_context({})
         if not _dev_queue:
-            return {"cmd": None}
-        return {"cmd": _dev_queue.popleft()}
+            payload["cmd"] = None
+            return payload
+        payload["cmd"] = _dev_queue.popleft()
+        return payload
 
 
 @app.post("/api/dev/face")
@@ -1858,7 +1900,9 @@ async def admin_config_post(request: Request):
         "tts_engine", "edge_voice",
         "bender_pitch", "bender_index_rate", "bender_protect",
         "rvc_pitch", "rvc_index_rate", "rvc_protect", "rvc_voice_model",
-        "personality_prompts", "voice_profiles",
+        "personality_prompts", "voice_profiles", "profile_texts",
+        "time_reply", "time_emotion", "wake_reply", "wake_emotion",
+        "glm52_reply", "glm52_emotion", "idle_prompt",
     }
     updates = {k: body[k] for k in allowed if k in body}
     cfg = srv_cfg.save(updates)
@@ -1969,6 +2013,24 @@ async def admin_music_cookies_delete():
     removed = music.delete_cookies()
     st = await asyncio.to_thread(music.auth_status, light=True)
     return {**st, "ok": True, "removed": removed}
+
+
+@app.get("/music/radio/next")
+async def music_radio_next(request: Request):
+    """Siguiente pista del modo radio (mismo estilo que la canción pedida)."""
+    if not _music_available():
+        return JSONResponse(status_code=503, content={"error": "music unavailable"})
+    track = await asyncio.to_thread(music.radio_next_track, _device_key(request))
+    if not track:
+        return JSONResponse(status_code=404, content={"error": "no more tracks"})
+    return track
+
+
+@app.post("/music/radio/stop")
+async def music_radio_stop(request: Request):
+    """Detiene el modo radio para este dispositivo."""
+    await asyncio.to_thread(music.stop_radio_session, _device_key(request))
+    return {"ok": True}
 
 
 @app.get("/music/prefetch/status")
@@ -2565,7 +2627,7 @@ async def converse(request: Request):
             wake = srv_cfg.wake_only_reply()
             wake["reply"] = cap_speech_text(prepare_spanish_text(wake["reply"]), sing=False)
             wake["heard"] = text
-            return wake
+            return _with_device_context(wake)
 
     # Smart speaker: a direct "reproducí/poné X" command -> resolve + play (the small LLM
     # tends to ignore the music instruction, so we handle it here, fast and reliable).
@@ -2575,10 +2637,13 @@ async def converse(request: Request):
             track = await _resolve_music_track(mq)
             if track:
                 log.info("music command '%s' -> %s (%s)", mq, track["title"], track["video_id"])
-                return {
+                payload = {
                     "emotion": "happy", "reply": "", "heard": text, "sing": False,
                     "speak": False, "sound_effect": "none", "music": track,
                 }
+                return _with_device_context(
+                    _attach_music_radio(payload, mq, _device_key(request))
+                )
             log.info("music command '%s' -> sin resultados", mq)
             return {
                 "emotion": "confused",
@@ -2600,5 +2665,12 @@ async def converse(request: Request):
         result.get("sound_effect", "none"),
         result["reply"],
     )
-    return result
+    if result.get("music"):
+        mq = result.pop("_music_query", None) or music_command_query(text) or ""
+        if isinstance(mq, str) and not mq.strip():
+            m = result.get("music")
+            if isinstance(m, dict):
+                mq = m.get("title") or ""
+        result = _attach_music_radio(result, str(mq), _device_key(request))
+    return _with_device_context(result)
 

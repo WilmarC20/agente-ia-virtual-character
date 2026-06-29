@@ -8,6 +8,8 @@
 #include "config.h"
 #include "playback_spectrum.h"
 #include "speech_caption.h"
+#include "face_presentation.h"
+#include "face_kitt.h"
 
 enum class Emotion {
   Neutral, Happy, Sad, Angry, Surprised, Thinking, Sleepy,
@@ -32,7 +34,7 @@ inline Emotion emotionFromString(const String &s) {
 
 class Face {
 public:
-  explicit Face(lgfx::LGFX_Device &gfx) : _gfx(gfx), _canvas(&gfx) {}
+  explicit Face(lgfx::LGFX_Device &gfx) : _gfx(gfx), _canvas(&gfx), _kittCanvas(&gfx) {}
 
   void begin() {
     _canvas.setPsram(true);
@@ -41,7 +43,15 @@ public:
       Serial.println("FACE: createSprite failed");
     }
     _canvas.setPivot(FACE_DESIGN_W * 0.5f, FACE_H * 0.5f);
+    _kittCanvas.setPsram(true);
+    _kittCanvas.setColorDepth(16);
+    if (!_kittCanvas.createSprite(KittUi::CANVAS_W, KittUi::CANVAS_H)) {
+      Serial.println("FACE: kitt createSprite failed");
+    }
+    _kittCanvas.setPivot(KittUi::CANVAS_W * 0.5f, KittUi::CANVAS_H * 0.5f);
     _faceScreenW = _gfx.width();
+    _appliedRotation = (uint8_t)DISPLAY_ROTATION;
+    g_activeDisplayRotation = _appliedRotation;
     _gfx.fillScreen(TFT_BLACK);
     _browPhase = random(0, 628) / 100.0f;
     _nextBlinkAt = millis() + 2800 + random(3700);
@@ -118,6 +128,16 @@ public:
   void clearTopTitle() { if (_topTitle.length()) { _topTitle = ""; _topTitleRaw = ""; _dirty = true; } }
   Emotion emotion() const { return _emotion; }
   bool isVibing() const { return _emotion == Emotion::Vibing; }
+
+  void setPresentation(FacePresentation p) {
+    if (p != _presentation) {
+      _presentation = p;
+      applyPresentationDisplay(true);
+      _dirty = true;
+    }
+  }
+  void setPresentationId(const char *id) { setPresentation(facePresentationFromId(id)); }
+  FacePresentation presentation() const { return _presentation; }
   void redraw() { _dirty = true; }
   void resetAmpGain() { _ampEnvMax = 200.0f; }
   void setListening(bool v) { if (v != _listening) { _listening = v; _dirty = true; } }
@@ -315,18 +335,23 @@ public:
   }
 
   static bool gearHit(int sx, int sy, int screenW) {
-    if (screenW <= 250) {
-      const int gx = 227, gy = 16;
-      int dx = sx - gx, dy = sy - gy;
-      return (sx >= 196 && sy <= 64) || ((dx * dx + dy * dy) <= (20 * 20));
-    }
-    int dx = sx - 303, dy = sy - 16;
-    return (sx >= 262 && sy <= 64) || ((dx * dx + dy * dy) <= (20 * 20));
+    const int gx = screenW - 17;
+    const int gy = 16;
+    int dx = sx - gx, dy = sy - gy;
+    return (sx >= screenW - 44 && sy <= 64) || ((dx * dx + dy * dy) <= (20 * 20));
   }
 
   // Is the touch on the character's body (visor + mouth)? Used for petting / poking him.
-  static bool bodyHit(int sx, int sy, int screenW) {
-    return sx >= 16 && sx <= screenW - 16 && sy >= 10 && sy <= 196;
+  static bool bodyHit(int sx, int sy, int screenW, int screenH) {
+    return sx >= 16 && sx <= screenW - 16 && sy >= 10 && sy <= screenH - 10;
+  }
+
+  // KITT: la configuración se abre tocando el botón inferior-derecho "P4".
+  bool kittSettingsHit(int sx, int sy) const {
+    if (_presentation != FacePresentation::Kitt) return false;
+    const int x = KittUi::OVAL_R_X;
+    const int y = KittUi::OVAL_Y0 + 3 * KittUi::OVAL_PITCH;
+    return sx >= x && sx <= x + KittUi::OVAL_W && sy >= y && sy <= y + KittUi::OVAL_H;
   }
 
   // Brief screen shake — the "got poked / hit" reaction.
@@ -489,8 +514,11 @@ public:
       }
     }
 
-    // Keep display alive for idle breathing and listening indicator (20 fps)
-    if (_listening || (!_talking && !_singing && _emotion != Emotion::Vibing)) {
+    // Idle breathing: skip en KITT silencioso (evita refresco 20 fps innecesario).
+    const bool kittSilent = (_presentation == FacePresentation::Kitt && !_talking &&
+                             !_listening && _emotion != Emotion::Vibing);
+    if (!kittSilent &&
+        (_listening || (!_talking && !_singing && _emotion != Emotion::Vibing))) {
       if (now - _lastIdleDrawAt >= 50u) { _dirty = true; _lastIdleDrawAt = now; }
     }
 
@@ -540,6 +568,7 @@ public:
 private:
   lgfx::LGFX_Device &_gfx;
   lgfx::LGFX_Sprite _canvas;
+  lgfx::LGFX_Sprite _kittCanvas;
   Emotion _emotion = Emotion::Sleepy;
   String _topTitle;
   String _topTitleRaw;
@@ -577,6 +606,38 @@ private:
   uint32_t _lastNoteSpawn = 0, _lastVibingDraw = 0;
   SpeechCaption _speechCaption;
   uint8_t _captionDrawIdx = 255;
+  FacePresentation _presentation = FacePresentation::Bender;
+  uint8_t _appliedRotation = 1;
+
+  void applyPresentationDisplay(bool clearScreen = false) {
+    const uint8_t want = (_presentation == FacePresentation::Kitt)
+                             ? 0u
+                             : (uint8_t)DISPLAY_ROTATION;
+    if (_appliedRotation == want && !clearScreen) return;
+    _gfx.setRotation(want);
+    _appliedRotation = want;
+    g_activeDisplayRotation = want;
+    _faceScreenW = _gfx.width();
+    if (clearScreen) _gfx.fillScreen(TFT_BLACK);
+  }
+
+  void drawKittFace() {
+    applyPresentationDisplay(false);
+    KittDrawCtx ctx;
+    ctx.emotion = (int)_emotion;
+    ctx.talking = _talking;
+    ctx.listening = _listening;
+    ctx.mouthAmp = _mouthAmpSmooth;
+    ctx.nowMs = millis();
+    if (_emotion == Emotion::Vibing) {
+      ctx.vibingBands = _vibingBands;
+      ctx.vibingBandCount = kVibingBands;
+    }
+    drawKittDashboard(_kittCanvas, ctx);
+    pushKittSprite();
+    drawTopTitleOnScreen();
+    // KITT no muestra el piñón: la configuración se abre tocando el botón "P4".
+  }
 
   float vibingHighTone() const {
     float peak = 0.0f, sum = 0.0f;
@@ -1516,7 +1577,7 @@ private:
       shx = (int)(sinf(m * 0.9f) * 6.0f);
       shy = (int)(cosf(m * 1.3f) * 3.0f);
     }
-    const int gearCx = (_faceScreenW <= 250) ? 227 : 303;
+    const int gearCx = _gfx.width() - 17;
     const int gearLeft = gearCx - 16;
     if (_showGear) _gfx.setClipRect(0, 0, gearLeft, _gfx.height());
     if (_faceScreenW < FACE_DESIGN_W) {
@@ -1527,6 +1588,30 @@ private:
       _canvas.pushSprite(FACE_OFFSET_X + shx, FACE_OFFSET_Y + shy);
     }
     if (_showGear) _gfx.clearClipRect();
+  }
+
+  // KITT: sprite portrait 240×320 → push opaco (sin fillScreen, sin escala y sin
+  // recorte). En KITT no se dibuja el piñón, así que el sprite cubre toda la
+  // pantalla sin que ningún clip recorte los óvalos del borde derecho.
+  void pushKittSprite() {
+    int shx = 0, shy = 0;
+    if (millis() < _shakeUntil) {
+      uint32_t m = millis();
+      shx = (int)(sinf(m * 0.9f) * 6.0f);
+      shy = (int)(cosf(m * 1.3f) * 3.0f);
+    }
+    _kittCanvas.pushSprite(shx, shy);
+  }
+
+  void drawTopTitleOnScreen() {
+    if (_topTitle.length() == 0) return;
+    _gfx.setFont(&fonts::DejaVu12);
+    _gfx.setTextWrap(false);
+    _gfx.setTextColor(TFT_CYAN, TFT_BLACK);
+    int tx = (_gfx.width() - _gfx.textWidth(_topTitle)) / 2;
+    if (tx < 2) tx = 2;
+    _gfx.setCursor(tx, 2);
+    _gfx.print(_topTitle);
   }
 
   void vibingBarColors(int cx, float t, uint16_t &glow, uint16_t &bot, uint16_t &top, uint16_t &hi) const {
@@ -1687,7 +1772,7 @@ private:
   // Drawn straight onto the screen (not the shifted sprite) so it stays pinned
   // to the top-right corner regardless of FACE_OFFSET_X.
   void drawGearOnScreen() {
-    const int cx = (_faceScreenW <= 250) ? 227 : 303;
+    const int cx = _gfx.width() - 17;
     const int cy = 16, r = 9;
     static const int8_t dx[8] = {11, 8, 0, -8, -11, -8, 0, 8};
     static const int8_t dy[8] = {0, 8, 11, 8, 0, -8, -11, -8};
@@ -1748,6 +1833,19 @@ private:
   }
 
   void draw() {
+    if (_presentation == FacePresentation::Kitt) {
+      if (_emotion == Emotion::Vibing) {
+        smoothMouthAmp();
+        bool changed = _dirty;
+        tickVibingMotion(millis(), changed);
+        if (changed) _dirty = true;
+      }
+      drawKittFace();
+      return;
+    }
+
+    applyPresentationDisplay(false);
+
     if (_emotion == Emotion::Vibing) {
       drawVibingFace();
       drawTopTitle();

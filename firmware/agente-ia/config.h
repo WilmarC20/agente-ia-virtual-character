@@ -13,6 +13,8 @@
 
 // 0 = vertical 240x320 | 2 = vertical 180° | 1 = horizontal 320x240 (ancho)
 #define DISPLAY_ROTATION  1
+// LovyanGFX rotation activa (KITT portrait=0; Bender=DISPLAY_ROTATION). Touch la sigue.
+extern uint8_t g_activeDisplayRotation;
 
 // --- Touch (FT6336, shares I2C bus) ---
 #define PIN_I2C_SDA  16
