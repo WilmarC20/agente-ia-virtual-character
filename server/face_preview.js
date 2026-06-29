@@ -524,7 +524,168 @@
     return { blink, gazeX, gazeY, amp: vAmp };
   }
 
+  // Constantes 1:1 con firmware/face_kitt.h (lienzo portrait 240×320).
+  const KITT_RED = '#ff0000';
+  const KITT_ORANGE = '#ff8c00';
+  const KITT_YELLOW = '#ffff00';
+  const KITT_BLUE = '#0080ff';
+  const KITT_PILL_ORANGE = '#ff6000';
+  const KITT_SEG_OFF = '#000000';
+  const KITT_PW = 240;
+  const KITT_PH = 320;
+  const K = {
+    TOP_X: 73, TOP_W: 94, TOP_H: 16, TOP_PITCH: 23, TOP_Y0: 5, TOP_R: 4,
+    OVAL_W: 44, OVAL_H: 26, OVAL_LX: 12, OVAL_RX: 184, OVAL_Y0: 118, OVAL_PITCH: 38,
+    SEG_W: 18, SEG_H: 4, SEG_GAP: 2, COL_CY: 158,
+    COL_CX_L: 90, COL_CX_M: 120, COL_CX_R: 150, COL_SIDE: 15, COL_MID: 19,
+    BOT_X: 73, BOT_W: 94, BOT_H: 24, BOT_PITCH: 28, BOT_Y0: 230, BOT_R: 8,
+  };
+
+  function kittRr(ctx, x, y, w, h, r, fill) {
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, r);
+    ctx.fillStyle = fill;
+    ctx.fill();
+  }
+
+  // Negrita fuerte "extended" (Eurostile Bold Extended): fuente bold ancha,
+  // estirada horizontalmente para llenar el botón, igual que el firmware.
+  const KITT_FONT = 'bold 11px "Microgramma D Extended", "Eurostile", "Michroma", "Arial Black", "Arial", sans-serif';
+  function kittStretchedLine(ctx, text, cx, cy, w, fg) {
+    ctx.font = KITT_FONT;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    const bw = ctx.measureText(text).width || 1;
+    let sx = (0.86 * w) / bw;
+    if (sx > 1.6) sx = 1.6;
+    if (sx < 0.45) sx = 0.45;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(sx, 1);
+    ctx.fillStyle = fg;
+    ctx.fillText(text, 0, 0);
+    ctx.restore();
+  }
+
+  function kittLabel(ctx, text, x, y, w, h, fg) {
+    kittStretchedLine(ctx, text, x + w / 2, y + h / 2 + 1, w, fg);
+    ctx.textAlign = 'left';
+  }
+
+  function kittTwoLine(ctx, l1, l2, x, y, w, h, fg) {
+    const cy = y + h / 2;
+    kittStretchedLine(ctx, l1, x + w / 2, cy - 5, w, fg);
+    kittStretchedLine(ctx, l2, x + w / 2, cy + 5, w, fg);
+    ctx.textAlign = 'left';
+  }
+
+  function drawKittTopBars(ctx) {
+    const bars = [
+      { col: KITT_RED, label: 'POWER' },
+      { col: KITT_ORANGE, label: 'MIN RPM' },
+      { col: KITT_YELLOW, label: 'FUEL ON' },
+      { col: KITT_YELLOW, label: 'IGNITORS' },
+    ];
+    bars.forEach((b, i) => {
+      const y = K.TOP_Y0 + i * K.TOP_PITCH;
+      kittRr(ctx, K.TOP_X, y, K.TOP_W, K.TOP_H, K.TOP_R, b.col);
+      kittLabel(ctx, b.label, K.TOP_X, y, K.TOP_W, K.TOP_H, '#000');
+    });
+  }
+
+  function drawKittSideOvals(ctx) {
+    const left = ['AIR', 'OIL', 'P1', 'P2'];
+    const right = ['S1', 'S2', 'P3', 'P4'];
+    for (let i = 0; i < 4; i++) {
+      const y = K.OVAL_Y0 + i * K.OVAL_PITCH;
+      const col = i < 2 ? KITT_YELLOW : KITT_PILL_ORANGE;
+      kittRr(ctx, K.OVAL_LX, y, K.OVAL_W, K.OVAL_H, K.OVAL_H / 2, col);
+      kittLabel(ctx, left[i], K.OVAL_LX, y, K.OVAL_W, K.OVAL_H, '#000');
+      kittRr(ctx, K.OVAL_RX, y, K.OVAL_W, K.OVAL_H, K.OVAL_H / 2, col);
+      kittLabel(ctx, right[i], K.OVAL_RX, y, K.OVAL_W, K.OVAL_H, '#000');
+    }
+  }
+
+  function drawKittModulator(ctx, t, amp, vibAmp, voiceActive) {
+    const cols = [
+      { cx: K.COL_CX_L, max: K.COL_SIDE, ph: 0 },
+      { cx: K.COL_CX_M, max: K.COL_MID, ph: 1.0 },
+      { cx: K.COL_CX_R, max: K.COL_SIDE, ph: 2.1 },
+    ];
+
+    function drawCol(col, lit) {
+      const totalH = col.max * K.SEG_H + (col.max - 1) * K.SEG_GAP;
+      const topY = K.COL_CY - totalH / 2;
+      const mid = (col.max - 1) / 2;
+      const firstLit = lit > 0 ? mid - Math.floor((lit - 1) / 2) : col.max;
+      const lastLit = lit > 0 ? firstLit + lit - 1 : -1;
+      const x = col.cx - K.SEG_W / 2;
+      for (let i = 0; i < col.max; i++) {
+        const y = topY + i * (K.SEG_H + K.SEG_GAP);
+        const on = lit > 0 && i >= firstLit && i <= lastLit;
+        ctx.fillStyle = on ? KITT_RED : KITT_SEG_OFF;
+        ctx.fillRect(x, y, K.SEG_W, K.SEG_H);
+      }
+    }
+
+    if (!voiceActive) {
+      cols.forEach(col => drawCol(col, col.max));
+      return;
+    }
+    cols.forEach(col => {
+      let level = 0.25 + 0.75 * amp;
+      if (vibAmp > 0) level = 0.25 + 0.75 * vibAmp * Math.abs(Math.sin(t * 0.011 + col.ph));
+      const lit = Math.max(0, Math.min(col.max, Math.round(col.max * level + Math.sin(t * 0.012 + col.ph) * 2.2)));
+      drawCol(col, lit);
+    });
+  }
+
+  function drawKittBottomBars(ctx) {
+    const yAuto = K.BOT_Y0;
+    const yNormal = K.BOT_Y0 + K.BOT_PITCH;
+    const yPursuit = K.BOT_Y0 + 2 * K.BOT_PITCH;
+    kittRr(ctx, K.BOT_X, yAuto, K.BOT_W, K.BOT_H, K.BOT_R, KITT_ORANGE);
+    kittTwoLine(ctx, 'AUTO', 'CRUISE', K.BOT_X, yAuto, K.BOT_W, K.BOT_H, '#000');
+    kittRr(ctx, K.BOT_X, yNormal, K.BOT_W, K.BOT_H, K.BOT_R, KITT_YELLOW);
+    kittTwoLine(ctx, 'NORMAL', 'CRUISE', K.BOT_X, yNormal, K.BOT_W, K.BOT_H, '#000');
+    kittRr(ctx, K.BOT_X, yPursuit, K.BOT_W, K.BOT_H, K.BOT_R, KITT_BLUE);
+    kittLabel(ctx, 'PURSUIT', K.BOT_X, yPursuit, K.BOT_W, K.BOT_H, '#000');
+  }
+
+  function drawKittPortrait(ctx, emotion, t, opts) {
+    const { speaking = false, listening = false } = opts;
+    let amp = speaking ? 0.45 + 0.55 * Math.abs(Math.sin(t * 0.014)) : 0.1;
+    if (listening) amp = 0.35 + 0.18 * Math.sin(t * 0.005);
+    const vibAmp = emotion === 'vibing'
+      ? Math.pow(0.15 + 0.85 * Math.abs(Math.sin(t * 0.018)), 0.5) : 0;
+    const voiceActive = speaking || listening || vibAmp > 0;
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, KITT_PW, KITT_PH);
+    drawKittTopBars(ctx);
+    drawKittSideOvals(ctx);
+    drawKittModulator(ctx, t, amp, vibAmp, voiceActive);
+    drawKittBottomBars(ctx);
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  function drawKittDashboard(ctx, emotion, t, opts = {}) {
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, W, H);
+    const sy = H / KITT_PH;
+    const sx = (W - KITT_PW * sy) / 2;
+    ctx.save();
+    ctx.translate(sx, 0);
+    ctx.scale(sy, sy);
+    drawKittPortrait(ctx, emotion, t, opts);
+    ctx.restore();
+  }
+
   function drawFace(ctx, emotion, t, opts = {}) {
+    const pres = (opts.presentation || 'bender').toLowerCase();
+    if (pres === 'kitt') {
+      drawKittDashboard(ctx, emotion, t, opts);
+      return;
+    }
     if (emotion === 'vibing') {
       drawVibingFace(ctx, t);
       return;
@@ -552,21 +713,24 @@
 
   function attachPreview(canvas, getOpts) {
     let emotion = 'neutral';
+    let presentation = 'bender';
     let t = 0;
     let raf = 0;
     const ctx = canvas.getContext('2d');
     const loop = () => {
       t += 16;
       const opts = typeof getOpts === 'function' ? getOpts() : {};
+      opts.presentation = opts.presentation || presentation;
       drawFace(ctx, emotion, t, opts);
       raf = requestAnimationFrame(loop);
     };
     return {
       setEmotion(e) { emotion = e || 'neutral'; },
+      setPresentation(p) { presentation = (p || 'bender').toLowerCase(); },
       start() { if (!raf) loop(); },
       stop() { cancelAnimationFrame(raf); raf = 0; },
     };
   }
 
-  global.FacePreview = { W, H, EMOTIONS, drawFace, attachPreview };
+  global.FacePreview = { W, H, EMOTIONS, drawFace, attachPreview, drawKittDashboard };
 })(typeof window !== 'undefined' ? window : globalThis);

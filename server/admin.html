@@ -172,6 +172,13 @@
       border-radius: 8px; padding: .4rem .8rem; font-size: .82rem; cursor: pointer;
     }
     .dev-subtabs button.active { border-color: var(--accent); color: var(--accent); }
+    .system-preview {
+      margin: .35rem 0 .65rem; padding: .55rem .7rem; border-radius: 8px;
+      background: #0d1117; border: 1px solid #2a4058; font-size: .84rem;
+      color: var(--text); line-height: 1.45;
+    }
+    .system-preview .label { font-size: .72rem; color: var(--accent); margin-bottom: .25rem; }
+    .system-preview .emo { font-size: .72rem; color: var(--muted); margin-top: .3rem; }
   </style>
 </head>
 <body>
@@ -231,6 +238,54 @@
     </div>
 
     <div class="section">
+      <h3>Textos rápidos</h3>
+      <p class="hint" style="margin-top:0">
+        Respuestas <strong>fijas</strong> (sin Ollama): hora, despertar, GLM 5.2, silencio.
+        Los cuadros muestran lo que el robot dice hoy; debajo ves la respuesta efectiva.
+        Hora admite <code>{time}</code>, <code>{weekday}</code>, <code>{part}</code>.
+      </p>
+      <p class="hint" id="textsSourceHint"></p>
+      <label for="timeReply" style="display:flex;justify-content:space-between;align-items:center">
+        <span>«¿Qué hora es?» — plantilla</span>
+        <button type="button" id="resetTextsBtn" class="secondary" style="font-size:.72rem;padding:.2rem .5rem">↩ Defaults textos</button>
+      </label>
+      <textarea id="timeReply" style="min-height:52px;font-size:.88rem"></textarea>
+      <div class="system-preview" id="timeSystemPreview">
+        <div class="label">Dice el robot ahora (con hora actual)</div>
+        <div id="timePreviewText">—</div>
+        <div class="emo" id="timePreviewEmo"></div>
+      </div>
+      <div class="grid" style="margin-top:.5rem">
+        <div>
+          <label for="timeEmotion">Emoción (hora)</label>
+          <select id="timeEmotion"></select>
+        </div>
+        <div>
+          <label for="wakeEmotion">Emoción (despertar)</label>
+          <select id="wakeEmotion"></select>
+        </div>
+      </div>
+      <label for="wakeReply" style="margin-top:.75rem">Al despertar / activación</label>
+      <textarea id="wakeReply" style="min-height:52px;font-size:.88rem"></textarea>
+      <div class="system-preview" id="wakeSystemPreview">
+        <div class="label">Dice el robot al despertar</div>
+        <div id="wakePreviewText">—</div>
+        <div class="emo" id="wakePreviewEmo"></div>
+      </div>
+      <label for="glm52Reply" style="margin-top:.75rem">Pregunta por GLM 5.2</label>
+      <textarea id="glm52Reply" style="min-height:70px;font-size:.88rem"></textarea>
+      <div class="system-preview" id="glm52SystemPreview">
+        <div class="label">Dice el robot si preguntan por GLM 5.2</div>
+        <div id="glm52PreviewText">—</div>
+        <div class="emo" id="glm52PreviewEmo"></div>
+      </div>
+      <label for="glm52Emotion" style="margin-top:.5rem">Emoción (GLM 5.2)</label>
+      <select id="glm52Emotion"></select>
+      <label for="idlePrompt" style="margin-top:.75rem">Comentario en silencio (idle)</label>
+      <textarea id="idlePrompt" style="min-height:70px;font-size:.82rem;font-family:monospace"></textarea>
+    </div>
+
+    <div class="section">
       <h3>Voz — TTS guía</h3>
       <div class="grid">
         <div>
@@ -274,7 +329,7 @@
       </div>
 
       <label for="ttsTestText" style="margin-top:.5rem">Prueba de voz</label>
-      <textarea id="ttsTestText" style="min-height:60px">¡Voy a crear mi propio parque de atracciones, con juegos de azar y mujerzuelas!</textarea>
+      <textarea id="ttsTestText" style="min-height:60px" placeholder="Frase de prueba del personaje…"></textarea>
       <button type="button" class="primary" id="ttsTestBtn" style="width:100%;margin-top:.5rem">▶ Probar voz de este perfil</button>
       <p class="hint" id="ttsTestStatus"></p>
       <audio id="ttsAudio" controls></audio>
@@ -422,6 +477,66 @@ let cfg = {};
 let editingProfile = 'bender';
 let activeProfile = 'bender';
 
+const EMOTIONS = [
+  'neutral', 'happy', 'sad', 'angry', 'surprised', 'thinking',
+  'sleepy', 'love', 'excited', 'cool', 'confused', 'dizzy',
+];
+
+function fillEmotionSelect(sel, value) {
+  sel.innerHTML = '';
+  (cfg.valid_emotions || EMOTIONS).forEach(e => {
+    const o = document.createElement('option');
+    o.value = e; o.textContent = e;
+    sel.appendChild(o);
+  });
+  if (value) sel.value = value;
+}
+
+function localTimeFacts() {
+  const now = new Date();
+  const h = now.getHours();
+  const part = h < 6 ? 'madrugada' : h < 12 ? 'mañana' : h < 20 ? 'tarde' : 'noche';
+  const dias = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+  const time = String(h).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+  return { time, weekday: dias[now.getDay()], part };
+}
+
+function effectiveTexts(p) {
+  const t = p.texts || {};
+  const d = p.default_texts || {};
+  return {
+    time_reply: t.time_reply || d.time_reply || '',
+    time_emotion: t.time_emotion || d.time_emotion || 'neutral',
+    wake_reply: t.wake_reply || d.wake_reply || '',
+    wake_emotion: t.wake_emotion || d.wake_emotion || 'happy',
+    glm52_reply: t.glm52_reply || d.glm52_reply || '',
+    glm52_emotion: t.glm52_emotion || d.glm52_emotion || 'thinking',
+    idle_prompt: t.idle_prompt || d.idle_prompt || '',
+  };
+}
+
+function renderTimeFromTemplate(tpl) {
+  if (!tpl || !tpl.trim()) return '—';
+  const f = localTimeFacts();
+  let s = tpl;
+  for (const [k, v] of Object.entries(f)) s = s.split('{' + k + '}').join(v);
+  return s;
+}
+
+function updateTextPreviews() {
+  const timeTpl = $('timeReply').value || '';
+  $('timePreviewText').textContent = renderTimeFromTemplate(timeTpl);
+  $('timePreviewEmo').textContent = 'Emoción: ' + ($('timeEmotion').value || 'neutral');
+  const wake = $('wakeReply').value.trim();
+  $('wakePreviewText').textContent = wake || '—';
+  $('wakePreviewEmo').textContent = wake ? ('Emoción: ' + $('wakeEmotion').value) : '';
+  const glm = $('glm52Reply').value.trim();
+  $('glm52PreviewText').textContent = glm || '—';
+  $('glm52PreviewEmo').textContent = glm ? ('Emoción: ' + $('glm52Emotion').value) : '';
+}
+
+function updateTimePreview() { updateTextPreviews(); }
+
 // ─── Tabs ───────────────────────────────────────────────────────────────────
 function showTab(name) {
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
@@ -492,6 +607,36 @@ function selectEditingProfile(id) {
       $('rvcVoiceModel').value = rvcModel;
     }
   }
+
+  const texts = effectiveTexts(p);
+  $('timeReply').value = texts.time_reply;
+  $('wakeReply').value = texts.wake_reply;
+  $('glm52Reply').value = texts.glm52_reply;
+  $('idlePrompt').value = texts.idle_prompt;
+  fillEmotionSelect($('timeEmotion'), texts.time_emotion);
+  fillEmotionSelect($('wakeEmotion'), texts.wake_emotion);
+  fillEmotionSelect($('glm52Emotion'), texts.glm52_emotion);
+
+  const src = $('textsSourceHint');
+  if (p.texts_custom) {
+    src.textContent = '✎ Textos personalizados guardados para este perfil.';
+    src.style.color = 'var(--warn)';
+  } else if (texts.time_reply || texts.wake_reply) {
+    src.textContent = 'Textos del sistema (por defecto del personaje). Editá y guardá para personalizar.';
+    src.style.color = 'var(--muted)';
+  } else {
+    src.textContent = '⚠ No se cargaron textos — reiniciá el servidor (start.ps1) y recargá la página.';
+    src.style.color = 'var(--danger)';
+  }
+
+  updateTextPreviews();
+
+  $('ttsTestText').value = p.tts_test_phrase || cfg.tts_test_phrase || '';
+
+  const pres = p.presentation || 'bender';
+  if (typeof preview !== 'undefined' && preview.setPresentation) preview.setPresentation(pres);
+  if (typeof updatePreviewLabel === 'function') updatePreviewLabel();
+
   renderProfileGrid();
 }
 
@@ -506,6 +651,18 @@ function fillSelect(sel, options, value, emptyLabel) {
   sel.value = cur;
 }
 
+function profileTextsBody() {
+  return {
+    time_reply: $('timeReply').value.trim(),
+    time_emotion: $('timeEmotion').value,
+    wake_reply: $('wakeReply').value.trim(),
+    wake_emotion: $('wakeEmotion').value,
+    glm52_reply: $('glm52Reply').value.trim(),
+    glm52_emotion: $('glm52Emotion').value,
+    idle_prompt: $('idlePrompt').value.trim(),
+  };
+}
+
 function profileSaveBody(activate) {
   return {
     personality: activate ? editingProfile : cfg.personality,
@@ -513,6 +670,7 @@ function profileSaveBody(activate) {
     custom_prompt: $('customPrompt').value,
     ollama_model: $('ollamaModel').value,
     personality_prompts: { [editingProfile]: $('personalityPrompt').value },
+    profile_texts: { [editingProfile]: profileTextsBody() },
     tts_engine: $('ttsEngine').value,
     edge_voice: $('edgeVoice').value.trim(),
     rvc_voice_model: $('rvcVoiceModel').value,
@@ -529,6 +687,24 @@ $('rvcProtect').oninput = () => $('protectVal').textContent = parseFloat($('rvcP
 $('resetPromptBtn').onclick = () => {
   $('personalityPrompt').value = cfg.personalities?.[editingProfile]?.default_prompt || '';
 };
+
+$('resetTextsBtn').onclick = () => {
+  const d = cfg.personalities?.[editingProfile]?.default_texts || {};
+  $('timeReply').value = d.time_reply || '';
+  $('wakeReply').value = d.wake_reply || '';
+  $('glm52Reply').value = d.glm52_reply || '';
+  $('idlePrompt').value = d.idle_prompt || '';
+  fillEmotionSelect($('timeEmotion'), d.time_emotion || 'neutral');
+  fillEmotionSelect($('wakeEmotion'), d.wake_emotion || 'happy');
+  fillEmotionSelect($('glm52Emotion'), d.glm52_emotion || 'thinking');
+  updateTextPreviews();
+};
+
+$('timeReply').oninput = updateTextPreviews;
+['timeEmotion', 'wakeReply', 'wakeEmotion', 'glm52Reply', 'glm52Emotion'].forEach(id => {
+  const el = $(id);
+  if (el) el.oninput = el.onchange = updateTextPreviews;
+});
 
 $('saveBtn').onclick = async () => {
   try {
@@ -580,6 +756,9 @@ async function load() {
 
   void loadOllamaModels();
   void loadRvcModels();
+  fillEmotionSelect($('timeEmotion'), 'neutral');
+  fillEmotionSelect($('wakeEmotion'), 'happy');
+  fillEmotionSelect($('glm52Emotion'), 'thinking');
   selectEditingProfile(editingProfile);
   loadDeviceRegistry();
   loadEspVolume();
@@ -792,6 +971,8 @@ let speakingUntil = 0;
 const preview = FacePreview.attachPreview($('previewCanvas'), () => ({
   speaking: Date.now() < speakingUntil,
   bored: $('bored').checked,
+  presentation: cfg.personalities?.[editingProfile]?.presentation
+    || (editingProfile === 'kitt' ? 'kitt' : 'bender'),
 }));
 preview.setEmotion('neutral');
 preview.start();
@@ -803,7 +984,7 @@ function devMsg(el, text, ok) {
 function pickEmotion(e, btn) {
   currentEmotion = e;
   preview.setEmotion(e);
-  $('previewLabel').textContent = e + ($('bored').checked ? ' · aburrido' : '');
+  updatePreviewLabel();
   document.querySelectorAll('.face').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   if (e === 'vibing') $('vibingBtn').classList.add('active');
@@ -823,7 +1004,14 @@ FacePreview.EMOTIONS.forEach(e => {
   if (e === 'happy') o.selected = true;
   $('speakEmotion').appendChild(o);
 });
-$('bored').onchange = () => preview.setEmotion(currentEmotion);
+$('bored').onchange = () => { preview.setEmotion(currentEmotion); updatePreviewLabel(); };
+
+function updatePreviewLabel() {
+  const pres = cfg.personalities?.[editingProfile]?.presentation
+    || (editingProfile === 'kitt' ? 'kitt' : 'bender');
+  const tag = pres === 'kitt' ? ' · tablero KITT' : ' · cara Bender';
+  $('previewLabel').textContent = currentEmotion + tag + ($('bored').checked ? ' · aburrido' : '');
+}
 
 const vibingMicEl = $('vibingMic');
 const savedVmic = localStorage.getItem('agenteia_vibing_mic');

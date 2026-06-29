@@ -25,6 +25,30 @@ server/__pycache__/
 tmp/
 *.log
 
+# Build artifacts (firmware) — regenerables
+firmware/agente-ia/build/
+firmware/build/
+firmware/agente-ia/spiffs.bin
+
+# Copias manuales / snapshots locales (los checkpoints reales son tags git)
+checkpoints/
+firmware/checkpoints/
+firmware/commit/
+firmware/agente-iaV1/
+
+# Modelos / audio pesado (no son fuente; se descargan o generan)
+server/rvc_models/
+server/voices/
+server/debug_audio/
+server/out_test.wav
+server/err.txt
+
+# IDE / agente / memoria local
+.cursor/
+.engram/
+.atl/
+.mcp.json
+
 # Local-only paths
 docs/marketing/
 docs/agenteia-manual/

@@ -313,6 +313,56 @@ PERSONALITY_SPEAK_MAX_CHARS: dict[str, int] = {
 }
 DEFAULT_SPEAK_MAX_CHARS = 180
 
+# Frase por defecto en «Probar voz» del panel /admin (por personaje).
+PERSONALITY_TTS_TEST_PHRASE: dict[str, str] = {
+    "bender": (
+        "¡Voy a crear mi propio parque de atracciones, con juegos de azar y mujerzuelas! "
+        "Es más, ¡olvídate de los juegos de azar!"
+    ),
+    "kitt": (
+        "Michael, si sigues cerrando mi puerta con tanta fuerza, tendré que activar "
+        "el asiento eyector por accidente."
+    ),
+    "jarvis": (
+        "Todos los sistemas operativos, señor. He corrido las simulaciones; "
+        "su plan sigue siendo… optimista."
+    ),
+    "burro": (
+        "¡Ey jefe! ¿Vamos por gofres o seguimos con esto? ¡Yo voto por gofres!"
+    ),
+    "amigable": "Hola, estoy acá. Si necesitás algo, decime con confianza.",
+    "tecnico": "Sistemas en línea. Indique el comando o consulta.",
+    "companero": "¡Qué onda! Contame en qué andás, que tengo curiosidad.",
+}
+
+DEFAULT_TTS_TEST_PHRASE = "Hola, esta es una prueba de voz del personaje activo."
+
+# Presentación visual en pantalla ESP (cara / tablero). Por defecto: estilo Bender.
+PERSONALITY_PRESENTATION: dict[str, str] = {
+    "bender": "bender",
+    "burro": "bender",
+    "jarvis": "bender",
+    "amigable": "bender",
+    "tecnico": "bender",
+    "companero": "bender",
+    "kitt": "kitt",
+}
+DEFAULT_PRESENTATION = "bender"
+
+
+def get_presentation(personality_id: str | None = None) -> str:
+    pid = (personality_id or load().get("personality") or "bender").strip()
+    if pid not in PERSONALITIES:
+        pid = "bender"
+    return PERSONALITY_PRESENTATION.get(pid, DEFAULT_PRESENTATION)
+
+
+def get_tts_test_phrase(personality_id: str | None = None) -> str:
+    pid = (personality_id or load().get("personality") or "bender").strip()
+    if pid not in PERSONALITIES:
+        pid = "bender"
+    return PERSONALITY_TTS_TEST_PHRASE.get(pid, DEFAULT_TTS_TEST_PHRASE)
+
 TTS_ENGINES = ("sapi", "edge", "piper")
 EDGE_VOICES = (
     "es-MX-DaliaNeural",
@@ -403,6 +453,7 @@ _DEFAULT: dict = {
     "rvc_voice_model": "bender",
     "personality_prompts": {},
     "voice_profiles": {},
+    "profile_texts": {},
 }
 
 
@@ -575,12 +626,14 @@ def save(updates: dict) -> dict:
             profile_id = "bender"
 
         for key in _DEFAULT:
-            if key in updates and key not in ("voice_profiles",):
+            if key in updates and key not in ("voice_profiles", "profile_texts"):
                 if key == "personality_prompts" and isinstance(updates[key], dict):
                     existing = cfg.get("personality_prompts") or {}
                     existing.update(updates[key])
                     cfg[key] = existing
                 elif key == "voice_profiles" and isinstance(updates[key], dict):
+                    pass  # handled below
+                elif key == "profile_texts" and isinstance(updates[key], dict):
                     pass  # handled below
                 else:
                     cfg[key] = updates[key]
@@ -617,6 +670,37 @@ def save(updates: dict) -> dict:
             merged.update(_normalize_voice_profile(voice_patch, profile_id))
             profiles[profile_id] = merged
         cfg["voice_profiles"] = profiles
+
+        # Textos rápidos por perfil (hora, wake, GLM, idle…)
+        text_store = dict(cfg.get("profile_texts") or {})
+        if isinstance(updates.get("profile_texts"), dict):
+            for pid, patch in updates["profile_texts"].items():
+                if pid not in PERSONALITIES or not isinstance(patch, dict):
+                    continue
+                merged = dict(text_store.get(pid) or {})
+                for key in PROFILE_TEXT_KEYS:
+                    if key in patch:
+                        val = str(patch[key] or "").strip()
+                        if val:
+                            merged[key] = val
+                        elif key in merged:
+                            del merged[key]
+                text_store[pid] = merged
+        text_patch = {
+            k: updates[k]
+            for k in PROFILE_TEXT_KEYS
+            if k in updates
+        }
+        if text_patch:
+            merged = dict(text_store.get(profile_id) or {})
+            for key, val in text_patch.items():
+                s = str(val or "").strip()
+                if s:
+                    merged[key] = s
+                elif key in merged:
+                    del merged[key]
+            text_store[profile_id] = merged
+        cfg["profile_texts"] = text_store
 
         if cfg.get("personality") not in PERSONALITIES:
             cfg["personality"] = "bender"
@@ -1044,13 +1128,84 @@ def _pid(personality_id: str | None) -> str:
     return pid if pid in PERSONALITIES else "bender"
 
 
+VALID_EMOTIONS = (
+    "neutral", "happy", "sad", "angry", "surprised", "thinking",
+    "sleepy", "love", "excited", "cool", "confused", "dizzy",
+)
+
+PROFILE_TEXT_KEYS = (
+    "time_reply",
+    "time_emotion",
+    "wake_reply",
+    "wake_emotion",
+    "glm52_reply",
+    "glm52_emotion",
+    "idle_prompt",
+)
+
+
+def _builtin_profile_texts(personality_id: str) -> dict[str, str]:
+    """Textos por defecto del código (sin overrides de admin)."""
+    pid = personality_id if personality_id in PERSONALITIES else "bender"
+    return {
+        "time_reply": _PERSONALITY_TIME_REPLY.get(pid, _PERSONALITY_TIME_REPLY["amigable"]),
+        "time_emotion": _PERSONALITY_TIME_EMOTION.get(pid, "neutral"),
+        "wake_reply": _PERSONALITY_WAKE_REPLY.get(pid, _PERSONALITY_WAKE_REPLY["amigable"]),
+        "wake_emotion": _PERSONALITY_WAKE_EMOTION.get(pid, "happy"),
+        "glm52_reply": _PERSONALITY_GLM52_REPLY.get(pid, _PERSONALITY_GLM52_REPLY["amigable"]),
+        "glm52_emotion": _PERSONALITY_GLM52_EMOTION.get(pid, "thinking"),
+        "idle_prompt": _PERSONALITY_IDLE_PROMPT.get(pid, _PERSONALITY_IDLE_PROMPT["amigable"]),
+    }
+
+
+def get_profile_texts(personality_id: str | None = None, cfg: dict | None = None) -> dict[str, str]:
+    """Textos rápidos efectivos: defaults + overrides en profile_texts."""
+    raw_cfg = cfg if cfg is not None else load()
+    pid = (personality_id or raw_cfg.get("personality") or "bender").strip()
+    if pid not in PERSONALITIES:
+        pid = "bender"
+    result = _builtin_profile_texts(pid)
+    overrides = (raw_cfg.get("profile_texts") or {}).get(pid) or {}
+    if isinstance(overrides, dict):
+        for key in PROFILE_TEXT_KEYS:
+            val = str(overrides.get(key) or "").strip()
+            if not val:
+                continue
+            if key.endswith("_emotion"):
+                result[key] = val if val in VALID_EMOTIONS else result[key]
+            else:
+                result[key] = val
+    return result
+
+
+def profile_text_previews(personality_id: str, cfg: dict | None = None) -> dict[str, str]:
+    """Respuestas fijas ya renderizadas (hora con placeholders sustituidos)."""
+    texts = get_profile_texts(personality_id, cfg)
+    facts = time_facts()
+    try:
+        time_now = texts["time_reply"].format(**facts)
+    except KeyError:
+        time_now = texts["time_reply"]
+    return {
+        "time_now": time_now,
+        "wake": texts["wake_reply"],
+        "glm52": texts["glm52_reply"],
+        "idle": texts["idle_prompt"],
+    }
+
+
 def quick_time_reply(personality_id: str | None = None) -> dict:
     pid = _pid(personality_id)
     facts = time_facts()
-    tpl = _PERSONALITY_TIME_REPLY.get(pid, _PERSONALITY_TIME_REPLY["amigable"])
+    texts = get_profile_texts(pid)
+    tpl = texts["time_reply"]
+    try:
+        reply = tpl.format(**facts)
+    except KeyError:
+        reply = tpl
     return {
-        "emotion": _PERSONALITY_TIME_EMOTION.get(pid, "neutral"),
-        "reply": tpl.format(**facts),
+        "emotion": texts["time_emotion"],
+        "reply": reply,
         "speak": True,
         "sing": False,
         "sound_effect": "none",
@@ -1059,10 +1214,10 @@ def quick_time_reply(personality_id: str | None = None) -> dict:
 
 def quick_glm52_reply(personality_id: str | None = None) -> dict:
     pid = _pid(personality_id)
-    tpl = _PERSONALITY_GLM52_REPLY.get(pid, _PERSONALITY_GLM52_REPLY["amigable"])
+    texts = get_profile_texts(pid)
     return {
-        "emotion": _PERSONALITY_GLM52_EMOTION.get(pid, "thinking"),
-        "reply": tpl,
+        "emotion": texts["glm52_emotion"],
+        "reply": texts["glm52_reply"],
         "speak": True,
         "sing": False,
         "sound_effect": "none",
@@ -1071,10 +1226,10 @@ def quick_glm52_reply(personality_id: str | None = None) -> dict:
 
 def wake_only_reply(personality_id: str | None = None) -> dict:
     pid = _pid(personality_id)
-    tpl = _PERSONALITY_WAKE_REPLY.get(pid, _PERSONALITY_WAKE_REPLY["amigable"])
+    texts = get_profile_texts(pid)
     return {
-        "emotion": _PERSONALITY_WAKE_EMOTION.get(pid, "happy"),
-        "reply": tpl,
+        "emotion": texts["wake_emotion"],
+        "reply": texts["wake_reply"],
         "speak": True,
         "sing": False,
         "sound_effect": "none",
@@ -1151,7 +1306,7 @@ def notify_reply(
 
 def get_idle_user_prompt(personality_id: str | None = None) -> str:
     pid = _pid(personality_id)
-    return _PERSONALITY_IDLE_PROMPT.get(pid, _PERSONALITY_IDLE_PROMPT["amigable"])
+    return get_profile_texts(pid)["idle_prompt"]
 
 
 def ollama_error_reply(kind: str, personality_id: str | None = None) -> str:
@@ -1253,6 +1408,7 @@ def admin_snapshot(env: dict) -> dict:
     voice_profiles = {
         pid: get_voice_profile(pid, cfg) for pid in PERSONALITIES
     }
+    profile_texts_raw = cfg.get("profile_texts") or {}
     env_tts = env.get("tts_engine", "sapi")
     env_edge = env.get("edge_voice", "")
     return {
@@ -1275,11 +1431,20 @@ def admin_snapshot(env: dict) -> dict:
                 "is_custom": bool(personality_prompts.get(k)),
                 "voice": voice_profiles[k],
                 "is_active": k == active,
+                "texts": get_profile_texts(k, cfg),
+                "default_texts": _builtin_profile_texts(k),
+                "text_previews": profile_text_previews(k, cfg),
+                "texts_custom": bool(profile_texts_raw.get(k)),
+                "tts_test_phrase": get_tts_test_phrase(k),
+                "presentation": get_presentation(k),
             }
             for k, v in PERSONALITIES.items()
         },
         "personality_prompts": personality_prompts,
         "voice_profiles": voice_profiles,
+        "profile_texts": profile_texts_raw,
+        "valid_emotions": list(VALID_EMOTIONS),
+        "time_placeholders": ["{time}", "{weekday}", "{part}"],
         "active_voice": active_voice,
         "wake_presets": list(WAKE_PRESET_LABELS),
         "tts_engines": list(TTS_ENGINES),
@@ -1294,5 +1459,6 @@ def admin_snapshot(env: dict) -> dict:
         "rvc_index_rate": float(active_voice["rvc_index_rate"]),
         "rvc_protect": float(active_voice["rvc_protect"]),
         "rvc_voice_model": active_voice["rvc_voice_model"] or "bender",
+        "presentation": get_presentation(active),
     }
 
