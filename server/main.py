@@ -1301,6 +1301,20 @@ async def dev_speak(request: Request):
     return {"ok": True, "queued": qlen, "cmd": cmd}
 
 
+@app.post("/api/dev/scene")
+async def dev_scene(request: Request):
+    """Encola cambio de escena AURA (music, conversation, guardian, …)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid json"})
+    cmd, qlen, err = await device_manager.queue_scene(body)
+    if err:
+        return JSONResponse(status_code=400, content={"error": err})
+    log.info("dev scene queued: %s (queue=%d)", cmd["scene"], qlen)
+    return {"ok": True, "queued": qlen, "cmd": cmd}
+
+
 _story_cache: dict[str, dict[str, Any]] = {}
 _STORY_CACHE_MAX = 8
 

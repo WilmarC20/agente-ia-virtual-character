@@ -9,32 +9,37 @@ agenteIA evolves from a monolithic ESP32 sketch + Python server into a **modular
 | **Device** | ESP32-S3 | AURA render, HAL, Event Bus, playback, wake/touch |
 | **Brain** | `server/` | Conversation, Personality, Behavior, Voice, plugins |
 
-Communication: HTTP long-poll (`/api/dev/poll-wait`) or short poll; WebSocket at `/ws/device` (send `{"op":"poll"}`).
+Communication: HTTP long-poll (`/api/dev/poll-wait`), WebSocket at `/ws/device` (firmware: `brain_ws_client.h` with HTTP fallback), or short poll.
 
 ## AURA (device)
 
 ```
-Theme JSON (SPIFFS/SD) → ThemeManager + LayoutManager
-                      → SceneManager → Widgets → Renderer (sole gfx access)
+Theme JSON (SPIFFS/SD) → ThemeManager + LayoutManager + ThemeStore
+                      → SceneManager → SceneRenderer → Widgets → Renderer
 ```
-
-### Phase 1 (current)
-
-- `firmware/agente-ia/aura/` — Renderer, ThemeManager, LayoutManager, AnimationEngine, AtlasText
-- KITT dashboard behind `USE_AURA` in `config.h`
-- Theme data in `themes/kitt/*.json` (colors, layout, labels, widgets, animations)
-- Labels: hybrid text — Michroma extended bitmap font (static); glyph atlas for dynamic text later
 
 ### Phase 2 (current)
 
-- `SceneManager`, `ExpressionEngine`, widget library stubs in `aura/widgets/`
-- Toast/Popup overlays on KITT dashboard
+- `SceneManager`, `SceneRenderer`, `ExpressionEngine`, widgets (`Button`, `Label`, `KittDashboard`, `MusicPlayer`, …)
+- Scene commands via `POST /api/dev/scene` → firmware `handleDevCommand`
 
 ### Phase 3 (current)
 
-- `hal/HalFacade.h` — display, touch, audio, local Event Bus
-- `brain_transport.h` — long-poll + poll fallback
+- `hal/HalFacade.h` — display, touch, audio, RGB stub, battery ADC, `DeviceEventBus`
+- `aura/EventBus.h` — AURA bus bound to HAL
+- `brain_transport.h` + `brain_ws_client.h` — WS first, long-poll fallback
 - Server: `transport/device_hub.py` WebSocket `/ws/device`
+
+### Phase 4 (current)
+
+- `engines/emotion.py` — EmotionState / actuation helpers
+- `routers/` — device, themes, converse helpers (scaffold; main routes remain in `main.py`)
+
+### Phase 5–6 (current)
+
+- `themes/guardian/` — alert theme package
+- `ThemeStore.h` — SPIFFS cache for `colors.json`
+- SDK: `sdk/GETTING_STARTED.md`, `examples/custom-*`
 
 ## Contracts (`sdk/contracts/`)
 

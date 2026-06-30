@@ -109,6 +109,8 @@ extern uint8_t g_activeDisplayRotation;
 #define AUDIO_MCLK_HZ       (AUDIO_SAMPLE_RATE * I2S_MCLK_MULTIPLE)
 // 1 = KITT dashboard via AURA engine; 0 = legacy face_kitt.h direct path.
 #define USE_AURA            1
+// 1 = WebSocket /ws/device con fallback a HTTP poll.
+#define ENABLE_DEVICE_WS         1
 // 1 = long-poll /api/dev/poll-wait; 0 = poll cada 2 s.
 #define ENABLE_DEVICE_LONG_POLL  1
 // 1 = descargar colors.json del cerebro al cambiar presentación.

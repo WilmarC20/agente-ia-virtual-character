@@ -1,0 +1,8 @@
+{
+  "id": "custom-theme",
+  "name": "My Custom Theme",
+  "version": "0.0.1",
+  "canvas": { "width": 240, "height": 320 },
+  "orientation": "portrait",
+  "extends": "kitt"
+}

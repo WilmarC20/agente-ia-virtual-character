@@ -1,0 +1,8 @@
+{
+  "id": "guardian",
+  "name": "Guardian Mode",
+  "version": "0.1.0",
+  "canvas": { "width": 240, "height": 320 },
+  "orientation": "portrait",
+  "description": "Security / alert overlay — red accent, status card"
+}

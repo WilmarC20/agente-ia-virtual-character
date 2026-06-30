@@ -1,0 +1,7 @@
+{
+  "widgets": [
+    { "type": "Label", "id": "guardianTitle", "region": "titleStrip", "text": "GUARDIAN" },
+    { "type": "StatusCard", "id": "alertCard", "region": "statusCard" },
+    { "type": "Gauge", "id": "threatLevel", "region": "alertBar" }
+  ]
+}

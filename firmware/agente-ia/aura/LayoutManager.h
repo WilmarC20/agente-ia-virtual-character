@@ -1,9 +1,11 @@
 #pragma once
 
 #include <stdint.h>
+#include <string.h>
 
 struct AuraRect {
   int x, y, w, h;
+  bool valid = false;
 };
 
 struct AuraLayout {
@@ -15,31 +17,68 @@ struct AuraLayout {
   int colCxLeft = 90, colCxMid = 120, colCxRight = 150;
   int colSegSide = 15, colSegMid = 19;
   int botX = 73, botW = 94, botH = 24, botPitch = 28, botY0 = 230, botRadius = 8;
+  // Bender landscape 320x240
+  int visorX = 40, visorY = 30, visorW = 240, visorH = 160;
+  int mouthX = 120, mouthY = 155, mouthW = 80, mouthH = 28;
 };
 
 class LayoutManager {
  public:
-  void loadKittDefaults() { _layout = AuraLayout{}; }
+  enum class ThemeKind { Kitt, Bender };
+
+  void loadKittDefaults() {
+    _kind = ThemeKind::Kitt;
+    _layout = AuraLayout{};
+  }
+
+  void loadBenderDefaults() {
+    _kind = ThemeKind::Bender;
+    _layout = AuraLayout{};
+    _layout.canvasW = 320;
+    _layout.canvasH = 240;
+  }
+
   const AuraLayout &layout() const { return _layout; }
+  ThemeKind kind() const { return _kind; }
+
+  AuraRect get(const char *id) const {
+    if (!id) return {};
+    if (strcmp(id, "powerButton") == 0 || strcmp(id, "top.power") == 0) return topBar(0);
+    if (strcmp(id, "settingsP4") == 0 || strcmp(id, "oval.p4") == 0) return hitZoneSettingsP4();
+    if (strcmp(id, "modulator") == 0) {
+      const int w = _layout.segW * 3 + _layout.segGap * 2;
+      return {_layout.colCxLeft - w / 2, _layout.colCenterY - 20, w, 40, true};
+    }
+    if (strcmp(id, "visor") == 0) {
+      return {_layout.visorX, _layout.visorY, _layout.visorW, _layout.visorH, true};
+    }
+    if (strcmp(id, "mouth") == 0) {
+      return {_layout.mouthX, _layout.mouthY, _layout.mouthW, _layout.mouthH, true};
+    }
+  if (strcmp(id, "titleStrip") == 0) return {0, 0, _layout.canvasW, 22, true};
+    return {};
+  }
 
   AuraRect topBar(int index) const {
-    return {_layout.topX, _layout.topY0 + index * _layout.topPitch, _layout.topW, _layout.topH};
+    AuraRect r = {_layout.topX, _layout.topY0 + index * _layout.topPitch, _layout.topW, _layout.topH, true};
+    return r;
   }
 
   AuraRect ovalLeft(int index) const {
-    return {_layout.ovalLX, _layout.ovalY0 + index * _layout.ovalPitch, _layout.ovalW, _layout.ovalH};
+    return {_layout.ovalLX, _layout.ovalY0 + index * _layout.ovalPitch, _layout.ovalW, _layout.ovalH, true};
   }
 
   AuraRect ovalRight(int index) const {
-    return {_layout.ovalRX, _layout.ovalY0 + index * _layout.ovalPitch, _layout.ovalW, _layout.ovalH};
+    return {_layout.ovalRX, _layout.ovalY0 + index * _layout.ovalPitch, _layout.ovalW, _layout.ovalH, true};
   }
 
   AuraRect bottomBar(int index) const {
-    return {_layout.botX, _layout.botY0 + index * _layout.botPitch, _layout.botW, _layout.botH};
+    return {_layout.botX, _layout.botY0 + index * _layout.botPitch, _layout.botW, _layout.botH, true};
   }
 
   AuraRect hitZoneSettingsP4() const { return ovalRight(3); }
 
  private:
   AuraLayout _layout;
+  ThemeKind _kind = ThemeKind::Kitt;
 };

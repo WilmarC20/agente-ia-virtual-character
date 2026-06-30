@@ -1,0 +1,9 @@
+{
+  "canvasW": 240,
+  "canvasH": 320,
+  "regions": {
+    "titleStrip": { "x": 0, "y": 0, "w": 240, "h": 28 },
+    "statusCard": { "x": 12, "y": 40, "w": 216, "h": 80 },
+    "alertBar": { "x": 12, "y": 130, "w": 216, "h": 12 }
+  }
+}

@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 #include "config.h"
 #include "secrets.h"
+#include "brain_ws_client.h"
 
 // Transporte cerebro ↔ dispositivo: long-poll con fallback a poll corto.
 class BrainTransport {
@@ -18,6 +19,10 @@ class BrainTransport {
     CommandHandler h = fn ? fn : _handler;
     if (!h) return false;
 
+#if ENABLE_DEVICE_WS
+    static BrainWsClient ws;
+    if (ws.pollWait(h, 3)) return true;
+#endif
 #if ENABLE_DEVICE_LONG_POLL
     return pollWait(h, 3);
 #else

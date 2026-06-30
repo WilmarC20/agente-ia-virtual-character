@@ -1,0 +1,7 @@
+{
+  "board": "es3c28p",
+  "display": { "width": 240, "height": 320, "driver": "ili9341" },
+  "touch": { "driver": "ft6336", "i2c_addr": "0x38" },
+  "audio": { "codec": "es8311", "sample_rate": 16000 },
+  "notes": "Copy hardware/es3c28p/profile.json and override pins in config.h"
+}

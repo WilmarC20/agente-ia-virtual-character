@@ -112,6 +112,25 @@ class DeviceManager:
         qlen = await self._enqueue(cmd)
         return cmd, qlen, None
 
+    async def queue_scene(self, body: dict[str, Any]) -> tuple[dict[str, Any] | None, int, str | None]:
+        scene = str(body.get("scene", "idle")).strip().lower()
+        valid = {
+            "boot", "idle", "conversation", "programming", "music", "guardian",
+            "emergency", "camera", "dashboard", "sleep", "shutdown",
+        }
+        if scene not in valid:
+            return None, 0, f"unknown scene: {scene}"
+        cmd: dict[str, Any] = {
+            "type": "scene",
+            "scene": scene,
+            "transition_ms": max(0, min(5000, int(body.get("transition_ms", 0)))),
+        }
+        title = str(body.get("title", "")).strip()
+        if title:
+            cmd["title"] = title[:120]
+        qlen = await self._enqueue(cmd)
+        return cmd, qlen, None
+
     async def queue_story(self, cmd: dict[str, Any], *, priority: bool) -> int:
         return await self._enqueue(cmd, front=priority)
 

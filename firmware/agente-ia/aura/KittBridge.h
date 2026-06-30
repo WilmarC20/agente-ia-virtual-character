@@ -2,6 +2,7 @@
 
 #include <LovyanGFX.hpp>
 #include "AuraEngine.h"
+#include "ThemeStore.h"
 #include "theme_fetch.h"
 #include "../face.h"
 #include "../face_kitt.h"
@@ -22,13 +23,24 @@ inline void auraApplyEmotion(const char *emotion, float intensity, uint32_t reco
   g_aura.applyEmotionState(emotion, intensity, recoveryMs);
 }
 
+inline void auraSetScene(const char *scene, const char *title = nullptr) {
+  if (!scene) return;
+  g_aura.setSceneByName(scene);
+  if (title && strcasecmp(scene, "music") == 0) {
+    g_aura.musicPlayer().setPlaying(true, title);
+  }
+}
+
 inline void auraOnPresentation(const char *presentation) {
   if (!presentation || !presentation[0]) return;
   g_aura.onPresentation(presentation);
 #if USE_AURA_THEME_SYNC
   const String body = fetchThemeFile(presentation, "colors.json");
   if (body.length() > 0) {
+    g_themeStore.saveFile(presentation, "colors.json", (const uint8_t *)body.c_str(), body.length());
     g_aura.loadThemeColorsJson(body.c_str(), body.length());
+  } else {
+    g_aura.loadThemeFromStore(presentation);
   }
 #endif
   if (strcasecmp(presentation, "kitt") == 0) {

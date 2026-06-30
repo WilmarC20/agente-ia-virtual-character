@@ -26,6 +26,7 @@
 #include "web_admin.h"
 #if USE_AURA
 #include "aura/KittBridge.h"
+#include "aura/EventBus.h"
 #endif
 #include "brain_transport.h"
 #if USE_AURA
@@ -398,6 +399,9 @@ static void applyMusicFromBrain(JsonDocument &doc) {
   }
   Serial.printf("Music intent -> %s (%s) autoplay=%d queue=%d\n",
                 musicTitle.c_str(), musicId.c_str(), (int)g_musicAutoplay, g_musicQueueLen);
+#if USE_AURA
+  auraSetScene("music", musicTitle.c_str());
+#endif
   queueMusicPlay(musicId, musicTitle, true);
 }
 
@@ -1083,6 +1087,9 @@ void setup() {
 #if USE_AURA
   auraBindFace(&face);
   g_hal.audio.bind(&face);
+  g_hal.rgb.begin();
+  g_hal.sensor.begin();
+  g_auraBus.bind(&g_hal.events);
 #endif
   face.setEmotion(Emotion::Neutral);
   face.update();
@@ -1924,6 +1931,16 @@ static void handleDevCommand(JsonObjectConst cmd, JsonVariantConst root) {
   if (!type) return;
 
   lastActivityMs = millis();
+
+  if (strcmp(type, "scene") == 0) {
+    const char *scene = cmd["scene"] | "idle";
+#if USE_AURA
+    auraSetScene(scene, cmd["title"] | "");
+    g_auraBus.publish("scene.change", String("{\"scene\":\"") + scene + "\"}");
+#endif
+    Serial.printf("dev scene: %s\n", scene);
+    return;
+  }
 
   if (strcmp(type, "face") == 0) {
     String em = cmd["emotion"] | "neutral";
