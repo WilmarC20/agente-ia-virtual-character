@@ -24,6 +24,13 @@
 #include "settings.h"
 #include "music_screen.h"
 #include "web_admin.h"
+#if USE_AURA
+#include "aura/KittBridge.h"
+#endif
+#include "brain_transport.h"
+#if USE_AURA
+#include "hal/HalFacade.h"
+#endif
 
 // Cambia en cada flash para verificar en Serial Monitor que cargó el binario nuevo.
 static constexpr const char *FIRMWARE_BUILD_ID = "capt-off-250626";
@@ -45,7 +52,10 @@ AudioRecorder recorder;
 AppSettings g_settings;
 SettingsScreen g_settingsScreen;
 WebAdmin g_webAdmin;
-uint8_t g_wakePhraseIdx = 0;    // index into WAKE_PRESET_LABELS, sent to /wake-check
+#if USE_AURA
+HalFacade g_hal(gfx);
+#endif
+uint8_t g_wakePhraseIdx = 0;
 
 enum class State { Sleeping, Listening, Thinking };
 volatile bool wakeDetected = false;
@@ -411,9 +421,9 @@ static void storyClearCues() {
   g_storyAmpPending = false;
 }
 
-static void storyLoadCues(JsonArray arr) {
+static void storyLoadCues(JsonArrayConst arr) {
   storyClearCues();
-  for (JsonObject o : arr) {
+  for (JsonObjectConst o : arr) {
     if (g_storyCueCount >= kStoryMaxCues) break;
     g_storyCues[g_storyCueCount].atMs = o["at_ms"] | 0u;
     const char *em = o["emotion"] | "neutral";
@@ -1067,6 +1077,10 @@ void setup() {
   gfx.setRotation(DISPLAY_ROTATION);
   gfx.setBrightness(200);
   face.begin();
+#if USE_AURA
+  auraBindFace(&face);
+  g_hal.audio.bind(&face);
+#endif
   face.setEmotion(Emotion::Neutral);
   face.update();
   face.showText("Conectando WiFi...");
@@ -1896,33 +1910,10 @@ bool askBrain(const uint8_t *wav, size_t size, BrainReply &out) {
 }
 
 // Pull one dev command queued from the PC panel (/dev): preview face or speak text.
-void pollDevCommand() {
-  if (WiFi.status() != WL_CONNECTED) return;
-  if (state != State::Sleeping) return;
+static void handleDevCommand(JsonObjectConst cmd, JsonVariantConst root) {
+  applyServerPresentation(root);
+  if (cmd.isNull()) return;
 
-  static uint32_t lastPoll = 0;
-  if (millis() - lastPoll < 2000) return;
-  lastPoll = millis();
-
-  HTTPClient http;
-  http.setTimeout(4000);
-  if (!http.begin(String(BRAIN_SERVER_URL) + "/api/dev/poll")) return;
-  addBrainDeviceHeaders(http);
-  int code = http.GET();
-  if (code != 200) {
-    http.end();
-    return;
-  }
-
-  JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, http.getString());
-  http.end();
-  if (err) return;
-
-  applyServerPresentation(doc.as<JsonVariantConst>());
-  if (doc["cmd"].isNull()) return;
-
-  JsonObject cmd = doc["cmd"];
   const char *type = cmd["type"];
   if (!type) return;
 
@@ -1931,6 +1922,9 @@ void pollDevCommand() {
   if (strcmp(type, "face") == 0) {
     String em = cmd["emotion"] | "neutral";
     em.toLowerCase();
+#if USE_AURA
+    auraApplyEmotion(em.c_str(), cmd["intensity"] | 0.7f, cmd["hold_ms"] | 8000u);
+#endif
     face.setEmotion(emotionFromString(em));
     face.setBored(cmd["bored"] | false);
     uint32_t hold = cmd["hold_ms"] | (em == "vibing" ? 60000u : 8000u);
@@ -1956,6 +1950,9 @@ void pollDevCommand() {
     String text = cmd["text"] | "";
     String em = cmd["emotion"] | "happy";
     if (text.length() == 0) return;
+#if USE_AURA
+    auraApplyEmotion(em.c_str(), 0.75f);
+#endif
     face.setEmotion(emotionFromString(em));
     face.update();
     Serial.printf("dev speak [%s]: %s\n", em.c_str(), text.c_str());
@@ -1968,11 +1965,16 @@ void pollDevCommand() {
     String sid = cmd["story_id"] | "";
     String title = cmd["title"] | "";
     if (sid.length() == 0) return;
-    JsonArray timeline = cmd["timeline"].as<JsonArray>();
+    JsonArrayConst timeline = cmd["timeline"].as<JsonArrayConst>();
     if (!timeline.isNull()) storyLoadCues(timeline);
     Serial.printf("dev story: %s (%s) cues=%d\n", sid.c_str(), title.c_str(), g_storyCueCount);
     startStoryAsync(sid, title);
   }
+}
+
+void pollDevCommand() {
+  if (state != State::Sleeping) return;
+  g_brainTransport.poll(handleDevCommand);
 }
 
 // Spontaneous remark: ask the server for an in-character line and say it unprompted.

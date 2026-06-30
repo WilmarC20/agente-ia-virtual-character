@@ -10,9 +10,6 @@
 #include "speech_caption.h"
 #include "face_presentation.h"
 #include "face_kitt.h"
-#if USE_AURA
-#include "aura/AuraEngine.h"
-#endif
 
 enum class Emotion {
   Neutral, Happy, Sad, Angry, Surprised, Thinking, Sleepy,
@@ -353,7 +350,8 @@ public:
   bool kittSettingsHit(int sx, int sy) const {
     if (_presentation != FacePresentation::Kitt) return false;
 #if USE_AURA
-    return g_aura.hitSettingsP4(sx, sy);
+    extern bool auraHitSettingsP4(int sx, int sy);
+    return auraHitSettingsP4(sx, sy);
 #else
     const int x = KittUi::OVAL_R_X;
     const int y = KittUi::OVAL_Y0 + 3 * KittUi::OVAL_PITCH;
@@ -385,6 +383,7 @@ public:
     }
   }
   bool isTalking() const { return _talking; }
+  float mouthAmpSmooth() const { return _mouthAmpSmooth; }
 
   void setSinging(bool singing) {
     if (singing != _singing) {
@@ -641,7 +640,8 @@ private:
       ctx.vibingBandCount = kVibingBands;
     }
 #if USE_AURA
-    g_aura.drawKitt(_kittCanvas, ctx);
+    extern void auraDrawKitt(lgfx::LGFX_Sprite &canvas, const KittDrawCtx &ctx);
+    auraDrawKitt(_kittCanvas, ctx);
 #else
     drawKittDashboard(_kittCanvas, ctx);
 #endif

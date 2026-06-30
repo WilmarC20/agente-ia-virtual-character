@@ -9,7 +9,7 @@ agenteIA evolves from a monolithic ESP32 sketch + Python server into a **modular
 | **Device** | ESP32-S3 | AURA render, HAL, Event Bus, playback, wake/touch |
 | **Brain** | `server/` | Conversation, Personality, Behavior, Voice, plugins |
 
-Communication: HTTP poll today; WebSocket event stream (planned, poll fallback).
+Communication: HTTP long-poll (`/api/dev/poll-wait`) or short poll; WebSocket at `/ws/device` (send `{"op":"poll"}`).
 
 ## AURA (device)
 
@@ -25,10 +25,16 @@ Theme JSON (SPIFFS/SD) → ThemeManager + LayoutManager
 - Theme data in `themes/kitt/*.json` (colors, layout, labels, widgets, animations)
 - Labels: hybrid text — Michroma extended bitmap font (static); glyph atlas for dynamic text later
 
-### Phase 2+
+### Phase 2 (current)
 
-- SceneManager, ExpressionEngine, widget library (EmotionFace, VoiceIndicator, MusicPlayer, …)
-- Theme sync over WiFi from brain
+- `SceneManager`, `ExpressionEngine`, widget library stubs in `aura/widgets/`
+- Toast/Popup overlays on KITT dashboard
+
+### Phase 3 (current)
+
+- `hal/HalFacade.h` — display, touch, audio, local Event Bus
+- `brain_transport.h` — long-poll + poll fallback
+- Server: `transport/device_hub.py` WebSocket `/ws/device`
 
 ## Contracts (`sdk/contracts/`)
 

@@ -1,14 +1,22 @@
 #pragma once
 
-// Fase 2: consume EmotionState del cerebro y actualiza widgets/face.
+#include <Arduino.h>
+
+class Face;
+
+struct EmotionStatePacket {
+  const char *emotion = "neutral";
+  float intensity = 0.7f;
+  uint32_t recoveryMs = 8000;
+};
+
 class ExpressionEngine {
  public:
-  void setEmotion(const char *name, float intensity) {
-    (void)name;
-    _intensity = intensity;
-  }
-  float intensity() const { return _intensity; }
+  void bind(Face *face) { _face = face; }
+  void apply(const EmotionStatePacket &state);
+  const EmotionStatePacket &last() const { return _last; }
 
  private:
-  float _intensity = 0.5f;
+  Face *_face = nullptr;
+  EmotionStatePacket _last;
 };

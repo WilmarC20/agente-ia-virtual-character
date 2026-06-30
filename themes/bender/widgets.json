@@ -1,0 +1,8 @@
+{
+  "scene": "idle",
+  "widgets": [
+    { "id": "face.emotion", "type": "EmotionFace", "layout": "visor" },
+    { "id": "face.voice", "type": "VoiceIndicator", "layout": "mouth" },
+    { "id": "status.title", "type": "StatusCard", "layout": "titleStrip" }
+  ]
+}
