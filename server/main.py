@@ -75,8 +75,11 @@ from emotional_memory import EmotionalMemory
 from engines.device_manager import device_manager, VALID_DEV_EMOTIONS
 from engines.personality import with_device_context
 from engines.behavior import enrich_converse_response
-from transport.device_hub import device_hub
+from engines.plugin_loader import brain_bus, load_plugins, plugin_manager
+from engines.theme_service import list_themes, read_theme_file
+from engines.event_bus import EventEnvelope
 from engines.vision import analyze_frame_stub
+from transport.device_hub import device_hub
 
 SERVER_DIR = Path(__file__).resolve().parent
 CAPTURE_DIR = SERVER_DIR / "debug_audio"
@@ -710,6 +713,8 @@ async def lifespan(app: FastAPI):
         log.info("YouTube Data API v3: activa (busqueda oficial)")
     elif music.has_pytubefix():
         log.info("Musica: sin YOUTUBE_API_KEY — busqueda por ytmusic/yt-dlp")
+    n_plugins = load_plugins()
+    log.info("plugins loaded: %d", n_plugins)
     log.info("HTTP listo — aceptando ESP")
     if SINGING_ENABLED and sing.singing_configured():
         asyncio.create_task(asyncio.to_thread(sing.warm_bark_model))
@@ -1439,6 +1444,20 @@ async def vision_analyze(request: Request):
     data = await request.body()
     prompt = request.headers.get("X-Vision-Prompt", "")
     return analyze_frame_stub(data, prompt=prompt)
+
+
+@app.get("/api/themes")
+async def api_themes_list():
+    return {"ok": True, "themes": list_themes()}
+
+
+@app.get("/api/themes/{theme_id}/{filename}")
+async def api_theme_file(theme_id: str, filename: str):
+    result = read_theme_file(theme_id, filename)
+    if result is None:
+        return JSONResponse(status_code=404, content={"error": "not found"})
+    data, mime = result
+    return Response(content=data, media_type=mime, headers={"Cache-Control": "public, max-age=300"})
 
 
 @app.post("/converse/reset")
@@ -2584,6 +2603,27 @@ async def converse(request: Request):
                 "reply": cap_speech_text("No encontré esa canción.", sing=False),
                 "heard": text, "sing": False, "speak": True, "sound_effect": "none",
             }
+
+    plugin_hit = plugin_manager.try_intent(text)
+    if plugin_hit:
+        plugin_hit.setdefault("heard", text)
+        plugin_hit.setdefault("emotion", "happy")
+        plugin_hit.setdefault("speak", bool(plugin_hit.get("reply")))
+        plugin_hit.setdefault("sing", False)
+        plugin_hit.setdefault("sound_effect", "none")
+        if plugin_hit.get("reply"):
+            plugin_hit["reply"] = cap_speech_text(
+                prepare_spanish_text(str(plugin_hit["reply"])),
+                sing=bool(plugin_hit.get("sing")),
+            )
+        brain_bus.publish(EventEnvelope(
+            id=f"plugin-{int(time.time())}",
+            type="plugin.intent",
+            source="plugin_manager",
+            timestamp_ms=int(time.time() * 1000),
+            payload={"text": text, "plugin": plugin_hit},
+        ))
+        return enrich_converse_response(_with_device_context(plugin_hit))
 
     result = try_quick_reply(text)
     if result is not None:

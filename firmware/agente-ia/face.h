@@ -1855,6 +1855,11 @@ private:
       return;
     }
 
+#if USE_AURA
+    extern void auraOnBenderDraw(Face *self);
+    auraOnBenderDraw(this);
+#endif
+
     applyPresentationDisplay(false);
 
     if (_emotion == Emotion::Vibing) {

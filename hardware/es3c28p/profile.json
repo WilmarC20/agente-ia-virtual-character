@@ -1,0 +1,8 @@
+{
+  "board": "es3c28p",
+  "mcu": "esp32-s3",
+  "display": { "driver": "ili9341", "width": 240, "height": 320, "touch": "ft6336" },
+  "codec": "es8311",
+  "defaultPresentation": "bender",
+  "auraThemes": ["kitt", "bender"]
+}

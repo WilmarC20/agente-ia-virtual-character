@@ -33,6 +33,20 @@ class AuraEngine {
     _expression.apply(pkt);
   }
 
+  void onPresentation(const char *presentation) {
+    if (presentation && strcasecmp(presentation, "kitt") == 0) {
+      _theme.loadKittDefaults();
+      _layout.loadKittDefaults();
+      _scene.setScene(AuraScene::Dashboard);
+    } else {
+      _scene.setScene(AuraScene::Idle);
+    }
+  }
+
+  bool loadThemeColorsJson(const char *json, size_t len) {
+    return _theme.loadColorsFromJson(json, len);
+  }
+
   void showToast(const char *msg) { _toast.push(msg); }
   void showPopup(const char *msg, uint32_t ms = 3000) { _popup.show(msg, ms); }
 

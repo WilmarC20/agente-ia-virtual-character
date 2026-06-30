@@ -315,6 +315,9 @@ static String g_serverPresentation = "bender";
 static void applyServerPresentation(JsonVariantConst root) {
   const char *pres = root["presentation"] | "";
   if (!pres[0]) pres = root["personality"] | "bender";
+#if USE_AURA
+  auraOnPresentation(pres);
+#endif
   if (g_serverPresentation.equalsIgnoreCase(pres)) {
     face.setPresentationId(pres);
     return;
@@ -1093,6 +1096,9 @@ void setup() {
     Serial.print(".");
   }
   Serial.printf("\nWiFi OK: %s\n", WiFi.localIP().toString().c_str());
+#if USE_AURA
+  auraOnPresentation(g_serverPresentation.c_str());
+#endif
 
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
   if (!codec.begin(Wire)) {

@@ -6,4 +6,4 @@ Ejemplo de plugin del cerebro. Registra handlers en el Event Bus.
 from examples.hello_plugin.plugin import handle_intent, on_load
 ```
 
-Integración completa en `PluginManager` — Fase 6 (pendiente de cablear en `main.py`).
+Integración automática vía `engines/plugin_loader.py` al arrancar `main.py`.

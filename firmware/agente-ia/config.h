@@ -111,6 +111,8 @@ extern uint8_t g_activeDisplayRotation;
 #define USE_AURA            1
 // 1 = long-poll /api/dev/poll-wait; 0 = poll cada 2 s.
 #define ENABLE_DEVICE_LONG_POLL  1
+// 1 = descargar colors.json del cerebro al cambiar presentación.
+#define USE_AURA_THEME_SYNC      1
 // 0 = solo habla (TTS edge). 1 = intenta /agent/sing (Bark+RVC, muy lento).
 #define ENABLE_SINGING      0
 #define RECORD_MAX_SECONDS  8

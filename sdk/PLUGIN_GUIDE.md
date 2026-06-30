@@ -11,7 +11,7 @@
 
 1. Copiá `examples/hello-plugin/`.
 2. Implementá `handle_intent(text)` y `on_load(event_bus)`.
-3. Registrá el plugin en la config del servidor (próximo: `PluginManager`).
+3. Registrá el plugin en `examples/hello-plugin/` — se carga automáticamente al arrancar el servidor.
 
 ## Contratos
 
