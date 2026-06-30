@@ -43,6 +43,13 @@ server/debug_audio/
 server/out_test.wav
 server/err.txt
 
+# Documentación interna de checkpoint / migración (solo local, no remoto)
+PROJECT_SNAPSHOT.md
+RESTORE.md
+AURA_MIGRATION_PLAN.md
+CHANGELOG.md
+VERSION
+
 # IDE / agente / memoria local
 .cursor/
 .engram/
