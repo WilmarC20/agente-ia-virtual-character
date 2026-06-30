@@ -1,0 +1,10 @@
+{
+  "top": ["POWER", "MIN RPM", "FUEL ON", "IGNITORS"],
+  "leftOvals": ["AIR", "OIL", "P1", "P2"],
+  "rightOvals": ["S1", "S2", "P3", "P4"],
+  "bottom": {
+    "autoCruise": { "l1": "AUTO", "l2": "CRUISE" },
+    "normalCruise": { "l1": "NORMAL", "l2": "CRUISE" },
+    "pursuit": "PURSUIT"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "modulator": {
+    "idle": { "type": "static", "lit": "full" },
+    "talking": { "type": "pulse", "rate": 14.0, "min": 0.45, "max": 0.85 },
+    "listening": { "type": "pulse", "rate": 5.0, "min": 0.35, "max": 0.53 },
+    "vibing": { "type": "spectrum", "rate": 11.0 }
+  }
+}

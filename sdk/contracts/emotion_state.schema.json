@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agenteia://contracts/EmotionState",
+  "type": "object",
+  "required": ["emotion", "intensity"],
+  "properties": {
+    "emotion": { "type": "string" },
+    "intensity": { "type": "number", "minimum": 0, "maximum": 1 },
+    "duration_ms": { "type": "integer" },
+    "transition": { "type": "string", "enum": ["instant", "ease", "squint_blink"] },
+    "recovery_ms": { "type": "integer" }
+  }
+}

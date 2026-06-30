@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agenteia://contracts/IntentPacket",
+  "type": "object",
+  "required": ["text", "intent"],
+  "properties": {
+    "text": { "type": "string" },
+    "intent": { "type": "string" },
+    "tone": { "type": "string" },
+    "energy": { "type": "number", "minimum": 0, "maximum": 1 },
+    "urgency": { "type": "number", "minimum": 0, "maximum": 1 },
+    "silence_ok": { "type": "boolean", "default": true }
+  }
+}

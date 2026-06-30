@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agenteia://contracts/ActuationPlan",
+  "type": "object",
+  "properties": {
+    "face": {
+      "type": "object",
+      "properties": {
+        "emotion": { "type": "string" },
+        "intensity": { "type": "number" },
+        "brow_dy": { "type": "integer" },
+        "mouth_bow": { "type": "integer" },
+        "gaze_x": { "type": "integer" },
+        "gaze_y": { "type": "integer" }
+      }
+    },
+    "voice": { "type": "object" },
+    "micro": { "type": "array", "items": { "type": "string" } },
+    "timing": {
+      "type": "object",
+      "properties": {
+        "pre_ms": { "type": "integer" },
+        "post_ms": { "type": "integer" }
+      }
+    },
+    "scene": { "type": "string" },
+    "theme": { "type": "string" }
+  }
+}

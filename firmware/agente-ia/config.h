@@ -107,6 +107,8 @@ extern uint8_t g_activeDisplayRotation;
 #define I2S_MCLK_MULTIPLE   384     // ES8311 on ES3C28P: 16 kHz * 384 = 6.144 MHz MCLK
 #define AUDIO_SAMPLE_RATE   16000
 #define AUDIO_MCLK_HZ       (AUDIO_SAMPLE_RATE * I2S_MCLK_MULTIPLE)
+// 1 = KITT dashboard via AURA engine; 0 = legacy face_kitt.h direct path.
+#define USE_AURA            1
 // 0 = solo habla (TTS edge). 1 = intenta /agent/sing (Bark+RVC, muy lento).
 #define ENABLE_SINGING      0
 #define RECORD_MAX_SECONDS  8

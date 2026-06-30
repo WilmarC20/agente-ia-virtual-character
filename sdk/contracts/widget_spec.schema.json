@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agenteia://contracts/WidgetSpec",
+  "type": "object",
+  "required": ["id", "type"],
+  "properties": {
+    "id": { "type": "string" },
+    "type": {
+      "type": "string",
+      "enum": ["Button", "Label", "Gauge", "Spectrum", "VUMeter", "Waveform", "Clock", "Radar", "Notification", "Camera", "Sensor", "StatusCard", "Popup", "Toast", "Avatar", "EmotionFace", "VoiceIndicator", "MusicPlayer", "Timeline", "Card", "Menu"]
+    },
+    "layout": { "type": "string" },
+    "color": { "type": "string" },
+    "action": { "type": "string" }
+  }
+}

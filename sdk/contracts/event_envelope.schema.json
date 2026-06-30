@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agenteia://contracts/EventEnvelope",
+  "type": "object",
+  "required": ["id", "type", "source", "timestamp_ms", "payload"],
+  "properties": {
+    "id": { "type": "string" },
+    "type": { "type": "string" },
+    "source": { "type": "string" },
+    "timestamp_ms": { "type": "integer" },
+    "priority": { "type": "integer", "minimum": 0, "maximum": 100, "default": 50 },
+    "payload": { "type": "object" }
+  }
+}

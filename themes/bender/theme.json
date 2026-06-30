@@ -1,0 +1,9 @@
+{
+  "theme": "bender",
+  "id": "bender",
+  "name": "Bender Capsule",
+  "version": "0.0.1",
+  "canvas": { "width": 320, "height": 240 },
+  "orientation": "landscape",
+  "status": "planned"
+}

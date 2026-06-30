@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agenteia://contracts/ThemeManifest",
+  "type": "object",
+  "required": ["id", "version", "canvas"],
+  "properties": {
+    "id": { "type": "string" },
+    "name": { "type": "string" },
+    "version": { "type": "string" },
+    "orientation": { "type": "string", "enum": ["portrait", "landscape"] },
+    "canvas": {
+      "type": "object",
+      "required": ["width", "height"],
+      "properties": {
+        "width": { "type": "integer" },
+        "height": { "type": "integer" }
+      }
+    },
+    "assets": {
+      "type": "object",
+      "properties": {
+        "labels": { "type": "string" },
+        "icons": { "type": "string" },
+        "labelsAtlas": { "type": "string" },
+        "iconsAtlas": { "type": "string" }
+      }
+    }
+  }
+}

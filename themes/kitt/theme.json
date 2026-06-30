@@ -1,0 +1,8 @@
+{
+  "id": "kitt",
+  "name": "KITT Dashboard",
+  "version": "1.0.0",
+  "canvas": { "width": 240, "height": 320 },
+  "orientation": "portrait",
+  "description": "Knight Rider style HMI — 1:1 reference layout"
+}

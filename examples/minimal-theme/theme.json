@@ -1,0 +1,7 @@
+{
+  "id": "minimal",
+  "name": "Minimal Theme",
+  "version": "0.1.0",
+  "canvas": { "width": 240, "height": 320 },
+  "orientation": "portrait"
+}

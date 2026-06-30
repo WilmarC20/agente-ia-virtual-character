@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agenteia://contracts/SceneCommand",
+  "type": "object",
+  "required": ["scene"],
+  "properties": {
+    "scene": {
+      "type": "string",
+      "enum": ["boot", "idle", "conversation", "programming", "music", "guardian", "emergency", "camera", "dashboard", "sleep", "shutdown"]
+    },
+    "theme": { "type": "string" },
+    "transition_ms": { "type": "integer", "default": 0 }
+  }
+}

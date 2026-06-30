@@ -1,0 +1,21 @@
+{
+  "scene": "dashboard",
+  "widgets": [
+    { "id": "top.power", "type": "Button", "layout": "topBars", "index": 0, "color": "red" },
+    { "id": "top.minRpm", "type": "Button", "layout": "topBars", "index": 1, "color": "orange" },
+    { "id": "top.fuelOn", "type": "Button", "layout": "topBars", "index": 2, "color": "yellow" },
+    { "id": "top.ignitors", "type": "Button", "layout": "topBars", "index": 3, "color": "yellow" },
+    { "id": "oval.air", "type": "Button", "layout": "ovalLeft", "index": 0, "color": "yellow" },
+    { "id": "oval.oil", "type": "Button", "layout": "ovalLeft", "index": 1, "color": "yellow" },
+    { "id": "oval.p1", "type": "Button", "layout": "ovalLeft", "index": 2, "color": "pillOrange" },
+    { "id": "oval.p2", "type": "Button", "layout": "ovalLeft", "index": 3, "color": "pillOrange" },
+    { "id": "oval.s1", "type": "Button", "layout": "ovalRight", "index": 0, "color": "yellow" },
+    { "id": "oval.s2", "type": "Button", "layout": "ovalRight", "index": 1, "color": "yellow" },
+    { "id": "oval.p3", "type": "Button", "layout": "ovalRight", "index": 2, "color": "pillOrange" },
+    { "id": "oval.p4", "type": "Button", "layout": "ovalRight", "index": 3, "color": "pillOrange", "action": "settings" },
+    { "id": "modulator", "type": "VoiceIndicator", "layout": "modulator" },
+    { "id": "bottom.auto", "type": "Button", "layout": "bottomBars", "index": 0, "color": "orange" },
+    { "id": "bottom.normal", "type": "Button", "layout": "bottomBars", "index": 1, "color": "yellow" },
+    { "id": "bottom.pursuit", "type": "Button", "layout": "bottomBars", "index": 2, "color": "blue" }
+  ]
+}

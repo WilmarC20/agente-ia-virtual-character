@@ -10,6 +10,9 @@
 #include "speech_caption.h"
 #include "face_presentation.h"
 #include "face_kitt.h"
+#if USE_AURA
+#include "aura/AuraEngine.h"
+#endif
 
 enum class Emotion {
   Neutral, Happy, Sad, Angry, Surprised, Thinking, Sleepy,
@@ -349,9 +352,13 @@ public:
   // KITT: la configuración se abre tocando el botón inferior-derecho "P4".
   bool kittSettingsHit(int sx, int sy) const {
     if (_presentation != FacePresentation::Kitt) return false;
+#if USE_AURA
+    return g_aura.hitSettingsP4(sx, sy);
+#else
     const int x = KittUi::OVAL_R_X;
     const int y = KittUi::OVAL_Y0 + 3 * KittUi::OVAL_PITCH;
     return sx >= x && sx <= x + KittUi::OVAL_W && sy >= y && sy <= y + KittUi::OVAL_H;
+#endif
   }
 
   // Brief screen shake — the "got poked / hit" reaction.
@@ -633,7 +640,11 @@ private:
       ctx.vibingBands = _vibingBands;
       ctx.vibingBandCount = kVibingBands;
     }
+#if USE_AURA
+    g_aura.drawKitt(_kittCanvas, ctx);
+#else
     drawKittDashboard(_kittCanvas, ctx);
+#endif
     pushKittSprite();
     drawTopTitleOnScreen();
     // KITT no muestra el piñón: la configuración se abre tocando el botón "P4".

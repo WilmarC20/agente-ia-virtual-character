@@ -1,0 +1,20 @@
+{
+  "canvas": { "w": 240, "h": 320 },
+  "topBars": {
+    "x": 73, "w": 94, "h": 16, "pitch": 23, "y0": 5, "radius": 4
+  },
+  "ovals": {
+    "w": 44, "h": 26, "leftX": 12, "rightX": 184, "y0": 118, "pitch": 38
+  },
+  "modulator": {
+    "segW": 18, "segH": 4, "segGap": 2, "centerY": 158,
+    "cxLeft": 90, "cxMid": 120, "cxRight": 150,
+    "segSide": 15, "segMid": 19
+  },
+  "bottomBars": {
+    "x": 73, "w": 94, "h": 24, "pitch": 28, "y0": 230, "radius": 8
+  },
+  "hitZones": {
+    "settingsP4": { "x": 184, "y": 232, "w": 44, "h": 26 }
+  }
+}
