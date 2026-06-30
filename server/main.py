@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, File, Form, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile, WebSocket
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 
 # Un solo hilo OpenMP evita cuelgues de faster-whisper en Windows.
@@ -72,6 +72,11 @@ import music_service as music
 import story_mode as story_mod
 import context_manager
 from emotional_memory import EmotionalMemory
+from engines.device_manager import device_manager, VALID_DEV_EMOTIONS
+from engines.personality import with_device_context
+from engines.behavior import enrich_converse_response
+from transport.device_hub import device_hub
+from engines.vision import analyze_frame_stub
 
 SERVER_DIR = Path(__file__).resolve().parent
 CAPTURE_DIR = SERVER_DIR / "debug_audio"
@@ -219,10 +224,8 @@ def _attach_music_radio(result: dict, query: str, device_key: str) -> dict:
 
 
 def _with_device_context(payload: dict) -> dict:
-    """Añade personality + presentation para sincronizar la UI del ESP."""
-    payload["personality"] = srv_cfg.current_personality_id()
-    payload["presentation"] = srv_cfg.get_presentation()
-    return payload
+    """Compat — use engines.personality.with_device_context."""
+    return with_device_context(payload)
 
 
 async def synthesize_character_wav(text: str, *, sing_flag: bool = False, log_label: str = "TTS") -> bytes:
@@ -1220,12 +1223,6 @@ async def idle():
     return _with_device_context(result)
 
 
-_VALID_DEV_EMOTIONS = frozenset({
-    "neutral", "happy", "sad", "angry", "surprised", "thinking", "sleepy",
-    "love", "excited", "cool", "confused", "dizzy", "vibing",
-})
-
-
 @app.get("/dev", response_class=HTMLResponse)
 async def dev_panel_page():
     """Redirige al panel unificado (pestaña Pruebas)."""
@@ -1250,13 +1247,22 @@ async def face_preview_js():
 @app.get("/api/dev/poll")
 async def dev_poll():
     """El ESP32 consulta cada ~2 s; devuelve el siguiente comando en cola o cmd=null."""
-    async with _dev_lock:
-        payload = _with_device_context({})
-        if not _dev_queue:
-            payload["cmd"] = None
-            return payload
-        payload["cmd"] = _dev_queue.popleft()
-        return payload
+    return await device_manager.poll()
+
+
+@app.get("/api/dev/poll-wait")
+async def dev_poll_wait(timeout: float = Query(25.0, ge=0.5, le=60.0)):
+    """Long-poll: bloquea hasta timeout o hasta que haya un comando."""
+    return await device_manager.poll_wait(timeout)
+
+
+@app.websocket("/ws/device")
+async def ws_device(websocket: WebSocket):
+    """WebSocket alternativo a poll — envía JSON con cmd o contexto."""
+    await device_hub.handle(websocket)
+
+
+_VALID_DEV_EMOTIONS = VALID_DEV_EMOTIONS  # compat for admin panel helpers
 
 
 @app.post("/api/dev/face")
@@ -1266,25 +1272,12 @@ async def dev_face(request: Request):
         body = await request.json()
     except Exception:
         return JSONResponse(status_code=400, content={"error": "invalid json"})
-    emotion = str(body.get("emotion", "neutral")).strip().lower()
-    if emotion not in _VALID_DEV_EMOTIONS:
-        return JSONResponse(status_code=400, content={"error": f"unknown emotion: {emotion}"})
-    bored = bool(body.get("bored", False))
-    hold_ms = max(1000, min(120000, int(body.get("hold_ms", 8000))))
-    cmd = {"type": "face", "emotion": emotion, "bored": bored, "hold_ms": hold_ms}
-    vmic = body.get("vibing_mic")
-    if vmic is not None:
-        vmic = max(50, min(300, int(vmic)))
-        cmd["vibing_mic"] = vmic
-    vflo = body.get("vibing_floor")
-    if vflo is not None:
-        cmd["vibing_floor"] = max(0, min(500, int(vflo)))
-    vcei = body.get("vibing_ceil")
-    if vcei is not None:
-        cmd["vibing_ceil"] = max(200, min(900, int(vcei)))
-    async with _dev_lock:
-        _dev_queue.append(cmd)
-        qlen = len(_dev_queue)
+    cmd, qlen, err = await device_manager.queue_face(body)
+    if err:
+        return JSONResponse(status_code=400, content={"error": err})
+    emotion = cmd["emotion"]
+    bored = cmd.get("bored", False)
+    hold_ms = cmd.get("hold_ms", 8000)
     log.info("dev face queued: %s bored=%s hold=%dms (queue=%d)", emotion, bored, hold_ms, qlen)
     return {"ok": True, "queued": qlen, "cmd": cmd}
 
@@ -1296,19 +1289,10 @@ async def dev_speak(request: Request):
         body = await request.json()
     except Exception:
         return JSONResponse(status_code=400, content={"error": "invalid json"})
-    text = str(body.get("text", "")).strip()
-    if not text:
-        return JSONResponse(status_code=400, content={"error": "empty text"})
-    if len(text) > 500:
-        text = text[:497] + "..."
-    emotion = str(body.get("emotion", "happy")).strip().lower()
-    if emotion not in _VALID_DEV_EMOTIONS:
-        emotion = "happy"
-    cmd = {"type": "speak", "text": text, "emotion": emotion}
-    async with _dev_lock:
-        _dev_queue.append(cmd)
-        qlen = len(_dev_queue)
-    log.info("dev speak queued [%s]: %s (queue=%d)", emotion, text[:80], qlen)
+    cmd, qlen, err = await device_manager.queue_speak(body)
+    if err:
+        return JSONResponse(status_code=400, content={"error": err})
+    log.info("dev speak queued [%s]: %s (queue=%d)", cmd["emotion"], cmd["text"][:80], qlen)
     return {"ok": True, "queued": qlen, "cmd": cmd}
 
 
@@ -1362,12 +1346,7 @@ async def dev_story(request: Request):
         "timeline": timeline,
         "duration_ms": dur_ms,
     }
-    async with _dev_lock:
-        if priority:
-            _dev_queue.appendleft(cmd)
-        else:
-            _dev_queue.append(cmd)
-        qlen = len(_dev_queue)
+    qlen = await device_manager.queue_story(cmd, priority=priority)
     log.info(
         "dev story queued id=%s title=%r beats=%d dur=%dms (queue=%d)",
         story_id,
@@ -1422,32 +1401,14 @@ async def story_play_esp(id: str = Query("", alias="id")):
 
 @app.get("/api/dev/status")
 async def dev_status():
-    async with _dev_lock:
-        pending = list(_dev_queue)
-    return {"ok": True, "pending": len(pending), "queue": pending}
+    return await device_manager.status()
 
 
 @app.post("/api/dev/clear")
 async def dev_clear():
-    async with _dev_lock:
-        n = len(_dev_queue)
-        _dev_queue.clear()
+    n = await device_manager.clear()
     return {"ok": True, "cleared": n}
 
-
-_NOTIFY_KIND_EMOTIONS: dict[str, str] = {
-    "agent_blocked": "thinking",
-    "ask_question": "confused",
-    "subagent_done": "happy",
-    "ci_failed": "sad",
-    "approval_needed": "surprised",
-    "stop_failure": "sad",
-    "elicitation": "confused",
-    "task_completed": "happy",
-    "agent": "thinking",
-}
-_notify_last: dict[str, float] = {}
-_NOTIFY_COOLDOWN_S = 45.0
 
 
 @app.post("/api/dev/notify")
@@ -1457,52 +1418,27 @@ async def dev_notify(request: Request):
         body = await request.json()
     except Exception:
         return JSONResponse(status_code=400, content={"error": "invalid json"})
-    kind = str(body.get("kind", "agent")).strip().lower()[:64] or "agent"
-    context = body.get("context") if isinstance(body.get("context"), dict) else {}
-    message = str(body.get("message", "")).strip()
-    generated = None
-    if not message:
-        generated = srv_cfg.notify_reply(kind, context=context)
-        message = generated["reply"]
-    if not message:
-        return JSONResponse(status_code=400, content={"error": "empty message"})
-    message = cap_speech_text(prepare_spanish_text(message), sing=False)
-    emotion = str(body.get("emotion", "")).strip().lower()
-    if not emotion or emotion not in _VALID_DEV_EMOTIONS:
-        if generated:
-            emotion = generated["emotion"]
-        else:
-            emotion = _NOTIFY_KIND_EMOTIONS.get(kind, "thinking")
-    if emotion not in _VALID_DEV_EMOTIONS:
-        emotion = "thinking"
-    speak = bool(body.get("speak", True))
-    priority = bool(body.get("priority", kind in (
-        "agent_blocked", "approval_needed", "ask_question", "stop_failure", "elicitation",
-    )))
-    pid = srv_cfg.current_personality_id()
-    dedupe_key = str(body.get("dedupe_key", f"{kind}:{pid}"))
-    now = time.time()
-    last = _notify_last.get(dedupe_key, 0.0)
-    if now - last < _NOTIFY_COOLDOWN_S:
-        return {"ok": True, "skipped": True, "reason": "cooldown", "kind": kind}
-    _notify_last[dedupe_key] = now
-
-    cmd: dict[str, Any] = {"type": "speak", "text": message, "emotion": emotion} if speak else {
-        "type": "face",
-        "emotion": emotion,
-        "hold_ms": max(3000, min(120000, int(body.get("hold_ms", 15000)))),
-    }
-    async with _dev_lock:
-        if priority:
-            _dev_queue.appendleft(cmd)
-        else:
-            _dev_queue.append(cmd)
-        qlen = len(_dev_queue)
-    log.info(
-        "dev notify [%s] personality=%s %s speak=%s priority=%s (queue=%d)",
-        kind, pid, message[:80], speak, priority, qlen,
+    result = await device_manager.notify(
+        body, cap_speech_text=cap_speech_text, prepare_spanish_text=prepare_spanish_text,
     )
-    return {"ok": True, "queued": qlen, "kind": kind, "personality": pid, "cmd": cmd}
+    if result.get("error"):
+        return JSONResponse(status_code=400, content=result)
+    if result.get("skipped"):
+        return result
+    cmd = result.get("cmd", {})
+    log.info(
+        "dev notify [%s] personality=%s speak=%s (queue=%d)",
+        result.get("kind"), result.get("personality"), cmd.get("type"), result.get("queued", 0),
+    )
+    return result
+
+
+@app.post("/api/vision/analyze")
+async def vision_analyze(request: Request):
+    """Stub Vision Engine — análisis de frame JPEG/PNG."""
+    data = await request.body()
+    prompt = request.headers.get("X-Vision-Prompt", "")
+    return analyze_frame_stub(data, prompt=prompt)
 
 
 @app.post("/converse/reset")
@@ -1631,9 +1567,7 @@ DEV_PANEL_HTML = SERVER_DIR / "dev_panel.html"
 FACE_PREVIEW_JS = SERVER_DIR / "face_preview.js"
 GESTURES_PREVIEW_HTML = REPO_DIR / "firmware" / "agente-ia" / "gestures-preview.html"
 
-# Cola de comandos de prueba (cara / hablar) que el ESP consume con GET /api/dev/poll.
-_dev_queue: deque[dict[str, Any]] = deque()
-_dev_lock = asyncio.Lock()
+# Cola de comandos de prueba: ver engines.device_manager.device_manager
 _DEBUG_AUDIO_NAMES = frozenset(
     {
         "last_sing_guide.wav",
@@ -2672,5 +2606,5 @@ async def converse(request: Request):
             if isinstance(m, dict):
                 mq = m.get("title") or ""
         result = _attach_music_radio(result, str(mq), _device_key(request))
-    return _with_device_context(result)
+    return enrich_converse_response(_with_device_context(result))
 
