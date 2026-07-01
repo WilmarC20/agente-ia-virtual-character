@@ -32,6 +32,9 @@ class AnimationEngine {
         {L.colCxRight, L.colSegSide, 2.1f},
     };
 
+    const uint16_t activeSeg = ctx.listening ? theme.blue : theme.red;
+    const uint16_t offSeg = ctx.listening ? 0x0010 : theme.segmentOff;
+
     auto drawColumn = [&](int cx, int maxSeg, int lit) {
       const int totalH = maxSeg * L.segH + (maxSeg - 1) * L.segGap;
       const int topY = L.colCenterY - totalH / 2;
@@ -42,22 +45,16 @@ class AnimationEngine {
       for (int i = 0; i < maxSeg; i++) {
         const int y = topY + i * (L.segH + L.segGap);
         const bool on = (lit > 0) && (i >= firstLit) && (i <= lastLit);
-        r.fillRect(x, y, L.segW, L.segH, on ? theme.red : theme.segmentOff);
+        r.fillRect(x, y, L.segW, L.segH, on ? activeSeg : offSeg);
       }
     };
 
     if (!active) {
-      for (const auto &col : cols) drawColumn(col.cx, col.maxSeg, col.maxSeg);
+      // Reposo KITT: modulador recogido, con una sola marca en la columna central.
+      drawColumn(cols[0].cx, cols[0].maxSeg, 0);
+      drawColumn(cols[1].cx, cols[1].maxSeg, 1);
+      drawColumn(cols[2].cx, cols[2].maxSeg, 0);
       return;
-    }
-
-    float amp = ctx.mouthAmp / 100.0f;
-    if (ctx.talking) {
-      amp = max(amp, 0.45f + 0.4f * sinf(t * 14.0f));
-    } else if (ctx.listening) {
-      amp = 0.35f + 0.18f * sinf(t * 5.0f);
-    } else {
-      amp = max(amp, 0.25f + 0.1f * sinf(t * 2.0f));
     }
 
     if (hasVibing) {
@@ -74,10 +71,17 @@ class AnimationEngine {
       return;
     }
 
+    // Amplitud REAL del sonido: durante TTS viene del RMS de reproducción y, al
+    // escuchar, del micrófono (ambas vía ctx.mouthAmp). Sin pisos sintéticos: las
+    // barras siguen el audio (en silencio caen, en sílabas fuertes suben).
+    float amp = ctx.mouthAmp / 100.0f;
+    if (amp < 0.0f) amp = 0.0f;
+    if (amp > 1.0f) amp = 1.0f;
+    amp = powf(amp, 0.7f);  // curva perceptual: el habla normal llena bien las barras
+
     for (const auto &col : cols) {
-      const float level = 0.25f + 0.75f * amp;
-      const float wob = sinf(t * 12.0f + col.phase) * 2.2f;
-      drawColumn(col.cx, col.maxSeg, litCenterOut(col.maxSeg, level, wob));
+      const float wob = sinf(t * 9.0f + col.phase) * (0.4f + 1.6f * amp);
+      drawColumn(col.cx, col.maxSeg, litCenterOut(col.maxSeg, amp, wob));
     }
   }
 };

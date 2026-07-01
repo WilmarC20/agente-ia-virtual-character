@@ -66,7 +66,13 @@ class AuraEngine {
   void showPopup(const char *msg, uint32_t ms = 3000) { _popup.show(msg, ms); }
 
   void drawKitt(lgfx::LGFX_Sprite &canvas, const KittDrawCtx &ctx) {
-    _renderer.drawKitt(canvas, ctx, _scene.scene(), _theme, _layout, _anim, _dashboard, _music, _status);
+    KittButton active = KittButton::None;
+    if (_activeButton != KittButton::None && millis() < _activeButtonUntil) active = _activeButton;
+    const bool musicUi = (_scene.scene() == AuraScene::Music) || _music.playing();
+    const char *mt = musicUi ? _music.title().c_str() : nullptr;
+    const char *ms = musicUi && _music.status().length() ? _music.status().c_str() : nullptr;
+    _renderer.drawKitt(canvas, ctx, _scene.scene(), _theme, _layout, _anim, _dashboard, _music, _status, active,
+                       mt, ms);
     _toast.draw(canvas, _layout.layout().canvasW, _theme.theme());
     _popup.draw(canvas, _layout.layout().canvasW, _layout.layout().canvasH, _theme.theme());
   }
@@ -74,6 +80,15 @@ class AuraEngine {
   bool hitSettingsP4(int sx, int sy) const {
     AuraRect z = _layout.hitZoneSettingsP4();
     return sx >= z.x && sx <= z.x + z.w && sy >= z.y && sy <= z.y + z.h;
+  }
+
+  KittButton hitKittButton(int sx, int sy) const {
+    return _layout.hitKittButton(sx, sy);
+  }
+
+  void setActiveKittButton(KittButton btn, uint32_t ms = 550) {
+    _activeButton = btn;
+    _activeButtonUntil = (btn == KittButton::None) ? 0 : millis() + ms;
   }
 
   int canvasW() const { return _layout.layout().canvasW; }
@@ -94,6 +109,8 @@ class AuraEngine {
   ToastWidget _toast;
   MusicPlayerWidget _music;
   StatusCardWidget _status;
+  KittButton _activeButton = KittButton::None;
+  uint32_t _activeButtonUntil = 0;
 };
 
 #include "ExpressionEngine_impl.h"

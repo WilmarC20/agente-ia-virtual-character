@@ -70,3 +70,38 @@ def normalize_heard_ascii(text: str) -> str:
     t = normalize_heard(text)
     t = unicodedata.normalize("NFD", t)
     return "".join(c for c in t if unicodedata.category(c) != "Mn")
+
+
+# Whisper suele confundir «emisora» con «misora», «emisor», etc.
+_RADIO_MISHEARINGS: tuple[tuple[str, str], ...] = (
+    (
+        r"(?i)\b(reproduc\w*|escuch\w*|pon(?:e|é|me|er|ga|gan)?|sintoniz\w*)\s+en\s+(?:la\s+)?(?:misora|mizora|emisora)\b",
+        r"\1 la emisora",
+    ),
+    (r"(?i)\ben\s+misora\b", "en emisora"),
+    (r"(?i)\bla\s+misora\b", "la emisora"),
+    (r"(?i)\bmisoras?\b", "emisora"),
+    (r"(?i)\bmizoras?\b", "emisora"),
+    (r"(?i)\bemisoro\b", "emisora"),
+    (r"(?i)\bemissora\b", "emisora"),
+    (r"(?i)\bhe\s+misora\b", "emisora"),
+    (r"(?i)\bhemisora\b", "emisora"),
+    (r"(?i)\bemisor\b", "emisora"),
+    (r"(?i)\ben\s+mizora\b", "en emisora"),
+    (r"(?i)\bla\s+mizora\b", "la emisora"),
+)
+
+
+def fix_radio_transcription(text: str) -> str:
+    """Corrige en texto crudo las variantes típicas de Whisper para emisora/radio."""
+    if not text:
+        return text
+    out = prepare_spanish_text(text)
+    for pat, repl in _RADIO_MISHEARINGS:
+        out = re.sub(pat, repl, out)
+    return out
+
+
+def normalize_radio_speech(text: str) -> str:
+    """Texto normalizado listo para detectar comandos de radio/emisora."""
+    return normalize_heard(fix_radio_transcription(text or ""))

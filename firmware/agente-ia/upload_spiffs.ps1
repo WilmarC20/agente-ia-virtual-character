@@ -14,15 +14,15 @@ if (-not (Test-Path $mkspiffs)) { throw "mkspiffs not found: $mkspiffs" }
 if (-not (Test-Path $esptool)) { throw "esptool not found: $esptool" }
 if (-not (Test-Path $dataDir)) { throw "data folder missing: $dataDir" }
 
-$wavCount = (Get-ChildItem $dataDir -Filter *.wav).Count
-if ($wavCount -eq 0) { throw "No .wav files in $dataDir" }
+$fileCount = (Get-ChildItem $dataDir -File).Count
+if ($fileCount -eq 0) { throw "No files in $dataDir" }
 
 $port = if ($env:ESP_PORT) { $env:ESP_PORT } else { "COM18" }
 $spiffsOffset = "0x610000"
 $spiffsSize = 0x700000
 
-Write-Host "Building SPIFFS image from $dataDir ($wavCount wav files)..."
-Get-ChildItem $dataDir -Filter *.wav | ForEach-Object { Write-Host "  $($_.Name) ($($_.Length) bytes)" }
+Write-Host "Building SPIFFS image from $dataDir ($fileCount files)..."
+Get-ChildItem $dataDir -File | ForEach-Object { Write-Host "  $($_.Name) ($($_.Length) bytes)" }
 
 & $mkspiffs -c $dataDir -b 4096 -p 256 -s $spiffsSize $outBin
 if (-not (Test-Path $outBin)) { throw "mkspiffs did not create $outBin" }

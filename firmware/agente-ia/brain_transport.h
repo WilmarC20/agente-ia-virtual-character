@@ -7,24 +7,36 @@
 #include "secrets.h"
 #include "brain_ws_client.h"
 
-// Transporte cerebro ↔ dispositivo: long-poll con fallback a poll corto.
+// Transporte cerebro ↔ dispositivo: WebSocket persistente con fallback HTTP.
 class BrainTransport {
  public:
   using CommandHandler = void (*)(JsonObjectConst cmd, JsonVariantConst root);
 
   void setHandler(CommandHandler fn) { _handler = fn; }
 
+  void pumpWs() {
+#if ENABLE_DEVICE_WS
+    brainWsClient().pump();
+#endif
+  }
+
+  // NO bloqueante: mantiene un poll_wait en vuelo sobre el WS persistente y
+  // despacha la respuesta cuando llega (vía pump()). El loop sigue muestreando
+  // el touch en cada iteración — sin esto el long-poll congelaba la pantalla.
   bool poll(CommandHandler fn = nullptr) {
     if (WiFi.status() != WL_CONNECTED) return false;
     CommandHandler h = fn ? fn : _handler;
     if (!h) return false;
 
 #if ENABLE_DEVICE_WS
-    static BrainWsClient ws;
-    if (ws.pollWait(h, 3)) return true;
-#endif
-#if ENABLE_DEVICE_LONG_POLL
-    return pollWait(h, 3);
+    return brainWsClient().pollNonBlocking(h);
+#elif ENABLE_DEVICE_LONG_POLL
+    // Fallback HTTP: poll corto y con throttle, nunca el long-poll bloqueante.
+    static uint32_t lastPoll = 0;
+    const uint32_t now = millis();
+    if (now - lastPoll < 1500) return false;
+    lastPoll = now;
+    return pollOnce(h);
 #else
     static uint32_t lastPoll = 0;
     const uint32_t now = millis();

@@ -200,15 +200,6 @@ inline void drawModulator(lgfx::LGFX_Sprite &c, const KittDrawCtx &ctx) {
     return;
   }
 
-  float amp = ctx.mouthAmp / 100.0f;
-  if (ctx.talking) {
-    amp = max(amp, 0.45f + 0.4f * sinf(t * 14.0f));
-  } else if (ctx.listening) {
-    amp = 0.35f + 0.18f * sinf(t * 5.0f);
-  } else {
-    amp = max(amp, 0.25f + 0.1f * sinf(t * 2.0f));
-  }
-
   if (hasVibing) {
     const int per = ctx.vibingBandCount / 3;
     for (int i = 0; i < 3; i++) {
@@ -223,10 +214,15 @@ inline void drawModulator(lgfx::LGFX_Sprite &c, const KittDrawCtx &ctx) {
     return;
   }
 
+  // Amplitud REAL del sonido (TTS por RMS de reproducción, escucha por micrófono).
+  float amp = ctx.mouthAmp / 100.0f;
+  if (amp < 0.0f) amp = 0.0f;
+  if (amp > 1.0f) amp = 1.0f;
+  amp = powf(amp, 0.7f);
+
   for (const auto &col : cols) {
-    const float level = 0.25f + 0.75f * amp;
-    const float wob = sinf(t * 12.0f + col.phase) * 2.2f;
-    drawColumn(c, col.cx, col.maxSeg, litCenterOut(col.maxSeg, level, wob));
+    const float wob = sinf(t * 9.0f + col.phase) * (0.4f + 1.6f * amp);
+    drawColumn(c, col.cx, col.maxSeg, litCenterOut(col.maxSeg, amp, wob));
   }
 }
 

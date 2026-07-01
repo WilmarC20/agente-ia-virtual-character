@@ -10,6 +10,12 @@
 #include "speech_caption.h"
 #include "face_presentation.h"
 #include "face_kitt.h"
+#include "touch_calib.h"
+#include "touch_debug.h"
+
+#if USE_AURA
+bool auraKittMusicUi();
+#endif
 
 enum class Emotion {
   Neutral, Happy, Sad, Angry, Surprised, Thinking, Sleepy,
@@ -106,22 +112,25 @@ public:
 
   // Título superpuesto SOBRE la cara (música/historia). Se dibuja DENTRO del sprite
   // (doble búfer) => transparente sobre el fondo, sin recuadro negro ni parpadeo.
-  void setTopTitle(const String &t) {
+  void setTopTitle(const String &t, uint16_t color = TFT_CYAN) {
     String safe;
     foldSpanishAscii(t, safe);
     if (safe.length() == 0) safe = t;
-    if (safe == _topTitleRaw) return;
+    if (safe == _topTitleRaw && color == _topTitleColor) return;
     _topTitleRaw = safe;
+    _topTitleColor = color;
     // Precalcular layout UNA vez (recorte + X centrado). Hacerlo por-frame con textWidth()
     // robaba CPU al loop de audio y causaba underrun (golpe rítmico) en música/historia.
     _canvas.setFont(&fonts::DejaVu12);
     String line = safe;
-    while (line.length() > 1 && _canvas.textWidth(line) > FACE_DESIGN_W - 12) {
+    const int maxW = (_presentation == FacePresentation::Kitt) ? (KittUi::CANVAS_W - 12) : (FACE_DESIGN_W - 12);
+    while (line.length() > 1 && _canvas.textWidth(line) > maxW) {
       line = line.substring(0, line.length() - 1);
     }
-    int w = _canvas.textWidth(line);
+    const int w = _canvas.textWidth(line);
     _topTitle = line;
-    _topTitleX = (FACE_DESIGN_W - w) / 2;
+    const int baseW = (_presentation == FacePresentation::Kitt) ? KittUi::CANVAS_W : FACE_DESIGN_W;
+    _topTitleX = (baseW - w) / 2;
     if (_topTitleX < 2) _topTitleX = 2;
     _dirty = true;
   }
@@ -449,6 +458,10 @@ public:
   void update() {
     uint32_t now = millis();
     bool changed = false;
+    if (touchCalibActive().showDebug) {
+      int rawX, rawY;
+      if (touchReadRaw(rawX, rawY)) _dirty = true;
+    }
     if (now < _shakeUntil) _dirty = true;   // keep redrawing while the shake animates
 
     if (_emotion != Emotion::Vibing && !_singing && now >= _nextBlinkAt && now >= _blinkEndAt) {
@@ -536,10 +549,21 @@ public:
     }
 
     if (_dirty) { draw(); _dirty = false; }
+    touchDebugStampIfTouching(_gfx);
   }
 
   // Mensajes de estado (Pensando..., errores). No borra caption de respuesta pendiente.
   void showText(const String &text, uint16_t color = TFT_WHITE) {
+    if (_presentation == FacePresentation::Kitt) {
+      if (text.length() == 0) {
+        clearTopTitle();
+      } else {
+        setTopTitle(text, color);
+      }
+      draw();
+      _dirty = false;
+      return;
+    }
     int y = FACE_OFFSET_Y + FACE_H + 2;
     _gfx.fillRect(0, y, _gfx.width(), _gfx.height() - y, TFT_BLACK);
     if (text.length() == 0) {
@@ -563,13 +587,17 @@ public:
   }
 
   void drawMicLevel(uint32_t rms) {
+    if (_presentation == FacePresentation::Kitt) return;
     const int h = 8, w = _gfx.width(), y = _gfx.height() - h;
     int level = (int)(rms * w / 1200);
     if (level > w) level = w;
     _gfx.fillRect(0, y, level, h, (level > w * 2 / 3) ? TFT_RED : TFT_GREEN);
     _gfx.fillRect(level, y, w - level, h, 0x2104);
   }
-  void clearMicLevel() { _gfx.fillRect(0, _gfx.height() - 8, _gfx.width(), 8, TFT_BLACK); }
+  void clearMicLevel() {
+    if (_presentation == FacePresentation::Kitt) return;
+    _gfx.fillRect(0, _gfx.height() - 8, _gfx.width(), 8, TFT_BLACK);
+  }
 
 private:
   lgfx::LGFX_Device &_gfx;
@@ -578,6 +606,7 @@ private:
   Emotion _emotion = Emotion::Sleepy;
   String _topTitle;
   String _topTitleRaw;
+  uint16_t _topTitleColor = TFT_CYAN;
   int _topTitleX = 2;
   bool _dirty = true, _talking = false, _singing = false, _showGear = false, _bored = false;
   bool _listening = false;
@@ -646,7 +675,10 @@ private:
     drawKittDashboard(_kittCanvas, ctx);
 #endif
     pushKittSprite();
-    drawTopTitleOnScreen();
+#if USE_AURA
+    if (!auraKittMusicUi())
+#endif
+      drawTopTitleOnScreen();
     // KITT no muestra el piñón: la configuración se abre tocando el botón "P4".
   }
 
@@ -1618,10 +1650,14 @@ private:
     if (_topTitle.length() == 0) return;
     _gfx.setFont(&fonts::DejaVu12);
     _gfx.setTextWrap(false);
-    _gfx.setTextColor(TFT_CYAN, TFT_BLACK);
+    _gfx.setTextColor(_topTitleColor, TFT_BLACK);
+    const int boxY = 94;
+    const int boxH = 20;
+    _gfx.fillRoundRect(12, boxY, _gfx.width() - 24, boxH, 5, TFT_BLACK);
+    _gfx.drawRoundRect(12, boxY, _gfx.width() - 24, boxH, 5, 0x4208);
     int tx = (_gfx.width() - _gfx.textWidth(_topTitle)) / 2;
     if (tx < 2) tx = 2;
-    _gfx.setCursor(tx, 2);
+    _gfx.setCursor(tx, boxY + 4);
     _gfx.print(_topTitle);
   }
 

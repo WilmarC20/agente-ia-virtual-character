@@ -4,6 +4,7 @@
 #include <FS.h>
 #include <SPIFFS.h>
 #include "config.h"
+#include "../spiffs_mount.h"
 #include "ThemeManager.h"
 
 // Cache de temas en SPIFFS (/aura/themes/<id>/).
@@ -11,7 +12,7 @@ class ThemeStore {
  public:
   bool begin() {
     if (_ready) return true;
-    _ready = SPIFFS.begin(false, SPIFFS_PARTITION_LABEL);
+    _ready = ensureProjectSpiffs();
     return _ready;
   }
 

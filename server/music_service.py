@@ -689,6 +689,14 @@ def probe_track_meta(video_id: str) -> dict[str, Any]:
     vid = (video_id or "").strip()
     if not vid:
         raise ValueError("video_id inválido")
+    if vid.startswith("tune:"):
+        meta = _TUNE_META_BY_ID.get(vid, {})
+        return {
+            "id": vid,
+            "title": meta.get("title") or "Radio",
+            "artist": meta.get("artist") or "",
+            "duration_sec": None,
+        }
 
     if has_youtube_api():
         meta = _probe_track_meta_youtube_api(vid)
@@ -1343,12 +1351,14 @@ def _open_cached_file_pcm(video_id: str) -> tuple[Iterator[bytes], bytes, list[s
     return _open_file_pcm(path, realtime=False)
 
 
-def _open_direct_url_pcm(stream_url: str) -> tuple[Iterator[bytes], bytes, list[subprocess.Popen[Any]]]:
+def _open_direct_url_pcm(
+    stream_url: str, *, realtime: bool = True
+) -> tuple[Iterator[bytes], bytes, list[subprocess.Popen[Any]]]:
     procs: list[subprocess.Popen[Any]] = []
     try:
         ff_proc = _popen_local(
             procs,
-            _ffmpeg_pcm_cmd(input_arg=stream_url, from_pipe=False, realtime=True),
+            _ffmpeg_pcm_cmd(input_arg=stream_url, from_pipe=False, realtime=realtime),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -1479,6 +1489,14 @@ def should_warm_ytdlp_ejs() -> bool:
 def _open_pcm_stream_impl(video_id: str) -> tuple[Iterator[bytes], bytes, list[subprocess.Popen[Any]]]:
     """Carrera en paralelo: piped, ytmusic, yt-dlp URL, yt-dlp pipe — gana el primero con audio."""
     ensure_playback_allowed()
+
+    vid = (video_id or "").strip()
+    if vid.startswith("tune:"):
+        stream_url = _TUNE_URL_BY_ID.get(vid)
+        if not stream_url:
+            raise RuntimeError(f"emisora tuning desconocida: {vid}")
+        log.info("music open tuning stream id=%s", vid)
+        return _open_direct_url_pcm(stream_url, realtime=False)
 
     page_url = _video_url(video_id)
     if skip_pytubefix() and has_yt_dlp():
@@ -1634,7 +1652,7 @@ def _open_pcm_stream_impl(video_id: str) -> tuple[Iterator[bytes], bytes, list[s
 def prefetch_pcm_stream(video_id: str) -> None:
     """Precalienta yt-dlp|ffmpeg al pulsar ▶ en admin (antes del GET del ESP)."""
     vid = (video_id or "").strip()
-    if not vid:
+    if not vid or is_live_radio_id(vid):
         return
     with _prefetch_lock:
         entry = _prefetch.get(vid)
@@ -1855,6 +1873,435 @@ def iter_wav_16k_stream(video_id: str) -> Iterator[bytes]:
 
 # --- Radio / autoplay (parlante inteligente) ---------------------------------
 
+# TuneIn (opml.radiotime.com) — streaming API usada por https://tunein.com
+TUNEIN_BASE = (os.environ.get("TUNEIN_OPML_BASE") or "https://opml.radiotime.com").rstrip("/")
+TUNEIN_UA = "agenteIA/1.0 (TuneIn radio)"
+TUNEIN_TIMEOUT_S = float(os.environ.get("TUNEIN_TIMEOUT_S", "12"))
+TUNEIN_LOCALE = (os.environ.get("TUNEIN_LOCALE") or "es-ES").strip()
+TUNEIN_SEARCH_LIMIT = max(3, min(20, int(os.environ.get("TUNEIN_SEARCH_LIMIT", "12"))))
+
+# Tuning local: alias hablado → búsqueda TuneIn (o stream_url / tunein_id directo).
+_RADIO_TUNING: dict[str, dict[str, str]] = {
+    "la fm": {
+        "title": "La FM Colombia",
+        "search": "La FM Colombia RCN",
+        "tunein_id": "s337388",
+        "country": "CO",
+    },
+    "los 40": {
+        "title": "Los 40 Principales",
+        "search": "Los 40 Argentina",
+        "tunein_id": "s24998",
+        "country": "AR",
+    },
+    "rock and pop": {"title": "Rock and Pop", "search": "Rock and Pop FM Argentina", "country": "AR"},
+    "radio con vos": {"title": "Radio con Vos", "search": "Radio con Vos", "country": "AR"},
+    "metro": {"title": "Metro FM", "search": "Metro FM Argentina", "country": "AR"},
+    "la 100": {"title": "La 100", "search": "La 100 Argentina", "country": "AR"},
+    "radiónica": {"title": "Radiónica", "search": "Radiónica Colombia", "country": "CO"},
+    "radionica": {"title": "Radiónica", "search": "Radiónica Colombia", "country": "CO"},
+    "caracol": {
+        "title": "Caracol Radio",
+        "search": "Caracol Radio Bogotá",
+        "tunein_id": "s16182",
+        "country": "CO",
+    },
+    "w radio": {"title": "W Radio", "search": "W Radio Colombia", "country": "CO"},
+    "blue": {"title": "Blue FM", "search": "Blue FM Argentina", "country": "AR"},
+    "mega": {"title": "Mega FM", "search": "Mega FM Chile", "country": "CL"},
+    "concierto": {"title": "Radio Concierto", "search": "Radio Concierto Chile", "country": "CL"},
+    "la pachanguera": {
+        "title": "La Pachanguera FM",
+        "search": "La Pachanguera FM",
+        "tunein_id": "s98967",
+        "country": "CO",
+    },
+    "pachanguera": {
+        "title": "La Pachanguera FM",
+        "search": "La Pachanguera FM",
+        "tunein_id": "s98967",
+        "country": "CO",
+    },
+    "pachangera": {
+        "title": "La Pachanguera FM",
+        "search": "La Pachanguera FM",
+        "tunein_id": "s98967",
+        "country": "CO",
+    },
+    "pachanquera": {
+        "title": "La Pachanguera FM",
+        "search": "La Pachanguera FM",
+        "tunein_id": "s98967",
+        "country": "CO",
+    },
+}
+
+# Alias → consulta YouTube (respaldo si tuning no encuentra stream).
+_RADIO_STATION_ALIASES: dict[str, str] = {
+    "la fm": "La FM Colombia radio en vivo",
+    "los 40": "Los 40 Principales Argentina radio en vivo",
+    "rock and pop": "Rock and Pop FM Argentina radio en vivo",
+    "radio con vos": "Radio con Vos Argentina en vivo",
+    "metro": "Metro FM Argentina radio en vivo",
+    "la 100": "La 100 Argentina radio en vivo",
+    "radiónica": "Radiónica Colombia radio en vivo",
+    "caracol": "Caracol Radio Colombia en vivo",
+    "w radio": "W Radio Colombia en vivo",
+    "blue": "Blue FM Argentina radio en vivo",
+    "mega": "Mega FM Chile radio en vivo",
+    "concierto": "Radio Concierto Chile en vivo",
+    "la pachanguera": "La Pachanguera FM en vivo",
+    "pachanguera": "La Pachanguera FM en vivo",
+    "pachangera": "La Pachanguera FM en vivo",
+}
+
+_TUNE_URL_BY_ID: dict[str, str] = {}
+_TUNE_META_BY_ID: dict[str, dict[str, str]] = {}
+
+# Emisoras TuneIn = stream infinito; el ESP necesita Content-Length → leer ventana fija.
+LIVE_RADIO_CHUNK_SEC = max(30, min(600, int(os.environ.get("LIVE_RADIO_CHUNK_SEC", "45"))))
+LIVE_RADIO_CHUNK_BYTES = 16000 * 2 * LIVE_RADIO_CHUNK_SEC
+RADIO_PCM_CHUNK_SEC = max(15, min(120, int(os.environ.get("RADIO_PCM_CHUNK_SEC", "20"))))
+RADIO_PCM_CHUNK_BYTES = 16000 * 2 * RADIO_PCM_CHUNK_SEC
+
+
+def is_live_radio_id(video_id: str) -> bool:
+    return (video_id or "").strip().startswith("tune:")
+
+
+def live_radio_chunk_bytes() -> int:
+    return LIVE_RADIO_CHUNK_BYTES
+
+
+def radio_pcm_chunk_bytes() -> int:
+    return RADIO_PCM_CHUNK_BYTES
+
+
+def open_radio_pcm_tunein(tunein_id: str) -> tuple[Iterator[bytes], bytes]:
+    """PCM 16 kHz mono desde emisora TuneIn (ffmpeg -re sobre URL resuelta)."""
+    tid = (tunein_id or "").strip()
+    if not tid:
+        raise ValueError("tunein_id vacío")
+    url = _resolve_stream_url(_tunein_stream_url(tid))
+    log.info("radio pcm open tunein=%s url=%s", tid, url[:96])
+    it, first, _procs = _open_direct_url_pcm(url, realtime=True)
+    return it, first
+
+
+def _https_url(url: str) -> str:
+    u = (url or "").strip()
+    if u.startswith("http://"):
+        return "https://" + u[7:]
+    return u
+
+
+def _resolve_stream_url(url: str, *, max_hops: int = 10) -> str:
+    """Sigue redirects y devuelve la URL final (audio/mpeg). No fuerza HTTPS."""
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    u = (url or "").strip()
+    if not u:
+        return u
+    headers = {
+        "User-Agent": TUNEIN_UA,
+        "Icy-MetaData": "1",
+        "Accept": "*/*",
+    }
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPHandler)
+
+    for _ in range(max_hops):
+        req = urllib.request.Request(u, headers=headers)
+        try:
+            with opener.open(req, timeout=min(12, TUNEIN_TIMEOUT_S)) as resp:
+                final = resp.geturl() or u
+                ct = (resp.headers.get("Content-Type") or "").lower()
+                if resp.status == 200:
+                    log.info("stream resolved: %s (%s)", final[:100], ct or "?")
+                    return final
+        except urllib.error.HTTPError as e:
+            if e.code in (301, 302, 303, 307, 308):
+                loc = (e.headers.get("Location") or "").strip()
+                if not loc:
+                    log.warning("stream redirect sin Location: %s", u[:80])
+                    break
+                u = urllib.parse.urljoin(u, loc)
+                log.info("stream redirect -> %s", u[:100])
+                continue
+            if e.code == 200:
+                return u
+            log.warning("stream resolve HTTP %s for %s", e.code, u[:80])
+            break
+        except urllib.error.URLError as e:
+            log.warning("stream resolve failed %s: %s", u[:80], e)
+            break
+    return u
+
+
+def _tunein_get(path: str, params: dict[str, str]) -> bytes:
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    q = urllib.parse.urlencode(params)
+    url = f"{TUNEIN_BASE}/{path.lstrip('/')}?{q}"
+    req = urllib.request.Request(url, headers={"User-Agent": TUNEIN_UA})
+    try:
+        with urllib.request.urlopen(req, timeout=TUNEIN_TIMEOUT_S) as resp:
+            return resp.read()
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"TuneIn request failed: {e}") from e
+
+
+def _parse_tunein_stations(xml_bytes: bytes) -> list[dict[str, Any]]:
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        return []
+    out: list[dict[str, Any]] = []
+    for outline in root.findall(".//outline"):
+        if outline.get("type") != "audio":
+            continue
+        if outline.get("item") != "station":
+            continue
+        gid = (outline.get("guide_id") or "").strip()
+        if not gid:
+            continue
+        try:
+            reliability = int(outline.get("reliability") or 0)
+        except ValueError:
+            reliability = 0
+        try:
+            bitrate = int(outline.get("bitrate") or 0)
+        except ValueError:
+            bitrate = 0
+        out.append(
+            {
+                "guide_id": gid,
+                "title": (outline.get("text") or "").strip(),
+                "subtext": (outline.get("subtext") or "").strip(),
+                "reliability": reliability,
+                "bitrate": bitrate,
+            }
+        )
+    return out
+
+
+def _score_tunein_station(station: dict[str, Any], query_key: str) -> float:
+    title_key = _norm_station_key(station.get("title") or "")
+    sub_key = _norm_station_key(station.get("subtext") or "")
+    q = query_key
+    score = float(station.get("reliability") or 0)
+    score += min(40, (station.get("bitrate") or 0) / 4)
+    if q and (q in title_key or title_key in q):
+        score += 60
+    if q and (q in sub_key or sub_key in q):
+        score += 20
+    q_tokens = set(q.split()) if q else set()
+    title_tokens = set(title_key.split()) if title_key else set()
+    if q_tokens and title_tokens:
+        overlap = len(q_tokens & title_tokens) / max(1, len(q_tokens))
+        score += overlap * 35
+    return score
+
+
+def _tunein_stream_url(guide_id: str) -> str:
+    gid = (guide_id or "").strip()
+    if not gid:
+        raise ValueError("guide_id vacío")
+    params: dict[str, str] = {"id": gid}
+    if TUNEIN_LOCALE:
+        params["locale"] = TUNEIN_LOCALE
+    body = _tunein_get("Tune.ashx", params).decode("utf-8", errors="replace")
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("http"):
+            return _resolve_stream_url(line)
+    raise RuntimeError(f"TuneIn sin URL de stream para {gid}")
+
+
+def search_tunein(name: str, *, query: str | None = None) -> dict[str, str] | None:
+    """Busca emisora en TuneIn y resuelve URL de stream."""
+    search_q = (query or name or "").strip()
+    if not search_q:
+        return None
+    params = {
+        "query": search_q,
+        "limit": str(TUNEIN_SEARCH_LIMIT),
+    }
+    if TUNEIN_LOCALE:
+        params["locale"] = TUNEIN_LOCALE
+    try:
+        xml = _tunein_get("Search.ashx", params)
+    except RuntimeError as e:
+        log.warning("tunein search %r: %s", search_q, e)
+        return None
+    stations = _parse_tunein_stations(xml)
+    if not stations:
+        log.info("tunein search %r: sin emisoras", search_q)
+        return None
+    q_key = _norm_station_key(name or search_q)
+    best = max(stations, key=lambda s: _score_tunein_station(s, q_key))
+    try:
+        stream = _tunein_stream_url(best["guide_id"])
+    except (RuntimeError, ValueError) as e:
+        log.warning("tunein stream %s (%s): %s", best.get("guide_id"), best.get("title"), e)
+        return None
+    title = str(best.get("title") or name).strip()
+    artist = str(best.get("subtext") or "TuneIn").strip()
+    log.info("tunein hit: %r -> %s (%s)", search_q, title, best.get("guide_id"))
+    return {"title": title, "artist": artist, "stream_url": stream, "guide_id": best["guide_id"]}
+
+
+def _norm_station_key(name: str) -> str:
+    import unicodedata
+
+    t = re.sub(r"\s+", " ", (name or "").strip().lower())
+    t = unicodedata.normalize("NFD", t)
+    t = "".join(c for c in t if unicodedata.category(c) != "Mn")
+    t = re.sub(r"[^a-z0-9]+", " ", t).strip()
+    return re.sub(r"\s+", " ", t)
+
+
+def lookup_radio_tuning(station_name: str) -> dict[str, str] | None:
+    key = _norm_station_key(station_name)
+    if not key:
+        return None
+    if key in _RADIO_TUNING:
+        return dict(_RADIO_TUNING[key])
+    for alias, entry in _RADIO_TUNING.items():
+        if alias in key or key in alias:
+            return dict(entry)
+    return None
+
+
+def _radio_device_track(
+    title: str,
+    stream_url: str,
+    artist: str = "TuneIn",
+    *,
+    tunein_id: str = "",
+) -> dict[str, Any]:
+    """Pista para el ESP: reproduce stream_url localmente (sin proxy PCM del PC)."""
+    resolved = _resolve_stream_url((stream_url or "").strip())
+    out: dict[str, Any] = {
+        "title": (title or "Radio").strip(),
+        "artist": (artist or "TuneIn").strip(),
+        "stream_url": resolved,
+        "live": True,
+    }
+    tid = (tunein_id or "").strip()
+    if tid:
+        out["tunein_id"] = tid
+    return out
+
+
+def is_live_radio_track(track: dict[str, Any] | None) -> bool:
+    if not isinstance(track, dict):
+        return False
+    if (track.get("stream_url") or "").strip():
+        return True
+    return is_live_radio_id(str(track.get("video_id") or ""))
+
+
+def _make_tune_track(title: str, stream_url: str, artist: str = "") -> dict[str, str]:
+    import hashlib
+
+    url = stream_url.strip()
+    h = hashlib.sha256(url.encode()).hexdigest()[:20]
+    vid = f"tune:{h}"
+    _TUNE_URL_BY_ID[vid] = url
+    _TUNE_META_BY_ID[vid] = {"title": title.strip() or "Radio", "artist": artist.strip()}
+    return {"video_id": vid, "title": _TUNE_META_BY_ID[vid]["title"], "artist": _TUNE_META_BY_ID[vid]["artist"]}
+
+
+def resolve_radio_station(station_name: str) -> dict[str, str] | None:
+    """1) tuning local  2) TuneIn  3) YouTube en vivo."""
+    name = (station_name or "").strip()
+    if not name:
+        return None
+
+    tuning = lookup_radio_tuning(name)
+    if tuning:
+        if tuning.get("stream_url"):
+            log.info("radio tuning local stream: %r", name)
+            return _radio_device_track(tuning["title"], tuning["stream_url"], tuning.get("artist", ""))
+        tunein_id = (tuning.get("tunein_id") or "").strip()
+        if tunein_id:
+            try:
+                stream = _tunein_stream_url(tunein_id)
+                return _radio_device_track(
+                    tuning.get("title") or name,
+                    stream,
+                    "TuneIn",
+                    tunein_id=tunein_id,
+                )
+            except (RuntimeError, ValueError) as e:
+                log.warning("tunein id %s: %s", tunein_id, e)
+        ti_q = tuning.get("search") or tuning.get("title") or name
+        hit = search_tunein(name, query=ti_q)
+        if hit:
+            return _radio_device_track(
+                hit["title"],
+                hit["stream_url"],
+                hit.get("artist", "TuneIn"),
+                tunein_id=hit.get("guide_id", ""),
+            )
+
+    hit = search_tunein(name)
+    if hit:
+        return _radio_device_track(
+            hit["title"],
+            hit["stream_url"],
+            hit.get("artist", "TuneIn"),
+            tunein_id=hit.get("guide_id", ""),
+        )
+
+    q = radio_station_youtube_query(name)
+    try:
+        sr = search(q, limit=1)
+        tracks = (sr or {}).get("results") or []
+        if tracks:
+            pay = track_payload(tracks[0])
+            if pay.get("video_id"):
+                if not pay.get("title"):
+                    pay["title"] = name
+                log.info("radio youtube fallback: %r -> %s", name, pay["title"])
+                return pay
+    except Exception as e:
+        log.warning("radio youtube fallback %r: %s", q, e)
+    return None
+
+
+def radio_station_youtube_query(station_name: str) -> str:
+    """Convierte nombre de emisora hablado en query de búsqueda reproducible."""
+    import re
+
+    name = re.sub(r"\s+", " ", (station_name or "").strip().lower())
+    name = name.strip(" .,¿?¡!\"'")
+    if not name:
+        return ""
+    if name in _RADIO_STATION_ALIASES:
+        return _RADIO_STATION_ALIASES[name]
+    # Quitar relleno final típico del habla
+    name = re.sub(r"\b(?:por\s+favor|gracias|ahora|ya)\b.*$", "", name).strip()
+    if "en vivo" in name or "live" in name:
+        return station_name.strip()
+    if "radio" in name or "emisora" in name or "fm" in name:
+        return f"{station_name.strip()} en vivo"
+    return f"{station_name.strip()} radio FM emisora en vivo"
+
+
 RADIO_QUEUE_SIZE = max(3, min(20, int(os.environ.get("MUSIC_RADIO_QUEUE", "10"))))
 
 
@@ -1868,6 +2315,22 @@ def track_payload(track: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def radio_session_seed(seed: dict[str, Any]) -> dict[str, Any]:
+    """Semilla de sesión radio: emisora con stream_url o pista YouTube."""
+    if is_live_radio_track(seed):
+        out: dict[str, Any] = {
+            "title": str(seed.get("title") or "Radio").strip(),
+            "artist": str(seed.get("artist") or "TuneIn").strip(),
+            "stream_url": str(seed.get("stream_url") or "").strip(),
+            "live": True,
+        }
+        tid = str(seed.get("tunein_id") or seed.get("guide_id") or "").strip()
+        if tid:
+            out["tunein_id"] = tid
+        return out
+    return track_payload(seed)
+
+
 def build_radio_queue(
     seed: dict[str, Any],
     query: str,
@@ -1876,11 +2339,16 @@ def build_radio_queue(
     exclude_ids: set[str] | None = None,
 ) -> list[dict[str, str]]:
     """Canciones siguientes del mismo estilo (artista + búsqueda relacionada)."""
+    if is_live_radio_track(seed):
+        return []
+    seed_pay = track_payload(seed)
+    if is_live_radio_id(seed_pay.get("video_id", "")):
+        return []
     lim = limit or RADIO_QUEUE_SIZE
     exclude = set(exclude_ids or [])
-    seed_pay = track_payload(seed)
-    if seed_pay["video_id"]:
-        exclude.add(seed_pay["video_id"])
+    seed_vid = str(seed_pay.get("video_id") or "").strip()
+    if seed_vid:
+        exclude.add(seed_vid)
 
     out: list[dict[str, str]] = []
     seen = set(exclude)
@@ -1925,23 +2393,33 @@ _radio_sessions: dict[str, dict[str, Any]] = {}
 def start_radio_session(device_key: str, seed: dict[str, Any], query: str) -> list[dict[str, str]]:
     """Inicia modo radio para un dispositivo; devuelve cola inicial (sin la pista actual)."""
     key = (device_key or "default").strip()
-    seed_pay = track_payload(seed)
-    queue = build_radio_queue(seed_pay, query, exclude_ids={seed_pay["video_id"]} if seed_pay["video_id"] else None)
+    seed_pay = radio_session_seed(seed)
+    live = is_live_radio_track(seed_pay)
+    seed_vid = str(seed_pay.get("video_id") or "").strip()
+    queue: list[dict[str, str]] = []
+    if not live:
+        queue = build_radio_queue(
+            seed_pay,
+            query,
+            exclude_ids={seed_vid} if seed_vid else None,
+        )
     with _radio_lock:
         _radio_sessions[key] = {
             "query": (query or "").strip(),
             "seed": seed_pay,
             "queue": list(queue),
-            "played": [seed_pay["video_id"]] if seed_pay["video_id"] else [],
+            "played": [seed_vid] if seed_vid else [],
             "autoplay": True,
+            "live": live,
         }
     if queue:
         prefetch_pcm_stream(queue[0]["video_id"])
     log.info(
-        "music radio start device=%s seed=%r queue=%d",
+        "music radio start device=%s seed=%r queue=%d live=%s",
         key,
         seed_pay.get("title"),
         len(queue),
+        live,
     )
     return queue
 
@@ -1958,6 +2436,19 @@ def radio_next_track(device_key: str) -> dict[str, str] | None:
     with _radio_lock:
         sess = _radio_sessions.get(key)
         if not sess or not sess.get("autoplay"):
+            return None
+        if sess.get("live"):
+            seed = dict(sess["seed"])
+            tid = str(seed.get("tunein_id") or "").strip()
+            if tid:
+                try:
+                    seed["stream_url"] = _tunein_stream_url(tid)
+                    sess["seed"] = dict(seed)
+                except (RuntimeError, ValueError) as e:
+                    log.warning("live radio refresh %s: %s", tid, e)
+            log.info("music live radio next device=%s -> %s", key, seed.get("title"))
+            if seed.get("stream_url") or seed.get("video_id"):
+                return seed
             return None
         queue: list[dict[str, str]] = sess["queue"]
         played: list[str] = sess["played"]
@@ -1990,7 +2481,7 @@ def radio_next_track(device_key: str) -> dict[str, str] | None:
         if sess["queue"]:
             prefetch_pcm_stream(sess["queue"][0]["video_id"])
 
-    if not track.get("video_id"):
+    if not track.get("video_id") and not track.get("stream_url"):
         return None
     log.info("music radio next device=%s -> %s", key, track.get("title"))
     return track

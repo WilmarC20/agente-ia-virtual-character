@@ -179,6 +179,12 @@
     }
     .system-preview .label { font-size: .72rem; color: var(--accent); margin-bottom: .25rem; }
     .system-preview .emo { font-size: .72rem; color: var(--muted); margin-top: .3rem; }
+    .toggle { position: relative; width: 48px; height: 26px; flex-shrink: 0; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle span { position: absolute; inset: 0; background: #334155; border-radius: 13px; cursor: pointer; transition: .2s; }
+    .toggle span:before { content: ""; position: absolute; width: 20px; height: 20px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; }
+    .toggle input:checked + span { background: var(--accent-dim); }
+    .toggle input:checked + span:before { transform: translateX(22px); }
   </style>
 </head>
 <body>
@@ -434,6 +440,22 @@
     </div>
     <button type="button" class="primary" id="espVolBtn" style="width:100%">Aplicar volumen</button>
     <p class="hint" id="espVolStatus"></p>
+    <hr class="sep">
+    <h2>Touch por diseño</h2>
+    <p class="hint">Calibración del táctil por presentación (KITT, Bender…). Guarda en el ESP.</p>
+    <label for="touchPres">Diseño a editar</label>
+    <select id="touchPres" style="width:100%;margin-bottom:.5rem">
+      <option value="kitt">kitt (portrait)</option>
+      <option value="bender">bender (landscape)</option>
+    </select>
+    <p class="hint">Presentación activa en ESP: <strong id="touchActivePres">—</strong></p>
+    <div class="slider-row"><span>Usar este diseño en pantalla</span><label class="toggle"><input type="checkbox" id="touchApplyPres" checked><span></span></label></div>
+    <div class="slider-row"><span>Intercambiar X/Y</span><label class="toggle"><input type="checkbox" id="touchSwap"><span></span></label></div>
+    <div class="slider-row"><span>Invertir X</span><label class="toggle"><input type="checkbox" id="touchInvX"><span></span></label></div>
+    <div class="slider-row"><span>Invertir Y</span><label class="toggle"><input type="checkbox" id="touchInvY"><span></span></label></div>
+    <div class="slider-row"><span>Coords en pantalla</span><label class="toggle"><input type="checkbox" id="touchDebug"><span></span></label></div>
+    <button type="button" class="primary" id="touchCalibBtn" style="width:100%;margin-top:.5rem">Guardar touch</button>
+    <p class="hint" id="touchCalibStatus"></p>
     <h2 style="margin-top:1.25rem">Frases gatillo</h2>
     <ul class="phrases" id="wakeList"></ul>
   </div>
@@ -941,8 +963,43 @@ async function loadEspVolume() {
   try {
     const j = await (await fetch('/api/admin/device/settings?ip=' + encodeURIComponent(ip))).json();
     if (j.volume != null) { $('espVolume').value = j.volume; $('espVolVal').textContent = j.volume + '%'; }
+    $('touchActivePres').textContent = j.presentation || '—';
+    const pres = $('touchPres').value;
+    const t = (j.touch_calibrations || {})[pres] || j.touch_calib || {};
+    $('touchSwap').checked = !!t.swap_xy;
+    $('touchInvX').checked = !!t.invert_x;
+    $('touchInvY').checked = !!t.invert_y;
+    $('touchDebug').checked = !!t.show_debug;
+    $('touchApplyPres').checked = ($('touchPres').value === (j.presentation || 'bender'));
   } catch (_) {}
 }
+$('touchPres').onchange = () => loadEspVolume();
+$('touchCalibBtn').onclick = async () => {
+  const ip = $('espIp').value.trim();
+  if (!ip) { $('touchCalibStatus').textContent = 'Indica IP del ESP'; return; }
+  try {
+    const r = await fetch('/api/admin/device/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ip,
+        touch_calib: {
+          presentation: $('touchPres').value,
+          swap_xy: $('touchSwap').checked,
+          invert_x: $('touchInvX').checked,
+          invert_y: $('touchInvY').checked,
+          show_debug: $('touchDebug').checked,
+        },
+        ...( $('touchApplyPres').checked ? { presentation: $('touchPres').value } : {} ),
+      }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    $('touchCalibStatus').textContent = 'Touch guardado para ' + $('touchPres').value +
+      (j.touch_calib_saved ? ' (aplicado)' : '');
+    showMsg('Touch calibrado (' + $('touchPres').value + ')', true);
+    await loadEspVolume();
+  } catch (e) { $('touchCalibStatus').textContent = e.message; showMsg(e.message, false); }
+};
 $('espVolBtn').onclick = async () => {
   const ip = $('espIp').value.trim();
   if (!ip) { showMsg('Indica IP del ESP', false); return; }

@@ -6,6 +6,7 @@
 #include <ESP_I2S.h>
 #include <esp_partition.h>
 #include "config.h"
+#include "spiffs_mount.h"
 #include "audio_output.h"
 
 extern "C" {
@@ -33,12 +34,7 @@ inline bool initSoundFx() {
   }
   Serial.printf("Partition '%s' @ 0x%x size %u KB\n", label, part->address, part->size / 1024);
 
-  // Unmount cleanly if already registered via low-level API (leaves _mountpoint null).
-  if (esp_spiffs_mounted(label)) SPIFFS.end();
-
-  // SPIFFS.begin() mounts AND sets _mountpoint so SPIFFS.open() works.
-  // formatOnFail=false avoids the multi-minute blocking format on a 7 MB partition.
-  if (!SPIFFS.begin(false, "/spiffs", 10, label)) {
+  if (!ensureProjectSpiffs()) {
     Serial.printf(
       "SPIFFS mount failed (label='%s').\n"
       "  -> Re-flash: esptool write_flash 0x610000 firmware/agente-ia/spiffs.bin\n",

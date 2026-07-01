@@ -5,8 +5,11 @@
 #include "touch.h"
 #include "es8311.h"
 #include "settings.h"
+#include "aura/MusicIcons.h"
 
 extern volatile bool g_musicStopRequested;
+void musicRequestNext();
+void musicRequestPrev();
 
 namespace MusicScreen {
 
@@ -38,35 +41,27 @@ inline void drawControls(lgfx::LGFX_Device &gfx, uint8_t volume) {
   gfx.fillRect(0, by, W, bh, 0x0841);
   gfx.drawFastHLine(0, by, W, 0x4208);
 
-  auto btn = [&](int x, int w, const char *label, uint16_t fg, uint16_t bg) {
-    gfx.fillRoundRect(x, by + 3, w, bh - 6, 4, bg);
-    gfx.setTextColor(fg, bg);
-    gfx.setFont(&fonts::DejaVu12);
-    gfx.setCursor(x + 4, by + 8);
-    gfx.print(label);
-  };
-
+  const int btnH = bh - 6;
+  const int y = by + 3;
   if (W <= 250) {
-    btn(4, 34, "-", TFT_WHITE, 0x3186);
-    btn(42, 34, "+", TFT_WHITE, 0x3186);
-    gfx.setTextColor(TFT_WHITE, 0x0841);
-    gfx.setFont(&fonts::DejaVu12);
-    gfx.setCursor(84, by + 8);
-    gfx.printf("Vol %u%%", volume);
-    btn(W - 54, 50, "STOP", TFT_WHITE, TFT_MAROON);
+    MusicIcons::drawButton(gfx, 4, y, 38, btnH, 4, 0x3186, MusicIcons::Kind::Prev, TFT_WHITE);
+    MusicIcons::drawButton(gfx, 46, y, 42, btnH, 4, TFT_MAROON, MusicIcons::Kind::Stop, TFT_WHITE);
+    MusicIcons::drawButton(gfx, 92, y, 38, btnH, 4, 0x3186, MusicIcons::Kind::Next, TFT_WHITE);
+    MusicIcons::drawButton(gfx, W - 64, y, 28, btnH, 4, 0x3186, MusicIcons::Kind::Minus, TFT_WHITE);
+    MusicIcons::drawButton(gfx, W - 32, y, 28, btnH, 4, 0x3186, MusicIcons::Kind::Plus, TFT_WHITE);
   } else {
-    btn(6, 36, "-", TFT_WHITE, 0x3186);
-    btn(52, 36, "+", TFT_WHITE, 0x3186);
+    MusicIcons::drawButton(gfx, 8, y, 46, btnH, 4, 0x3186, MusicIcons::Kind::Prev, TFT_WHITE);
+    MusicIcons::drawButton(gfx, 60, y, 54, btnH, 4, TFT_MAROON, MusicIcons::Kind::Stop, TFT_WHITE);
+    MusicIcons::drawButton(gfx, 120, y, 46, btnH, 4, 0x3186, MusicIcons::Kind::Next, TFT_WHITE);
+    MusicIcons::drawButton(gfx, 178, y, 32, btnH, 4, 0x3186, MusicIcons::Kind::Minus, TFT_WHITE);
+    MusicIcons::drawButton(gfx, 216, y, 32, btnH, 4, 0x3186, MusicIcons::Kind::Plus, TFT_WHITE);
     gfx.setTextColor(TFT_WHITE, 0x0841);
     gfx.setFont(&fonts::DejaVu12);
-    gfx.setCursor(102, by + 8);
-    gfx.printf("Vol %u%%", volume);
-    btn(222, 92, "STOP", TFT_WHITE, TFT_MAROON);
+    gfx.setCursor(272, by + 8);
+    gfx.printf("%u%%", volume);
   }
 }
 
-// El título ya NO se dibuja aquí: va dentro del sprite de la cara (face.setTopTitle),
-// que es doble búfer => transparente y sin parpadeo. Aquí solo los controles.
 inline void drawNowPlaying(lgfx::LGFX_Device &gfx, const String &title, uint8_t volume) {
   (void)title;
   drawControls(gfx, volume);
@@ -82,45 +77,61 @@ inline void pollTouch(lgfx::LGFX_Device &gfx, AppSettings &settings, ES8311 &cod
   lastAct = millis();
 
   const int W = gfx.width();
+
+  auto volDown = [&]() {
+    if (settings.volume >= 5) settings.volume -= 5;
+    else settings.volume = 0;
+    codec.setPlaybackVolumePercent(settings.volume);
+    saveSettings(settings);
+    drawControls(gfx, settings.volume);
+  };
+  auto volUp = [&]() {
+    if (settings.volume <= 95) settings.volume += 5;
+    else settings.volume = 100;
+    codec.setPlaybackVolumePercent(settings.volume);
+    saveSettings(settings);
+    drawControls(gfx, settings.volume);
+  };
+
   if (W <= 250) {
-    if (sx >= W - 54) {
+    if (sx >= 4 && sx <= 42) {
+      musicRequestPrev();
+      return;
+    }
+    if (sx >= 46 && sx <= 88) {
       g_musicStopRequested = true;
       return;
     }
-    if (sx >= 4 && sx <= 38) {
-      if (settings.volume >= 5) settings.volume -= 5;
-      else settings.volume = 0;
-      codec.setPlaybackVolumePercent(settings.volume);
-      saveSettings(settings);
-      drawControls(gfx, settings.volume);
+    if (sx >= 92 && sx <= 130) {
+      musicRequestNext();
       return;
     }
-    if (sx >= 42 && sx <= 76) {
-      if (settings.volume <= 95) settings.volume += 5;
-      else settings.volume = 100;
-      codec.setPlaybackVolumePercent(settings.volume);
-      saveSettings(settings);
-      drawControls(gfx, settings.volume);
+    if (sx >= W - 32) {
+      volUp();
+      return;
+    }
+    if (sx >= W - 64 && sx <= W - 34) {
+      volDown();
     }
   } else {
-    if (sx >= 222) {
+    if (sx >= 8 && sx <= 54) {
+      musicRequestPrev();
+      return;
+    }
+    if (sx >= 60 && sx <= 114) {
       g_musicStopRequested = true;
       return;
     }
-    if (sx >= 6 && sx <= 42) {
-      if (settings.volume >= 5) settings.volume -= 5;
-      else settings.volume = 0;
-      codec.setPlaybackVolumePercent(settings.volume);
-      saveSettings(settings);
-      drawControls(gfx, settings.volume);
+    if (sx >= 120 && sx <= 166) {
+      musicRequestNext();
       return;
     }
-    if (sx >= 52 && sx <= 88) {
-      if (settings.volume <= 95) settings.volume += 5;
-      else settings.volume = 100;
-      codec.setPlaybackVolumePercent(settings.volume);
-      saveSettings(settings);
-      drawControls(gfx, settings.volume);
+    if (sx >= 178 && sx <= 210) {
+      volDown();
+      return;
+    }
+    if (sx >= 216 && sx <= 248) {
+      volUp();
     }
   }
 }

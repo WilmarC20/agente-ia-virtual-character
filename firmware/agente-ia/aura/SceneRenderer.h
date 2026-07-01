@@ -11,15 +11,12 @@ class SceneRenderer {
  public:
   void drawKitt(lgfx::LGFX_Sprite &canvas, const KittDrawCtx &ctx, AuraScene scene,
                 ThemeManager &theme, LayoutManager &layout, AnimationEngine &anim,
-                KittDashboard &dashboard, MusicPlayerWidget &music, StatusCardWidget &status) {
-    dashboard.draw(canvas, ctx, theme, layout, anim);
-    if (scene == AuraScene::Music) {
-      AuraRect title = layout.get("titleStrip");
-      if (title.valid) {
-        status.draw(canvas, title.x, title.y, title.w, title.h, theme.theme(), "MUSIC",
-                    music.title().c_str());
-      }
-    }
+                KittDashboard &dashboard, MusicPlayerWidget &music, StatusCardWidget &status,
+                KittButton activeButton = KittButton::None, const char *musicTitle = nullptr,
+                const char *musicStatus = nullptr) {
+    const bool musicUi = (scene == AuraScene::Music) || music.playing();
+    dashboard.draw(canvas, ctx, theme, layout, anim, activeButton, musicUi, musicTitle, musicStatus);
+    (void)status;
   }
 
   void onSceneChange(AuraScene s, MusicPlayerWidget &music) {

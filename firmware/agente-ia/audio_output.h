@@ -4,6 +4,7 @@
 #include <ESP_I2S.h>
 #include <driver/i2s_std.h>
 #include <driver/i2s_common.h>
+#include <esp_log.h>
 #include "config.h"
 #include "es8311.h"
 #include "settings.h"
@@ -146,3 +147,29 @@ inline void endPlayback(I2SClass &i2s) {
   }
   restoreMicBusAfterPlayback(i2s);
 }
+
+// ESP_I2S::end() aborta si disable falla (p. ej. canal ya deshabilitado) y NO
+// ejecuta i2s_del_channel -> puerto I2S queda ocupado -> "no available channel".
+inline void forceDeleteI2sChannel(i2s_chan_handle_t chan) {
+  if (!chan) return;
+  esp_err_t e = i2s_channel_disable(chan);
+  if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) {
+    ESP_LOGW("agenteIA", "i2s disable err=%d", (int)e);
+  }
+  e = i2s_del_channel(chan);
+  if (e != ESP_OK) ESP_LOGW("agenteIA", "i2s del err=%d", (int)e);
+}
+
+inline bool hardEndI2s(I2SClass &i2s, const char *tag) {
+  if (i2s.txChan()) safeChanEnable(i2s.txChan());
+  if (i2s.rxChan()) safeChanEnable(i2s.rxChan());
+  g_i2sTxRunning = false;
+  g_i2sRxRunning = false;
+  if (i2s.end()) return true;
+  ESP_LOGW("agenteIA", "%s: i2s.end() failed — force delete channels", tag);
+  forceDeleteI2sChannel(i2s.txChan());
+  forceDeleteI2sChannel(i2s.rxChan());
+  return true;
+}
+
+inline void releaseI2sBusForRadio(I2SClass &i2s) { hardEndI2s(i2s, "releaseI2sBusForRadio"); }

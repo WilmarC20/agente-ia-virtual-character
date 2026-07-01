@@ -217,4 +217,4 @@ if ($ejsCheck -ne "yes") {
     Write-Host "AVISO: primera reproduccion puede tardar ~1 min (yt-dlp descarga EJS)" -ForegroundColor Yellow
 }
 
-& $py -m uvicorn main:app --host $bindHost --port 8000 --timeout-graceful-shutdown 3
+& $py -m uvicorn main:app --host $bindHost --port 8000 --timeout-graceful-shutdown 3 --ws-ping-interval 30 --ws-ping-timeout 120

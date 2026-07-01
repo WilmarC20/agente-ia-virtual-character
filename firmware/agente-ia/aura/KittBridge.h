@@ -3,9 +3,11 @@
 #include <LovyanGFX.hpp>
 #include "AuraEngine.h"
 #include "ThemeStore.h"
+#include "IconAtlas.h"
 #include "theme_fetch.h"
-#include "../face.h"
+#include "../config.h"
 #include "../face_kitt.h"
+#include "KittMusicLayout.h"
 
 inline void auraDrawKitt(lgfx::LGFX_Sprite &canvas, const KittDrawCtx &ctx) {
   g_aura.drawKitt(canvas, ctx);
@@ -13,6 +15,19 @@ inline void auraDrawKitt(lgfx::LGFX_Sprite &canvas, const KittDrawCtx &ctx) {
 
 inline bool auraHitSettingsP4(int sx, int sy) {
   return g_aura.hitSettingsP4(sx, sy);
+}
+
+inline bool auraKittMusicUi() {
+  return g_aura.scene() == AuraScene::Music || g_aura.musicPlayer().playing();
+}
+
+inline KittButton auraHitKittButton(int sx, int sy) {
+  if (auraKittMusicUi()) return KittMusicLayout::hit(sx, sy);
+  return g_aura.hitKittButton(sx, sy);
+}
+
+inline void auraSetKittActiveButton(KittButton btn, uint32_t ms = 550) {
+  g_aura.setActiveKittButton(btn, ms);
 }
 
 inline void auraBindFace(class Face *face) {
@@ -44,6 +59,7 @@ inline void auraOnPresentation(const char *presentation) {
   }
 #endif
   if (strcasecmp(presentation, "kitt") == 0) {
+    auraLoadKittAtlas();
     g_aura.setSceneByName("dashboard");
   } else {
     g_aura.setSceneByName("idle");

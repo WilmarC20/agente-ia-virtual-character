@@ -9,9 +9,13 @@
 #include "es8311.h"
 #include "config.h"
 #include "secrets.h"
+#include "touch_calib.h"
+
+extern const char *devicePresentationId();
 
 // Cola de reproducción musical (implementado en agente-ia.ino).
-void queueMusicPlay(const String &videoId, const String &title, bool keepRadio = false);
+void queueMusicPlay(const String &videoId, const String &title, bool keepRadio = false,
+                    const String &streamUrl = "", const String &tuneinId = "");
 void requestMusicStop(bool clearRadio = true);
 extern volatile bool g_musicPlaying;
 extern String g_musicNowTitle;
@@ -88,6 +92,24 @@ private:
     doc["wake_phrase"] = WAKE_PRESET_LABELS[_settings->phraseIdx];
     doc["brain_url"] = BRAIN_SERVER_URL;
     doc["story_play_mode"] = _settings->storyPlayMode;
+    doc["presentation"] = devicePresentationId();
+    JsonObject tc = doc["touch_calib"].to<JsonObject>();
+    const TouchCalib &active = touchCalibActive();
+    tc["presentation"] = touchCalibActivePresentation();
+    tc["swap_xy"] = active.swapXY;
+    tc["invert_x"] = active.invertX;
+    tc["invert_y"] = active.invertY;
+    tc["show_debug"] = active.showDebug;
+    static const char *kPresets[] = {"kitt", "bender"};
+    JsonObject all = doc["touch_calibrations"].to<JsonObject>();
+    for (const char *pid : kPresets) {
+      const TouchCalib c = touchCalibLoadFromNvs(pid);
+      JsonObject o = all[pid].to<JsonObject>();
+      o["swap_xy"] = c.swapXY;
+      o["invert_x"] = c.invertX;
+      o["invert_y"] = c.invertY;
+      o["show_debug"] = c.showDebug;
+    }
   }
 
   void handleGetSettings() {
@@ -135,6 +157,29 @@ private:
       uint8_t spm = doc["story_play_mode"];
       _settings->storyPlayMode = (spm > 3) ? 0 : spm;
     }
+    if (doc["presentation"].is<const char *>()) {
+      const char *pres = doc["presentation"];
+      JsonDocument presDoc;
+      presDoc["presentation"] = pres;
+      applyServerPresentation(presDoc.as<JsonVariantConst>(), true);
+    }
+    if (doc["touch_calib"].is<JsonObjectConst>()) {
+      JsonObjectConst tc = doc["touch_calib"];
+      const char *pid = tc["presentation"] | devicePresentationId();
+      TouchCalib c = touchCalibLoadFromNvs(pid);
+      if (tc["swap_xy"].is<bool>()) c.swapXY = tc["swap_xy"].as<bool>() ? 1 : 0;
+      else if (tc["swap_xy"].is<int>()) c.swapXY = tc["swap_xy"].as<int>() ? 1 : 0;
+      if (tc["invert_x"].is<bool>()) c.invertX = tc["invert_x"].as<bool>() ? 1 : 0;
+      else if (tc["invert_x"].is<int>()) c.invertX = tc["invert_x"].as<int>() ? 1 : 0;
+      if (tc["invert_y"].is<bool>()) c.invertY = tc["invert_y"].as<bool>() ? 1 : 0;
+      else if (tc["invert_y"].is<int>()) c.invertY = tc["invert_y"].as<int>() ? 1 : 0;
+      if (tc["show_debug"].is<bool>()) c.showDebug = tc["show_debug"].as<bool>() ? 1 : 0;
+      else if (tc["show_debug"].is<int>()) c.showDebug = tc["show_debug"].as<int>() ? 1 : 0;
+      touchCalibApplyRuntime(pid, c);
+      Serial.printf("touch calib saved [%s] swap=%u invX=%u invY=%u dbg=%u active=%s\n",
+                    pid, c.swapXY, c.invertX, c.invertY, c.showDebug,
+                    touchCalibActivePresentation());
+    }
 
     saveSettings(*_settings);
     applyLive();
@@ -142,6 +187,9 @@ private:
     JsonDocument out;
     settingsToJson(out);
     out["ok"] = true;
+    if (doc["touch_calib"].is<JsonObjectConst>()) {
+      out["touch_calib_saved"] = true;
+    }
     String body;
     serializeJson(out, body);
     _server.send(200, "application/json", body);
@@ -331,6 +379,13 @@ a{color:var(--accent)}
 <p class="sub">Configuración del ESP32. Pruebas de cara/voz en <a href="/test">/test</a>. Cerebro en <a id="brainLink" href="#">admin del servidor</a>.</p>
 
 <div class="panel">
+<h2>Diseño en pantalla</h2>
+<label for="presentationDesign">Presentación activa</label>
+<select id="presentationDesign"><option value="kitt">KITT (tablero)</option><option value="bender">Bender (cara)</option></select>
+<p class="status" style="margin-top:.35rem">Se guarda al pulsar <strong>Guardar cambios</strong>. El cerebro no lo revertirá hasta que elijas otro diseño aquí.</p>
+</div>
+
+<div class="panel">
 <h2>Activación por voz</h2>
 <div class="row"><div><strong>Palabra gatillo (PC)</strong><br><span class="status">Whisper en el servidor escucha la frase elegida</span></div>
 <label class="toggle"><input type="checkbox" id="voiceWake"><span></span></label></div>
@@ -352,6 +407,24 @@ a{color:var(--accent)}
 <label for="speechCaption" style="margin-top:.7rem">Texto al hablar (pantalla)</label>
 <select id="speechCaption"><option value="0">Oculto (solo cara)</option><option value="1">Karaoke (palabra a palabra)</option><option value="2">Texto ASCII (sin tildes)</option></select>
 <p class="status" style="margin-top:.35rem">Por defecto no se muestra la respuesta: evita caracteres rotos. Karaoke usa palabras sin tildes sincronizadas al audio.</p>
+</div>
+
+<div class="panel">
+<h2>Touch por diseño</h2>
+<p class="status">Calibración independiente por presentación (KITT portrait, Bender landscape, etc.). Solo afecta al diseño elegido.</p>
+<label for="touchPres">Diseño a editar</label>
+<select id="touchPres"><option value="kitt">kitt</option><option value="bender">bender</option></select>
+<p class="status" style="margin-top:.35rem">Activo ahora: <strong id="touchActivePres">—</strong></p>
+<div class="row"><div><strong>Usar este diseño en pantalla</strong><br><span class="status">Cambia KITT ↔ Bender al guardar</span></div>
+<label class="toggle"><input type="checkbox" id="touchApplyPres" checked><span></span></label></div>
+<div class="row"><div><strong>Intercambiar X/Y</strong></div>
+<label class="toggle"><input type="checkbox" id="touchSwap"><span></span></label></div>
+<div class="row"><div><strong>Invertir X</strong></div>
+<label class="toggle"><input type="checkbox" id="touchInvX"><span></span></label></div>
+<div class="row"><div><strong>Invertir Y</strong></div>
+<label class="toggle"><input type="checkbox" id="touchInvY"><span></span></label></div>
+<div class="row"><div><strong>Mostrar coords al tocar</strong><br><span class="status">Cruz amarilla + números en pantalla</span></div>
+<label class="toggle"><input type="checkbox" id="touchDebug"><span></span></label></div>
 </div>
 
 <div class="panel">
@@ -380,7 +453,15 @@ a{color:var(--accent)}
 <script>
 const $=id=>document.getElementById(id);
 let cfg={};
+function touchUiFromPreset(pid){
+  const t=(cfg.touch_calibrations||{})[pid]||{};
+  $('touchSwap').checked=!!t.swap_xy;
+  $('touchInvX').checked=!!t.invert_x;
+  $('touchInvY').checked=!!t.invert_y;
+  $('touchDebug').checked=!!t.show_debug;
+}
 async function load(){
+  const prevTouchPres=$('touchPres').value;
   const r=await fetch('/api/settings');cfg=await r.json();
   $('volume').value=cfg.volume;$('volVal').textContent=cfg.volume+'%';
   $('voiceWake').checked=cfg.voice_wake;
@@ -389,6 +470,15 @@ async function load(){
   if(cfg.mouth_anim!==undefined)$('mouthAnim').value=cfg.mouth_anim;
   if(cfg.speech_caption!==undefined)$('speechCaption').value=cfg.speech_caption;
   if(cfg.story_play_mode!==undefined)$('storyPlayMode').value=cfg.story_play_mode;
+  $('presentationDesign').value=cfg.presentation||'bender';
+  $('touchActivePres').textContent=cfg.presentation||'bender';
+  if(prevTouchPres&&(cfg.touch_calibrations||{})[prevTouchPres]){
+    $('touchPres').value=prevTouchPres;
+  }else{
+    $('touchPres').value=cfg.presentation||'kitt';
+  }
+  touchUiFromPreset($('touchPres').value);
+  $('touchApplyPres').checked=($('touchPres').value===$('presentationDesign').value);
   $('hiEspRow').style.display=cfg.hi_esp_available?'flex':'none';
   const sel=$('phrase');sel.innerHTML='';
   (cfg.wake_phrases||[]).forEach((p,i)=>{const o=document.createElement('option');o.value=i;o.textContent=p;sel.appendChild(o);});
@@ -401,13 +491,20 @@ async function load(){
 }
 function showMsg(t,ok){const m=$('msg');m.textContent=t;m.className='msg '+(ok?'ok':'err');}
 $('volume').oninput=()=>$('volVal').textContent=$('volume').value+'%';
+$('touchPres').onchange=()=>{touchUiFromPreset($('touchPres').value);$('touchApplyPres').checked=($('touchPres').value===$('presentationDesign').value);};
+$('presentationDesign').onchange=()=>{$('touchApplyPres').checked=($('touchPres').value===$('presentationDesign').value);};
 $('saveBtn').onclick=async()=>{
   const body={volume:+$('volume').value,voice_wake:$('voiceWake').checked,
     hi_esp_wake:$('hiEspWake').checked,idle_remarks:$('idleRemarks').checked,
     mouth_anim:+$('mouthAnim').value,speech_caption:+$('speechCaption').value,phrase_idx:+$('phrase').value,
-    story_play_mode:+$('storyPlayMode').value};
+    story_play_mode:+$('storyPlayMode').value,
+    presentation:$('presentationDesign').value,
+    touch_calib:{presentation:$('touchPres').value,swap_xy:$('touchSwap').checked,
+      invert_x:$('touchInvX').checked,invert_y:$('touchInvY').checked,
+      show_debug:$('touchDebug').checked}};
   try{const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);showMsg('Guardado correctamente',true);cfg=j;load();}
+    const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);
+    showMsg('Guardado correctamente'+(j.touch_calib_saved?' (touch aplicado)':''),true);cfg=j;load();}
   catch(e){showMsg('Error: '+e.message,false);}
 };
 $('reloadBtn').onclick=load;

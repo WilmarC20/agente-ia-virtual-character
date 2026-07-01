@@ -106,11 +106,13 @@ public:
   void run(lgfx::LGFX_Device &gfx, AppSettings &s, ES8311 &codec) {
     const int W = gfx.width(), H = gfx.height();
     layoutFor(W, H);
+    touchInvalidateCache();
     touchWaitRelease(W, H);
     bool dirty = true;
     uint32_t lastAct = 0;
 
     while (true) {
+      touchBeginFrame();
       if (dirty) { draw(gfx, s); dirty = false; }
 
       int sx, sy;

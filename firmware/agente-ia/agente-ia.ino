@@ -7,6 +7,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <esp_timer.h>
+#include <esp_log.h>
 
 #include "config.h"
 #if ENABLE_WAKEWORD
@@ -23,6 +24,10 @@
 #include "touch.h"
 #include "settings.h"
 #include "music_screen.h"
+#if ENABLE_RADIO_DIRECT
+#include "radio_player.h"
+#endif
+static void applyServerPresentation(JsonVariantConst root, bool fromUser = false);
 #include "web_admin.h"
 #if USE_AURA
 #include "aura/KittBridge.h"
@@ -32,9 +37,10 @@
 #if USE_AURA
 #include "hal/HalFacade.h"
 #endif
+#include "touch_calib.h"
 
 // Cambia en cada flash para verificar en Serial Monitor que cargó el binario nuevo.
-static constexpr const char *FIRMWARE_BUILD_ID = "capt-off-250626";
+static constexpr const char *FIRMWARE_BUILD_ID = "pres-kitt-radio-i2s-260701";
 
 static void addBrainDeviceHeaders(HTTPClient &http) {
   http.addHeader("X-Device-MAC", WiFi.macAddress());
@@ -46,6 +52,41 @@ static void addBrainDeviceHeaders(HTTPClient &http) {
 
 LGFX_ES3C28P gfx;
 Face face(gfx);
+
+#if USE_AURA
+static void musicUiSetStatus(const String &msg) {
+  if (face.presentation() == FacePresentation::Kitt) {
+    g_aura.musicPlayer().setStatus(msg.c_str());
+    face.clearTopTitle();
+    face.redraw();
+    return;
+  }
+  face.setTopTitle(msg);
+  face.update();
+}
+
+static void musicUiSetTrackTitle(const String &title) {
+  if (face.presentation() == FacePresentation::Kitt) {
+    g_aura.musicPlayer().setTitle(title.c_str());
+    g_aura.musicPlayer().setStatus("");
+    face.clearTopTitle();
+    face.redraw();
+    return;
+  }
+  face.setTopTitle(title);
+  face.update();
+}
+#else
+static void musicUiSetStatus(const String &msg) {
+  face.setTopTitle(msg);
+  face.update();
+}
+static void musicUiSetTrackTitle(const String &title) {
+  face.setTopTitle(title);
+  face.update();
+}
+#endif
+
 uint8_t g_activeDisplayRotation = DISPLAY_ROTATION;
 ES8311 codec;
 I2SClass i2s;
@@ -198,6 +239,20 @@ bool touchPressed() {
 }
 
 void onMicLevel(uint32_t rms) {
+#if USE_AURA
+  if (face.presentation() == FacePresentation::Kitt) {
+    uint32_t lvl = rms / 12;
+    if (lvl > 100) lvl = 100;
+    face.setMouthAmplitude((uint8_t)lvl);
+    static uint32_t lastKittMicDraw = 0;
+    if (millis() - lastKittMicDraw >= 120) {
+      lastKittMicDraw = millis();
+      face.redraw();
+      face.update();
+    }
+    return;
+  }
+#endif
   face.drawMicLevel(rms);
 }
 
@@ -210,6 +265,18 @@ void pauseWakeListener(bool settle = true) {
 #endif
 }
 
+void suspendWakeNetForExternalI2s() {
+#if ENABLE_WAKEWORD
+  if (g_wakeNetRunning) {
+    ESP_SR.end();
+    g_wakeNetRunning = false;
+    ESP_LOGI("agenteIA", "WakeNet off for radio I2S");
+  }
+#endif
+}
+
+void resumeWakeNetAfterExternalI2s() { syncWakeNetFromSettings(); }
+
 bool verifyMicRx(I2SClass &i2s) {
   if (i2s.rxChan() == nullptr) return false;
   char probe[64];
@@ -220,18 +287,8 @@ bool verifyMicRx(I2SClass &i2s) {
 
 // Checkpoint audio-2x-ok: end/begin + MCLK×384; solo configureClock (sin codec.begin).
 bool restoreMicBusAfterPlayback(I2SClass &i2s) {
-  Serial.println("I2S restore for mic...");
-
-  if (i2s.txChan() && !g_i2sTxRunning) {
-    safeChanEnable(i2s.txChan());
-    g_i2sTxRunning = true;
-  }
-  if (i2s.rxChan() && !g_i2sRxRunning) {
-    safeChanEnable(i2s.rxChan());
-    g_i2sRxRunning = true;
-  }
-
-  i2s.end();
+  ESP_LOGI("agenteIA", "I2S restore for mic...");
+  hardEndI2s(i2s, "restoreMicBus");
   delay(20);
   i2s.setPins(PIN_I2S_BCLK, PIN_I2S_WS, PIN_I2S_DOUT, PIN_I2S_DIN, PIN_I2S_MCLK);
   i2s.setTimeout(1000);
@@ -256,10 +313,7 @@ bool restoreMicBusAfterPlayback(I2SClass &i2s) {
 void resumeWakeListener() {
 #if ENABLE_WAKEWORD
   if (!g_wakeNetRunning) return;  // PC wake mode: nothing to resume
-  // ESP_SR holds a pointer to the I2SClass OBJECT and reads via i2s->readBytes(),
-  // which resolves the current rx channel on every call. So even though restore did
-  // i2s.end()/begin() and swapped the underlying handle, resume() picks it up — no
-  // ESP_SR.end()/begin() rebuild needed (that rebuild was the post-TTS hang).
+  // ESP_SR lee vía i2s->readBytes() en cada llamada; basta re-habilitar RX tras TTS.
   if (!verifyMicRx(i2s)) {
     Serial.println("WakeNet: RX probe failed");
     return;
@@ -272,7 +326,12 @@ void resumeWakeListener() {
 bool askBrain(const uint8_t *wav, size_t size, BrainReply &out);
 void speak(const String &text, bool sing, const String &emotion = "happy");
 void playMusic(const String &videoId, const String &title);
-void queueMusicPlay(const String &videoId, const String &title, bool keepRadio);
+#if ENABLE_RADIO_DIRECT
+void playRadioStream(const String &streamUrl, const String &title);
+#if RADIO_USE_PC_PCM
+void playRadioViaPc(const String &tuneinId, const String &title);
+#endif
+#endif
 void playStory(const String &storyId, const String &title);
 bool checkWakePhrase(const uint8_t *wav, size_t size, String *commandOut = nullptr);
 void proactiveIdleRemark();
@@ -293,6 +352,8 @@ uint32_t g_wakePendingAt = 0;
 
 String g_musicVideoId;
 String g_musicTitle;
+String g_musicStreamUrl;
+String g_musicTuneinId;
 String g_musicNowTitle;
 String g_musicNowVideoId;
 volatile bool g_musicPlayPending = false;
@@ -305,40 +366,135 @@ static constexpr int kMusicQueueMax = 12;
 struct MusicQueueItem {
   String videoId;
   String title;
+  String streamUrl;
+  String tuneinId;
 };
 static MusicQueueItem g_musicQueue[kMusicQueueMax];
 static int g_musicQueueLen = 0;
 static int g_musicQueuePos = 0;
 static volatile bool g_musicAutoplay = false;
 
-static String g_serverPresentation = "bender";
+static constexpr int kMusicHistMax = 10;
+static String g_musicHistId[kMusicHistMax];
+static String g_musicHistTitle[kMusicHistMax];
+static int g_musicHistLen = 0;
+static volatile bool g_musicSkipNext = false;
+static volatile bool g_musicSkipPrev = false;
 
-static void applyServerPresentation(JsonVariantConst root) {
+static void musicHistPush(const String &videoId, const String &title) {
+  if (!videoId.length()) return;
+  if (g_musicHistLen > 0 && g_musicHistId[g_musicHistLen - 1] == videoId) return;
+  if (g_musicHistLen >= kMusicHistMax) {
+    for (int i = 1; i < kMusicHistMax; ++i) {
+      g_musicHistId[i - 1] = g_musicHistId[i];
+      g_musicHistTitle[i - 1] = g_musicHistTitle[i];
+    }
+    g_musicHistLen = kMusicHistMax - 1;
+  }
+  g_musicHistId[g_musicHistLen] = videoId;
+  g_musicHistTitle[g_musicHistLen] = title.length() ? title : videoId;
+  g_musicHistLen++;
+}
+
+void musicRequestNext() {
+  g_musicSkipNext = true;
+  g_musicStopRequested = true;
+}
+
+void musicRequestPrev() {
+  if (g_musicHistLen < 2) return;
+  g_musicSkipPrev = true;
+  g_musicStopRequested = true;
+}
+
+static String g_serverPresentation = "bender";
+static bool g_presentationUserLock = false;
+
+const char *devicePresentationId() { return g_serverPresentation.c_str(); }
+
+static void syncPresentationToServer(const char *pres) {
+  if (WiFi.status() != WL_CONNECTED || !pres || !pres[0]) return;
+  HTTPClient http;
+  http.setTimeout(6000);
+  if (!http.begin(String(BRAIN_SERVER_URL) + "/api/device/presentation")) return;
+  http.addHeader("Content-Type", "application/json");
+  addBrainDeviceHeaders(http);
+  JsonDocument doc;
+  doc["presentation"] = pres;
+  String body;
+  serializeJson(doc, body);
+  const int code = http.POST(body);
+  Serial.printf("sync presentation -> server %s: HTTP %d\n", pres, code);
+  http.end();
+}
+
+static void persistDevicePresentation(const char *pres, bool userLock) {
+  Preferences p;
+  p.begin("agente", false);
+  if (pres && pres[0]) p.putString("pres", pres);
+  p.putBool("pres_lock", userLock);
+  p.end();
+  g_presentationUserLock = userLock;
+}
+
+static void loadPresentationFromNvs() {
+  Preferences p;
+  p.begin("agente", true);
+  g_presentationUserLock = p.getBool("pres_lock", false);
+  const String pres = p.getString("pres", "");
+  p.end();
+  if (pres.length() > 0) g_serverPresentation = pres;
+}
+
+static void applyServerPresentation(JsonVariantConst root, bool fromUser) {
   const char *pres = root["presentation"] | "";
-  if (!pres[0]) pres = root["personality"] | "bender";
+  if (!pres[0]) pres = root["personality"] | "";
+  if (!pres[0]) return;
+
+  if (!fromUser && g_presentationUserLock && !g_serverPresentation.equalsIgnoreCase(pres)) {
+    ESP_LOGW("agenteIA", "presentation lock: ignore server=%s local=%s", pres,
+             g_serverPresentation.c_str());
+    return;
+  }
+
+  const FacePresentation want = facePresentationFromId(pres);
+  const bool presChanged = !g_serverPresentation.equalsIgnoreCase(pres);
+  const bool visualsNeedSync = presChanged || fromUser || face.presentation() != want;
+  if (!visualsNeedSync) return;
+
+  g_serverPresentation = pres;
 #if USE_AURA
   auraOnPresentation(pres);
 #endif
-  if (g_serverPresentation.equalsIgnoreCase(pres)) {
-    face.setPresentationId(pres);
-    return;
-  }
-  g_serverPresentation = pres;
+  touchCalibActivate(pres);
   face.setPresentationId(pres);
   face.update();
-  Serial.printf("presentation -> %s\n", pres);
+
+  if (fromUser) {
+    persistDevicePresentation(pres, true);
+    syncPresentationToServer(pres);
+  } else if (presChanged) {
+    persistDevicePresentation(pres, false);
+  }
+  ESP_LOGI("agenteIA", "presentation -> %s%s", pres, fromUser ? " (user)" : "");
 }
 
 static void musicRadioReset() {
   g_musicQueueLen = 0;
   g_musicQueuePos = 0;
   g_musicAutoplay = false;
+  g_musicHistLen = 0;
+  g_musicSkipNext = false;
+  g_musicSkipPrev = false;
 }
 
-static void musicQueueAppend(const String &videoId, const String &title) {
+static void musicQueueAppend(const String &videoId, const String &title,
+                             const String &streamUrl = "", const String &tuneinId = "") {
   if (g_musicQueueLen >= kMusicQueueMax) return;
   g_musicQueue[g_musicQueueLen].videoId = videoId;
-  g_musicQueue[g_musicQueueLen].title = title.length() ? title : videoId;
+  g_musicQueue[g_musicQueueLen].title = title.length() ? title : (tuneinId.length() ? tuneinId : (streamUrl.length() ? streamUrl : videoId));
+  g_musicQueue[g_musicQueueLen].streamUrl = streamUrl;
+  g_musicQueue[g_musicQueueLen].tuneinId = tuneinId;
   g_musicQueueLen++;
 }
 
@@ -356,37 +512,55 @@ static bool fetchNextRadioTrack() {
   JsonDocument doc;
   deserializeJson(doc, http.getString());
   http.end();
+  const String streamUrl = doc["stream_url"] | "";
+  const String tuneinId = doc["tunein_id"] | "";
   const String id = doc["video_id"] | "";
-  if (!id.length()) return false;
-  musicQueueAppend(id, doc["title"] | id);
+  if (!streamUrl.length() && !tuneinId.length() && !id.length()) return false;
+  musicQueueAppend(id, doc["title"] | (tuneinId.length() ? tuneinId : (streamUrl.length() ? streamUrl : id)),
+                   streamUrl, tuneinId);
   return true;
 }
 
-static void musicAutoplayAdvance() {
-  if (g_musicStopRequested || !g_musicAutoplay) return;
+static void musicPlayNextInQueue(bool force) {
+  if (g_musicStopRequested) return;
+  if (!force && !g_musicAutoplay) return;
   while (g_musicQueuePos < g_musicQueueLen) {
     const int i = g_musicQueuePos++;
     g_musicVideoId = g_musicQueue[i].videoId;
     g_musicTitle = g_musicQueue[i].title;
+    g_musicStreamUrl = g_musicQueue[i].streamUrl;
+    g_musicTuneinId = g_musicQueue[i].tuneinId;
     g_musicPlayPending = true;
-    Serial.printf("Music radio next: %s (%s)\n", g_musicTitle.c_str(), g_musicVideoId.c_str());
+    Serial.printf("Music next: %s (%s)\n", g_musicTitle.c_str(), g_musicVideoId.c_str());
     face.setEmotion(Emotion::Happy);
-    face.setTopTitle(String("Siguiente: ") + g_musicTitle);
-    face.update();
+    musicUiSetTrackTitle(String("Siguiente: ") + g_musicTitle);
     return;
   }
-  if (fetchNextRadioTrack() && g_musicQueuePos < g_musicQueueLen) {
-    const int i = g_musicQueuePos++;
-    g_musicVideoId = g_musicQueue[i].videoId;
-    g_musicTitle = g_musicQueue[i].title;
-    g_musicPlayPending = true;
-    Serial.printf("Music radio fetched: %s (%s)\n", g_musicTitle.c_str(), g_musicVideoId.c_str());
+  if (force || g_musicAutoplay) {
+    if (fetchNextRadioTrack() && g_musicQueuePos < g_musicQueueLen) {
+      const int i = g_musicQueuePos++;
+      g_musicVideoId = g_musicQueue[i].videoId;
+      g_musicTitle = g_musicQueue[i].title;
+      g_musicStreamUrl = g_musicQueue[i].streamUrl;
+    g_musicTuneinId = g_musicQueue[i].tuneinId;
+      g_musicPlayPending = true;
+      Serial.printf("Music radio fetched: %s (%s)\n", g_musicTitle.c_str(),
+                    g_musicStreamUrl.length() ? g_musicStreamUrl.c_str() : g_musicVideoId.c_str());
+    }
   }
 }
 
+static void musicAutoplayAdvance() { musicPlayNextInQueue(false); }
+
 static void applyMusicFromBrain(JsonDocument &doc) {
+  const String streamUrl = doc["music"]["stream_url"] | "";
+  const String tuneinId = doc["music"]["tunein_id"] | "";
   const String musicId = doc["music"]["video_id"] | "";
+#if ENABLE_RADIO_DIRECT
+  if (!streamUrl.length() && !musicId.length()) return;
+#else
   if (!musicId.length()) return;
+#endif
   const String musicTitle = doc["music"]["title"] | "";
   musicRadioReset();
   g_musicAutoplay = doc["music_autoplay"] | false;
@@ -394,15 +568,24 @@ static void applyMusicFromBrain(JsonDocument &doc) {
   if (!q.isNull()) {
     for (JsonObject t : q) {
       const String id = t["video_id"] | "";
-      if (id.length()) musicQueueAppend(id, t["title"] | id);
+      const String su = t["stream_url"] | "";
+      const String tid = t["tunein_id"] | "";
+      if (tid.length()) {
+        musicQueueAppend(id, t["title"] | tid, su, tid);
+      } else if (su.length()) {
+        musicQueueAppend(id, t["title"] | su, su);
+      } else if (id.length()) {
+        musicQueueAppend(id, t["title"] | id);
+      }
     }
   }
-  Serial.printf("Music intent -> %s (%s) autoplay=%d queue=%d\n",
-                musicTitle.c_str(), musicId.c_str(), (int)g_musicAutoplay, g_musicQueueLen);
+  Serial.printf("Music intent -> %s tunein=%s stream=%d autoplay=%d queue=%d\n",
+                musicTitle.c_str(), tuneinId.c_str(), (int)streamUrl.length(),
+                (int)g_musicAutoplay, g_musicQueueLen);
 #if USE_AURA
   auraSetScene("music", musicTitle.c_str());
 #endif
-  queueMusicPlay(musicId, musicTitle, true);
+  queueMusicPlay(musicId, musicTitle, true, streamUrl, tuneinId);
 }
 
 struct StoryCue {
@@ -549,11 +732,25 @@ void processDevCommands() {
 struct MusicTaskArgs {
   String videoId;
   String title;
+  String streamUrl;
+  String tuneinId;
 };
 
 static void playMusicTask(void *arg) {
   auto *a = static_cast<MusicTaskArgs *>(arg);
+  Serial.printf("MUSIC task: video=%s stream=%s tunein=%s title=%s\n",
+                a->videoId.c_str(), a->streamUrl.c_str(), a->tuneinId.c_str(), a->title.c_str());
+#if ENABLE_RADIO_DIRECT
+  if (a->streamUrl.length()) {
+    Serial.println("MUSIC task: route=radio-direct");
+    playRadioStream(a->streamUrl, a->title);
+  } else if (a->videoId.length()) {
+    Serial.println("MUSIC task: route=music-pcm");
+    playMusic(a->videoId, a->title);
+  }
+#else
   playMusic(a->videoId, a->title);
+#endif
   delete a;
   g_musicTaskHandle = nullptr;
   vTaskDelete(nullptr);
@@ -582,11 +779,12 @@ static void startStoryAsync(const String &storyId, const String &title) {
 
 static void startMusicAsync() {
   if (g_musicTaskHandle) return;
-  auto *a = new MusicTaskArgs{g_musicVideoId, g_musicTitle};
-  xTaskCreatePinnedToCore(playMusicTask, "music", 32768, a, 5, &g_musicTaskHandle, 1);
+  auto *a = new MusicTaskArgs{g_musicVideoId, g_musicTitle, g_musicStreamUrl, g_musicTuneinId};
+  xTaskCreatePinnedToCore(playMusicTask, "music", 65536, a, 5, &g_musicTaskHandle, 1);
 }
 
-void queueMusicPlay(const String &videoId, const String &title, bool keepRadio) {
+void queueMusicPlay(const String &videoId, const String &title, bool keepRadio,
+                    const String &streamUrl, const String &tuneinId) {
   if (g_musicTaskHandle) {
     requestMusicStop(false);
     // Esperar a que la tarea termine tras pedir stop (evita colisión I2S).
@@ -608,18 +806,21 @@ void queueMusicPlay(const String &videoId, const String &title, bool keepRadio) 
     }
   }
   g_musicVideoId = videoId;
-  g_musicTitle = title.length() > 0 ? title : videoId;
+  g_musicStreamUrl = streamUrl;
+  g_musicTuneinId = tuneinId;
+  g_musicTitle = title.length() > 0 ? title : (tuneinId.length() ? tuneinId : (streamUrl.length() ? streamUrl : videoId));
   g_musicNowTitle = g_musicTitle;
   g_musicPlayPending = true;
-  Serial.printf("Music queued: %s (%s)\n", g_musicVideoId.c_str(), g_musicTitle.c_str());
+  Serial.printf("Music queued: %s tunein=%s stream=%d\n", g_musicTitle.c_str(), tuneinId.c_str(),
+                (int)streamUrl.length());
   face.setEmotion(Emotion::Happy);
-  face.setTopTitle(String("En cola: ") + g_musicTitle);
-  face.update();
+  musicUiSetTrackTitle(String("En cola: ") + g_musicTitle);
 }
 
 void requestMusicStop(bool clearRadio) {
   g_musicStopRequested = true;
   g_musicPlayPending = false;
+  // stop() se llama desde la tarea music (evita race con Audio::loop).
   if (clearRadio) {
     musicRadioReset();
     if (WiFi.status() == WL_CONNECTED) {
@@ -655,6 +856,209 @@ void touchHit() {
   emotionHoldUntil = millis() + 1800;
   lastActivityMs = millis();
 }
+
+#if USE_AURA
+static void kittShowAction(const String &msg) {
+  if (auraKittMusicUi()) {
+    musicUiSetStatus(msg);
+    lastActivityMs = millis();
+    return;
+  }
+  face.setTopTitle(msg);
+  face.redraw();
+  lastActivityMs = millis();
+}
+
+static void kittAdjustVolume(int delta) {
+  int v = (int)g_settings.volume + delta;
+  if (v < 0) v = 0;
+  if (v > 100) v = 100;
+  g_settings.volume = (uint8_t)v;
+  codec.setPlaybackVolumePercent(g_settings.volume);
+  saveSettings(g_settings);
+  kittShowAction(String("VOL ") + String(g_settings.volume) + "%");
+  Serial.printf("KITT button: volume=%u\n", g_settings.volume);
+}
+
+static void kittWakeNow(const char *source, Emotion em = Emotion::Surprised) {
+  if (state != State::Sleeping || g_musicTaskHandle || g_storyTaskHandle) return;
+  g_wakePending = false;
+  face.clearMicLevel();
+  face.setEmotion(em);
+  kittShowAction(source ? source : "LISTEN");
+  state = State::Listening;
+  Serial.printf("KITT button: wake (%s)\n", source ? source : "button");
+}
+
+static bool handleKittMusicButton(KittButton btn) {
+  if (btn == KittButton::None || btn == KittButton::Modulator) return false;
+  auraSetKittActiveButton(btn);
+  face.redraw();
+
+  switch (btn) {
+    case KittButton::NormalCruise:
+      requestMusicStop(true);
+      kittShowAction("Detenido");
+      Serial.println("KITT music: STOP");
+      return true;
+
+    case KittButton::MinRpm:
+      kittAdjustVolume(-5);
+      return true;
+
+    case KittButton::FuelOn:
+      kittAdjustVolume(+5);
+      return true;
+
+    case KittButton::Ignitors:
+      g_musicAutoplay = !g_musicAutoplay;
+      kittShowAction(g_musicAutoplay ? "Radio ON" : "Radio OFF");
+      Serial.printf("KITT music: radio=%d\n", (int)g_musicAutoplay);
+      return true;
+
+    case KittButton::AutoCruise:
+      musicRequestPrev();
+      kittShowAction("Anterior");
+      Serial.println("KITT music: PREV");
+      return true;
+
+    case KittButton::Pursuit:
+      musicRequestNext();
+      kittShowAction("Siguiente");
+      Serial.println("KITT music: NEXT");
+      return true;
+
+    case KittButton::Air:
+    case KittButton::Oil:
+    case KittButton::P1:
+    case KittButton::P2:
+    case KittButton::S1:
+    case KittButton::S2:
+    case KittButton::P3:
+    case KittButton::P4:
+      return false;
+
+    default:
+      return false;
+  }
+}
+
+static bool handleKittButton(KittButton btn) {
+  if (btn == KittButton::None) return false;
+  if (touchCalibMode()) return true;
+  auraSetKittActiveButton(btn);
+  face.redraw();
+
+  switch (btn) {
+    case KittButton::Power:
+      requestMusicStop(true);
+      g_wakePending = false;
+      face.clearTopTitle();
+      face.setEmotion(Emotion::Neutral);
+      kittShowAction("STOP");
+      Serial.println("KITT button: POWER stop");
+      return true;
+
+    case KittButton::MinRpm:
+      kittAdjustVolume(-5);
+      return true;
+
+    case KittButton::FuelOn:
+      kittAdjustVolume(+5);
+      return true;
+
+    case KittButton::Ignitors:
+      g_settings.voiceWake = !g_settings.voiceWake;
+      applySettingsGlobals(g_settings, g_wakePhraseIdx, g_voiceWakeEnabled, g_idleRemarksEnabled);
+      saveSettings(g_settings);
+      kittShowAction(String("WAKE ") + (g_voiceWakeEnabled ? "ON" : "OFF"));
+      Serial.printf("KITT button: voiceWake=%d\n", g_voiceWakeEnabled);
+      return true;
+
+    case KittButton::Modulator:
+      // Único disparador de voz: tocar las barras del modulador.
+      kittWakeNow("LISTEN", Emotion::Surprised);
+      return true;
+
+    case KittButton::Air:
+      face.setEmotion(Emotion::Cool);
+      emotionHoldUntil = millis() + 4000;
+      kittShowAction("AIR");
+      return true;
+
+    case KittButton::Oil:
+      kittShowAction(String("IP ") + WiFi.localIP().toString() + " RSSI " + String(WiFi.RSSI()));
+      Serial.printf("KITT button: status heap=%u rssi=%d\n", ESP.getFreeHeap(), WiFi.RSSI());
+      return true;
+
+    case KittButton::P1:
+      face.setEmotion(Emotion::Happy);
+      emotionHoldUntil = millis() + 5000;
+      kittShowAction("HAPPY");
+      playSoundEffect("power_up");
+      return true;
+
+    case KittButton::P2:
+      face.setEmotion(Emotion::Cool);
+      emotionHoldUntil = millis() + 5000;
+      kittShowAction("COOL");
+      playSoundEffect("beep");
+      return true;
+
+    case KittButton::S1:
+      face.setEmotion(Emotion::Surprised);
+      emotionHoldUntil = millis() + 3500;
+      kittShowAction("ALERT");
+      playSoundEffect("beep");
+      return true;
+
+    case KittButton::S2:
+      face.setEmotion(Emotion::Thinking);
+      emotionHoldUntil = millis() + 5000;
+      kittShowAction("THINK");
+      return true;
+
+    case KittButton::P3:
+      face.setEmotion(Emotion::Vibing);
+      emotionHoldUntil = 0;
+      kittShowAction("VIBING");
+      Serial.println("KITT button: vibing");
+      return true;
+
+    case KittButton::P4:
+      openSettings();
+      return true;
+
+    case KittButton::AutoCruise:
+      g_settings.idleRemarks = !g_settings.idleRemarks;
+      applySettingsGlobals(g_settings, g_wakePhraseIdx, g_voiceWakeEnabled, g_idleRemarksEnabled);
+      saveSettings(g_settings);
+      kittShowAction(String("AUTO ") + (g_idleRemarksEnabled ? "ON" : "OFF"));
+      Serial.printf("KITT button: idleRemarks=%d\n", g_idleRemarksEnabled);
+      return true;
+
+    case KittButton::NormalCruise:
+      g_wakePending = false;
+      requestMusicStop(true);
+      face.clearTopTitle();
+      face.setEmotion(Emotion::Neutral);
+      emotionHoldUntil = millis() + 1500;
+      kittShowAction("NORMAL");
+      Serial.println("KITT button: normal cruise");
+      return true;
+
+    case KittButton::Pursuit:
+      // Sin wake: la voz se activa solo desde las barras del modulador.
+      face.setEmotion(Emotion::Excited);
+      emotionHoldUntil = millis() + 4000;
+      kittShowAction("PURSUIT");
+      return true;
+
+    default:
+      return false;
+  }
+}
+#endif
 
 namespace {
 
@@ -856,8 +1260,9 @@ size_t playHttpPcmStream(HTTPClient &http, WiFiClient *stream, int remaining, bo
       size_t want = min(bytes - total, kFacePumpChunk);
       want &= ~1u;
       if (want < 2) break;
-      size_t n = i2s.write(data + total, want);
+      size_t n = playMonoPcm16(i2s, data + total, want, false);
       if (n == 0) {
+        g_brainTransport.pumpWs();
         face.update();
         lastMouthUpdate = millis();
         g_webAdmin.loop();
@@ -870,6 +1275,7 @@ size_t playHttpPcmStream(HTTPClient &http, WiFiClient *stream, int remaining, bo
       }
       total += n;
       pumpFaceIfDue();
+      g_brainTransport.pumpWs();
     }
     return total;
   };
@@ -929,7 +1335,7 @@ size_t playHttpPcmStream(HTTPClient &http, WiFiClient *stream, int remaining, bo
     if (pcmLen == 0) return true;
 
     if (titleOnFirstPcm && !showedTitle) {
-      face.setTopTitle(*titleOnFirstPcm);
+      musicUiSetTrackTitle(*titleOnFirstPcm);
       face.setTalking(true);
       if (singingMode) {
         face.setSinging(true);
@@ -1103,9 +1509,22 @@ void setup() {
     Serial.print(".");
   }
   Serial.printf("\nWiFi OK: %s\n", WiFi.localIP().toString().c_str());
+
+  if (initSoundFx()) {
+    face.showText("Sonidos OK");
+    delay(400);
+  } else {
+    face.showText("Sin efectos SPIFFS", TFT_ORANGE);
+    delay(600);
+  }
 #if USE_AURA
+  loadPresentationFromNvs();
+  auraLoadKittAtlas();
   auraOnPresentation(g_serverPresentation.c_str());
+  if (g_presentationUserLock) syncPresentationToServer(g_serverPresentation.c_str());
 #endif
+  touchCalibActivate(g_serverPresentation.c_str());
+  face.setPresentationId(g_serverPresentation.c_str());
 
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
   if (!codec.begin(Wire)) {
@@ -1149,20 +1568,14 @@ void setup() {
   Serial.printf("  hiEspWake=%d wakeNet=%d\n", g_settings.hiEspWake, g_wakeNetRunning);
 #endif
 
-  if (initSoundFx()) {
-    face.showText("Sonidos OK");
-    delay(400);
-  } else {
-    face.showText("Sin efectos SPIFFS", TFT_ORANGE);
-    delay(600);
-  }
-
   updateWakeHint();
   Serial.printf("Ready - web admin + touch  build=%s\n", FIRMWARE_BUILD_ID);
   lastActivityMs = millis();
 }
 
 void loop() {
+  touchBeginFrame();
+  g_brainTransport.pumpWs();
   face.setMouthAnim(g_settings.mouthAnim);  // keep the talking-mouth style in sync (web admin/menu)
   // Mientras hay tarea de música, ella dibuja la UI (prefetch); durante el stream
   // solo STOP/volumen desde aquí — evita dos hilos tocando SPI (rayas en pantalla).
@@ -1172,7 +1585,18 @@ void loop() {
       static uint32_t lastTouchMs = 0;
       if (millis() - lastTouchMs >= 80) {
         lastTouchMs = millis();
-        MusicScreen::pollTouch(gfx, g_settings, codec);
+#if USE_AURA
+        if (face.presentation() == FacePresentation::Kitt) {
+          int sx, sy;
+          if (touchReadPoint(gfx.width(), gfx.height(), sx, sy)) {
+            KittButton btn = auraHitKittButton(sx, sy);
+            if (btn != KittButton::None) handleKittMusicButton(btn);
+          }
+        } else
+#endif
+        {
+          MusicScreen::pollTouch(gfx, g_settings, codec);
+        }
       }
     }
     vTaskDelay(2);
@@ -1205,20 +1629,30 @@ void loop() {
       // no second tap (so a quick double-tap can be read as a "hit" instead).
       if (g_wakePending && millis() >= g_wakePendingAt) {
         g_wakePending = false;
-        face.clearMicLevel();
-        state = State::Listening;
+        if (!touchCalibMode()) {
+          face.clearMicLevel();
+          state = State::Listening;
+        }
         break;
       }
 
       // Touch gestures: gear -> Settings; long-press -> Settings; swipe on his face ->
       // caress; quick double-tap on his face -> hit; single tap -> wake (deferred above).
+      // En modo calibración solo se muestran coords — sin micrófono ni menús por toque.
       static bool pressing = false, longHandled = false;
       static uint32_t pressStart = 0;
       static int pressX = 0, pressY = 0;
       static int lastX = 0, lastY = 0;
       int tx, ty;
       bool down = touchReadPoint(gfx.width(), gfx.height(), tx, ty);
-      if (down || pressing) {
+      if (touchCalibMode()) {
+        g_wakePending = false;
+        if (down || pressing) {
+          if (down && !pressing) pressing = true;
+          else if (!down) pressing = false;
+          break;
+        }
+      } else if (down || pressing) {
         if (down && !pressing) {
           pressing = true; longHandled = false; pressStart = millis();
           pressX = tx; pressY = ty;
@@ -1234,6 +1668,16 @@ void loop() {
           pressing = false;
           if (!longHandled) {              // short gesture
             int moved = abs(lastX - pressX) + abs(lastY - pressY);
+#if USE_AURA
+            KittButton kittButton = KittButton::None;
+            if (face.presentation() == FacePresentation::Kitt) {
+              kittButton = auraHitKittButton(lastX, lastY);
+              if (kittButton == KittButton::None) kittButton = auraHitKittButton(pressX, pressY);
+            }
+            if (handleKittButton(kittButton)) {
+              break;
+            }
+#endif
             bool kittCfg = face.kittSettingsHit(pressX, pressY) || face.kittSettingsHit(lastX, lastY);
             bool gear = !kittCfg && (Face::gearHit(pressX, pressY, gfx.width()) || Face::gearHit(lastX, lastY, gfx.width()));
             bool onBody = !kittCfg && Face::bodyHit(pressX, pressY, gfx.width(), gfx.height());
@@ -1249,9 +1693,19 @@ void loop() {
               g_wakePending = false;
               touchHit();                    // quick second tap -> got hit/poked
             } else {
-              lastBodyTapMs = millis();
-              g_wakePending = true;          // single tap -> wake after the double-tap window
-              g_wakePendingAt = millis() + 380;
+#if USE_AURA
+              // KITT: la voz se activa SOLO tocando las barras del modulador
+              // (KittButton::Modulator, ya manejado arriba). Un toque en cualquier
+              // otra parte NO despierta el micrófono.
+              const bool kittActive = (face.presentation() == FacePresentation::Kitt);
+#else
+              const bool kittActive = false;
+#endif
+              if (!kittActive) {
+                lastBodyTapMs = millis();
+                g_wakePending = true;        // single tap -> wake after the double-tap window
+                g_wakePendingAt = millis() + 380;
+              }
             }
           }
         }
@@ -1260,7 +1714,7 @@ void loop() {
 
       // PC-side wake phrase via /wake-check (gated by g_voiceWakeEnabled).
       static uint32_t lastWakeProbe = 0;
-      if (!face.isVibing() && g_voiceWakeEnabled && millis() >= wakeIgnoreUntil &&
+      if (!touchCalibMode() && !face.isVibing() && g_voiceWakeEnabled && millis() >= wakeIgnoreUntil &&
           millis() >= wakeRejectUntil &&
           millis() - lastWakeProbe >= WAKE_PROBE_INTERVAL_MS) {
         lastWakeProbe = millis();
@@ -1275,10 +1729,10 @@ void loop() {
           face.update();
           emotionHoldUntil = millis() + 900;
         }
-        if (peak >= WAKE_LISTEN_PEAK && !touchPressed()) {
+        if (peak >= WAKE_LISTEN_PEAK && !touchPressed() && !touchCalibMode()) {
           Serial.printf("wake-listen: peak=%u -> probing\n", peak);
           Recording probe = recorder.record(i2s, nullptr, WAKE_PROBE_NO_VOICE_MS, true, touchPressed);
-          if (touchPressed()) {           // touched during/after the probe -> wake by touch
+          if (touchPressed() && !touchCalibMode()) {           // touched during/after the probe -> wake by touch
             if (probe.wav) free(probe.wav);
             face.clearMicLevel();
             state = State::Listening;
@@ -1412,7 +1866,12 @@ void loop() {
         face.setEmotion(Emotion::Sad);
         face.showText("No pude hablar con el cerebro :(", TFT_RED);
       }
-      resumeWakeListener();
+      // Si el cerebro resolvió música/radio, no reanudar WakeNet entre la
+      // captura y el arranque de reproducción: vuelve a tomar el I2S justo
+      // antes de que RadioPlayer intente usarlo.
+      if (!g_musicPlayPending) {
+        resumeWakeListener();
+      }
       emotionHoldUntil = millis() + g_emotionRecoveryMs;  // M11: personality recovery time
       lastActivityMs = millis();
       state = State::Sleeping;
@@ -1601,8 +2060,7 @@ static bool waitMusicPrefetchReady(const String &videoId, const String &label) {
       }
       http.end();
     }
-    face.setTopTitle(String("Esperando PC... ") + label);
-    face.update();
+    musicUiSetStatus(String("Esperando PC... ") + label);
     vTaskDelay(pdMS_TO_TICKS(500));
   }
   if (g_musicStopRequested) return false;
@@ -1610,6 +2068,202 @@ static bool waitMusicPrefetchReady(const String &videoId, const String &label) {
   face.update();
   return false;
 }
+
+#if ENABLE_RADIO_DIRECT
+#if ENABLE_RADIO_DIRECT && RADIO_USE_PC_PCM
+void playRadioViaPc(const String &tuneinId, const String &title) {
+  pauseWakeListener();
+  g_musicStopRequested = false;
+
+  if (WiFi.status() != WL_CONNECTED) {
+    face.showText("WiFi perdido", TFT_RED);
+    face.update();
+    resumeWakeListener();
+    return;
+  }
+
+  const String label = title.length() > 0 ? title : tuneinId;
+  g_musicNowTitle = label;
+  g_musicNowVideoId = "";
+  g_musicPlaying = true;
+
+  face.setEmotion(Emotion::Vibing);
+  musicUiSetStatus(String("Radio: ") + label);
+
+  HTTPClient http;
+  WiFiClient client;
+  client.setNoDelay(true);
+  client.setTimeout((uint32_t)MUSIC_HTTP_TIMEOUT_MS);
+  http.setReuse(false);
+  http.setConnectTimeout(30000);
+  http.setTimeout((int32_t)MUSIC_HTTP_TIMEOUT_MS);
+
+  const String url = String(BRAIN_SERVER_URL) + "/music/radio/pcm?tunein_id=" + tuneinId;
+  Serial.printf("RADIO PCM GET %s\n", url.c_str());
+  if (!http.begin(client, url)) {
+    face.showText("Radio: error HTTP", TFT_RED);
+    face.update();
+    g_musicPlaying = false;
+    resumeWakeListener();
+    return;
+  }
+  http.addHeader("Connection", "close");
+  addBrainDeviceHeaders(http);
+
+  const int code = http.GET();
+  if (code != 200 || g_musicStopRequested) {
+    http.end();
+    face.showText(code == 200 ? "Radio detenida" : "Radio fallo PC", TFT_RED);
+    face.update();
+    g_musicPlaying = false;
+    resumeWakeListener();
+    return;
+  }
+
+  WiFiClient *stream = http.getStreamPtr();
+  if (stream) stream->setTimeout((uint32_t)MUSIC_HTTP_TIMEOUT_MS);
+  const int remaining = http.getSize() <= 0 ? -1 : http.getSize();
+
+  preparePlayback(i2s);
+  if (!g_i2sTxRunning) {
+    http.end();
+    face.showText("Error audio TX", TFT_RED);
+    endPlayback(i2s);
+    g_musicPlaying = false;
+    resumeWakeListener();
+    return;
+  }
+
+  face.setEmotion(Emotion::Vibing);
+  face.setTalking(true);
+#if USE_AURA
+  g_aura.musicPlayer().setPlaying(true, label.c_str());
+  g_aura.musicPlayer().setStatus("En vivo");
+  face.clearTopTitle();
+#endif
+  face.update();
+  digitalWrite(PIN_SPK_EN, LOW);
+
+  g_musicStreaming = true;
+  const size_t pcmWritten =
+      playHttpPcmStream(http, stream, remaining, false, false, nullptr, true, nullptr, true);
+  g_musicStreaming = false;
+
+  delay(50);
+  digitalWrite(PIN_SPK_EN, HIGH);
+  http.end();
+
+  face.setTalking(false);
+  face.setEmotion(Emotion::Neutral);
+  face.clearTopTitle();
+  face.update();
+  g_musicPlaying = false;
+  Serial.printf("radio pcm %u bytes stop=%d\n", pcmWritten, (int)g_musicStopRequested);
+
+  const bool userStopped = g_musicStopRequested;
+  const bool skipNext = g_musicSkipNext;
+  g_musicSkipNext = false;
+  g_musicSkipPrev = false;
+#if USE_AURA
+  g_aura.musicPlayer().setPlaying(false);
+  auraSetScene("dashboard");
+#endif
+  if (userStopped) {
+    face.showText("Radio detenida", TFT_YELLOW);
+    face.update();
+  } else if (pcmWritten == 0) {
+    face.showText("Radio sin senal", TFT_RED);
+    face.update();
+  } else if (!label.isEmpty()) {
+    updateWakeHint();
+  }
+  g_musicStopRequested = false;
+  delay(400);
+  wakeIgnoreUntil = millis() + WAKE_COOLDOWN_MS;
+  resumeWakeListener();
+  if (skipNext) {
+    musicPlayNextInQueue(true);
+  } else if (!userStopped && pcmWritten > 0) {
+    musicAutoplayAdvance();
+  }
+}
+#endif
+
+void playRadioStream(const String &streamUrl, const String &title) {
+  suspendWakeNetForExternalI2s();
+  g_musicStopRequested = false;
+
+  if (WiFi.status() != WL_CONNECTED) {
+    face.showText("WiFi perdido", TFT_RED);
+    face.update();
+    resumeWakeNetAfterExternalI2s();
+    return;
+  }
+
+  const String label = title.length() > 0 ? title : streamUrl;
+  g_musicNowTitle = label;
+  g_musicNowVideoId = "";
+  g_musicPlaying = true;
+
+  face.setEmotion(Emotion::Vibing);
+  face.setTalking(true);
+#if USE_AURA
+  g_aura.musicPlayer().setPlaying(true, label.c_str());
+  g_aura.musicPlayer().setStatus("Radio en vivo");
+  face.clearTopTitle();
+#else
+  face.setTopTitle(label);
+#endif
+  if (!USE_AURA || face.presentation() != FacePresentation::Kitt)
+    MusicScreen::drawControls(gfx, g_settings.volume);
+  face.update();
+
+  g_musicStreaming = true;
+  auto radioUi = [](const char *phase) {
+    if (phase && phase[0]) musicUiSetStatus(String(phase));
+    face.update();
+  };
+  const bool ok = g_radioPlayer.play(i2s, streamUrl, radioUi);
+  g_musicStreaming = false;
+
+  restoreMicBusAfterPlayback(i2s);
+
+  face.setTalking(false);
+  face.setEmotion(Emotion::Neutral);
+  face.clearTopTitle();
+  face.update();
+  g_musicPlaying = false;
+  Serial.printf("radio done ok=%d stop=%d\n", (int)ok, (int)g_musicStopRequested);
+
+  const bool userStopped = g_musicStopRequested;
+  const bool skipNext = g_musicSkipNext;
+  const bool skipPrev = g_musicSkipPrev;
+  g_musicSkipNext = false;
+  g_musicSkipPrev = false;
+#if USE_AURA
+  g_aura.musicPlayer().setPlaying(false);
+  auraSetScene("dashboard");
+#endif
+  if (userStopped) {
+    face.showText("Radio detenida", TFT_YELLOW);
+    face.update();
+  } else if (!ok) {
+    face.showText("Radio sin senal", TFT_RED);
+    face.update();
+  } else if (!label.isEmpty()) {
+    updateWakeHint();
+  }
+  g_musicStopRequested = false;
+  delay(400);
+  wakeIgnoreUntil = millis() + WAKE_COOLDOWN_MS;
+  resumeWakeNetAfterExternalI2s();
+  if (skipNext) {
+    musicPlayNextInQueue(true);
+  } else if (!userStopped && ok) {
+    musicAutoplayAdvance();
+  }
+}
+#endif
 
 void playMusic(const String &videoId, const String &title) {
   pauseWakeListener();
@@ -1626,10 +2280,10 @@ void playMusic(const String &videoId, const String &title) {
   g_musicNowTitle = label;
   g_musicNowVideoId = videoId;
   g_musicPlaying = true;
+  musicHistPush(videoId, label);
 
   face.setEmotion(Emotion::Happy);
-  face.setTopTitle(String("Esperando PC... ") + label);
-  face.update();
+  musicUiSetStatus(String("Esperando PC... ") + label);
 
   HTTPClient http;
   WiFiClient client;
@@ -1696,8 +2350,15 @@ void playMusic(const String &videoId, const String &title) {
   // flotando (igual que el gesto vibing). El título va en el sprite (doble búfer).
   face.setEmotion(Emotion::Vibing);
   face.setTalking(true);
+#if USE_AURA
+  g_aura.musicPlayer().setPlaying(true, label.c_str());
+  g_aura.musicPlayer().setStatus("");
+  face.clearTopTitle();
+#else
   face.setTopTitle(label);
-  MusicScreen::drawControls(gfx, g_settings.volume);
+#endif
+  if (!USE_AURA || face.presentation() != FacePresentation::Kitt)
+    MusicScreen::drawControls(gfx, g_settings.volume);
   face.update();
   digitalWrite(PIN_SPK_EN, LOW);
 
@@ -1716,8 +2377,17 @@ void playMusic(const String &videoId, const String &title) {
   face.update();
   endPlayback(i2s);
   g_musicPlaying = false;
-  Serial.printf("music played %u bytes PCM stop=%d\n", pcmWritten, (int)g_musicStopRequested);
+  Serial.printf("music played %u bytes PCM stop=%d skipNext=%d skipPrev=%d\n", pcmWritten,
+                (int)g_musicStopRequested, (int)g_musicSkipNext, (int)g_musicSkipPrev);
   const bool userStopped = g_musicStopRequested;
+  const bool skipNext = g_musicSkipNext;
+  const bool skipPrev = g_musicSkipPrev;
+  g_musicSkipNext = false;
+  g_musicSkipPrev = false;
+#if USE_AURA
+  g_aura.musicPlayer().setPlaying(false);
+  auraSetScene("dashboard");
+#endif
   if (userStopped) {
     face.showText("Musica detenida", TFT_YELLOW);
     face.update();
@@ -1731,7 +2401,12 @@ void playMusic(const String &videoId, const String &title) {
   delay(400);
   wakeIgnoreUntil = millis() + WAKE_COOLDOWN_MS;
   resumeWakeListener();
-  if (!userStopped && pcmWritten > 0) {
+  if (skipPrev && g_musicHistLen >= 2) {
+    g_musicHistLen -= 2;
+    queueMusicPlay(g_musicHistId[g_musicHistLen], g_musicHistTitle[g_musicHistLen], true);
+  } else if (skipNext) {
+    musicPlayNextInQueue(true);
+  } else if (!userStopped && pcmWritten > 0) {
     musicAutoplayAdvance();
   }
 }
@@ -1997,6 +2672,7 @@ static void handleDevCommand(JsonObjectConst cmd, JsonVariantConst root) {
 
 void pollDevCommand() {
   if (state != State::Sleeping) return;
+  if (touchCalibMode()) return;  // long-poll puede bloquear el muestreo táctil al calibrar.
   g_brainTransport.poll(handleDevCommand);
 }
 
@@ -2148,6 +2824,10 @@ void applyToneMicro(const String &tone) {
 // then applies and persists the choices and restores the idle screen.
 void openSettings() {
   Serial.println("Settings opened");
+  touchInvalidateCache();
+#if USE_AURA
+  gfx.setRotation(face.presentation() == FacePresentation::Kitt ? 0 : DISPLAY_ROTATION);
+#endif
   g_settingsScreen.run(gfx, g_settings, codec);
 
   applySettingsGlobals(g_settings, g_wakePhraseIdx, g_voiceWakeEnabled, g_idleRemarksEnabled);

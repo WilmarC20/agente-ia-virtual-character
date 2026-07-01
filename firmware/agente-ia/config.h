@@ -92,6 +92,11 @@ extern uint8_t g_activeDisplayRotation;
 #define TTS_HTTP_TIMEOUT_MS     180000
 // /music/play: stream yt-dlp|ffmpeg desde PC; timeout = duración canción + margen.
 #define MUSIC_HTTP_TIMEOUT_MS   600000
+#define ENABLE_RADIO_DIRECT     1   // emisoras: stream_url directo en ESP
+#define RADIO_USE_PC_PCM        0   // 0 = solo URL en ESP; 1 = proxy PCM PC (legacy)
+#define RADIO_I2S_HZ            48000
+#define RADIO_MCLK_HZ           (RADIO_I2S_HZ * 256)  // ESP32-audioI2S usa MCLK x256
+#define RADIO_STALL_TIMEOUT_MS  25000
 // Proactive idle: after this long in Sleeping with no interaction, the character
 // says something on its own (POST /idle). Re-armed with a random extra each time.
 #define ENABLE_IDLE_REMARKS 0
@@ -109,6 +114,8 @@ extern uint8_t g_activeDisplayRotation;
 #define AUDIO_MCLK_HZ       (AUDIO_SAMPLE_RATE * I2S_MCLK_MULTIPLE)
 // 1 = KITT dashboard via AURA engine; 0 = legacy face_kitt.h direct path.
 #define USE_AURA            1
+// 1 = tablero KITT desde atlas RGB565 (referencia); modulador sigue procedural.
+#define USE_KITT_SPRITE_ATLAS 1
 // 1 = WebSocket /ws/device con fallback a HTTP poll.
 #define ENABLE_DEVICE_WS         1
 // 1 = long-poll /api/dev/poll-wait; 0 = poll cada 2 s.

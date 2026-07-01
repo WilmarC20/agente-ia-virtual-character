@@ -59,7 +59,13 @@ from tts_engine import (
     sanitize_speech_text,
     warm_piper_daemon,
 )
-from text_encoding import normalize_heard, normalize_heard_ascii, prepare_spanish_text
+from text_encoding import (
+    fix_radio_transcription,
+    normalize_heard,
+    normalize_heard_ascii,
+    normalize_radio_speech,
+    prepare_spanish_text,
+)
 import singing_pipeline as sing
 
 SINGING_ENABLED = os.environ.get("ENABLE_SINGING", "0") == "1"
@@ -104,7 +110,8 @@ WHISPER_BEST_OF = int(os.environ.get("WHISPER_BEST_OF", "1"))
 WHISPER_CONVERSE_PROMPT = os.environ.get(
     "WHISPER_CONVERSE_PROMPT",
     "Comandos en español: enójate, ponte contento, haz cara de enojo, cara triste, "
-    "cara sorprendida, cántame una canción, hola, cómo estás, qué hora es, Hi ESP.",
+    "cara sorprendida, cántame una canción, reproduce la emisora, pon la radio, "
+    "La FM, Los 40, sintoniza la radio, hola, cómo estás, qué hora es, Hi ESP.",
 )
 
 EMOTIONS = [
@@ -161,8 +168,44 @@ def _music_available() -> bool:
 # Direct music-command detection (the small LLM often ignores the "music" instruction and
 # just answers in character). Extracts the song/artist after a trigger word — works for ANY
 # track, not a hardcoded list.
+def extract_radio_station_name(text: str) -> str | None:
+    """Extrae el nombre hablado de la emisora (sin resolver tuning/YouTube)."""
+    t = normalize_radio_speech(text or "")
+    verbs = r"(?:reproduc\w*|escuch\w*|pon(?:e|é|me|er|ga|gan)?|sintoniz\w*|abr\w*)"
+    station = r"(?:emisora|emisor\w*|radio|estaci[oó]n|frecuencia|misora|mizora)"
+    patterns = [
+        rf"\b{verbs}\b\s+(?:(?:la|el)\s+)?{station}\s+(.+)",
+        rf"\b{verbs}\b\s+(?:en\s+)?(?:la|el)\s+{station}\s+(.+)",
+        rf"\b{verbs}\b\s+(?:la\s+)?(?:emisora|radio)\s+(?:fm\s+)?(.+)",
+        rf"\b{verbs}\b\s+(?:la\s+)?fm\s+(.+)",
+        rf"\bpon(?:e|é|me)?\s+(?:la\s+)?radio\s+(.+)",
+        rf"\bpon(?:e|é|me)?\s+(?:la\s+)?(?:emisora|misora|mizora)\s+(.+)",
+    ]
+    for pat in patterns:
+        m = re.search(pat, t, flags=re.IGNORECASE)
+        if not m:
+            continue
+        raw = re.sub(r"^(?:de\s+)", "", m.group(1), flags=re.IGNORECASE)
+        raw = raw.strip(" .,¿?¡!\"'")
+        if len(raw) >= 2:
+            return raw
+    return None
+
+
+def radio_station_query(text: str) -> str | None:
+    """'reproduce la emisora la fm' → query YouTube (solo fallback / detección)."""
+    raw = extract_radio_station_name(text)
+    if not raw:
+        return None
+    q = music.radio_station_youtube_query(raw)
+    return q if q else None
+
+
 def music_command_query(text: str) -> str | None:
     t = normalize_heard(text or "")
+    rs = radio_station_query(text)
+    if rs:
+        return rs
     _filler = r"(?:(?:la|el|un|una)\s+)?(?:canci[oó]n|cancion|tema|temita|m[uú]sica|musica|algo)\s+(?:de\s+)?"
     # Strong music verbs (música-specific): the rest of the phrase is the query.
     m = re.search(r"\b(?:reproduc\w*|escuch\w*|play)\b\s+(.+)", t)
@@ -214,9 +257,20 @@ def _attach_music_radio(result: dict, query: str, device_key: str) -> dict:
     track = result.get("music")
     if not isinstance(track, dict):
         return result
-    pay = music.track_payload(track)
-    if not pay.get("video_id"):
-        return result
+    if music.is_live_radio_track(track):
+        pay = {
+            "title": str(track.get("title") or "Radio").strip(),
+            "artist": str(track.get("artist") or "TuneIn").strip(),
+            "stream_url": str(track.get("stream_url") or "").strip(),
+            "live": True,
+        }
+        tid = str(track.get("tunein_id") or track.get("guide_id") or "").strip()
+        if tid:
+            pay["tunein_id"] = tid
+    else:
+        pay = music.track_payload(track)
+        if not pay.get("video_id"):
+            return result
     q = (query or pay.get("title") or "").strip()
     queue = music.start_radio_session(device_key, pay, q)
     result["music"] = pay
@@ -764,6 +818,10 @@ def fix_transcription(text: str) -> str:
     if not text:
         return text
     text = prepare_spanish_text(text)
+    fixed_radio = fix_radio_transcription(text)
+    if fixed_radio != text:
+        log.info("transcribe: radio %r -> %r", text, fixed_radio)
+        text = fixed_radio
     norm = normalize_heard_ascii(text)
     if norm in _TRANSCRIPTION_ALIASES:
         fixed = _TRANSCRIPTION_ALIASES[norm]
@@ -1761,6 +1819,14 @@ async def admin_device_settings_post(request: Request):
     if "volume" in body:
         v = int(body["volume"])
         payload["volume"] = max(0, min(100, v))
+    if "touch_calib" in body and isinstance(body["touch_calib"], dict):
+        payload["touch_calib"] = body["touch_calib"]
+    if "presentation" in body:
+        pres = str(body["presentation"]).strip().lower()
+        if pres in ("kitt", "bender"):
+            payload["presentation"] = pres
+            # Mantener cerebro y ESP alineados: perfil activo = diseño elegido.
+            srv_cfg.save({"personality": pres})
     if not payload:
         return JSONResponse(status_code=400, content={"error": "nothing to update"})
     try:
@@ -1775,6 +1841,22 @@ async def admin_device_settings_post(request: Request):
     except Exception as e:
         log.warning("device settings POST failed (%s): %s", ip, e)
         return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+@app.post("/api/device/presentation")
+async def device_set_presentation(request: Request):
+    """ESP32 fija diseño activo (kitt/bender) y alinea el perfil del cerebro."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid json"})
+    pres = str(body.get("presentation", "")).strip().lower()
+    if pres not in ("kitt", "bender"):
+        return JSONResponse(status_code=400, content={"error": "presentation must be kitt or bender"})
+    mac = (request.headers.get("X-Device-MAC") or "").strip()
+    srv_cfg.save({"personality": pres})
+    log.info("device presentation %s (mac=%s)", pres, mac or "?")
+    return {"ok": True, "presentation": pres, "personality": pres}
 
 
 @app.post("/api/admin/device/dev/face")
@@ -2006,6 +2088,8 @@ async def music_prefetch_status(id: str = Query("", alias="id")):
     video_id = (id or "").strip()
     if not video_id:
         return JSONResponse(status_code=400, content={"error": "missing id"})
+    if music.is_live_radio_id(video_id):
+        return {"status": "ready", "ready": True, "live": True}
     st = await asyncio.to_thread(music.prefetch_status, video_id)
     if st.get("status") == "none":
         music.prefetch_pcm_stream(video_id)
@@ -2015,6 +2099,46 @@ async def music_prefetch_status(id: str = Query("", alias="id")):
     if st.get("status") == "error":
         return JSONResponse(status_code=503, content=st)
     return JSONResponse(status_code=202, content=st)
+
+
+@app.get("/music/radio/pcm")
+async def music_radio_pcm(tunein_id: str = Query("")):
+    """PCM 16 kHz mono de emisora en vivo (~20 s por petición; ES8311 nativo)."""
+    tid = (tunein_id or "").strip()
+    if not tid:
+        return JSONResponse(status_code=400, content={"error": "missing tunein_id"})
+    if not _music_available():
+        return JSONResponse(status_code=503, content={"error": "music unavailable"})
+    t0 = time.monotonic()
+    max_pcm = music.radio_pcm_chunk_bytes()
+    try:
+        stream_it, first_chunk = await asyncio.to_thread(music.open_radio_pcm_tunein, tid)
+    except Exception as e:
+        log.warning("radio pcm open failed tunein=%s: %s", tid, e)
+        return JSONResponse(status_code=503, content={"error": str(e)})
+    chunks: list[bytes] = [first_chunk]
+    pcm_total = len(first_chunk)
+    try:
+        while pcm_total < max_pcm:
+            chunk = await asyncio.to_thread(music._next_chunk, stream_it)
+            if chunk is None:
+                break
+            if pcm_total + len(chunk) > max_pcm:
+                chunk = chunk[: max_pcm - pcm_total]
+            chunks.append(chunk)
+            pcm_total += len(chunk)
+            if pcm_total >= max_pcm:
+                break
+    finally:
+        music.shutdown_all_streams()
+    pcm_all = b"".join(chunks)
+    log.info(
+        "radio pcm ready tunein=%s open=%.1fs %d bytes",
+        tid,
+        time.monotonic() - t0,
+        len(pcm_all),
+    )
+    return Response(content=pcm_all, media_type="application/octet-stream")
 
 
 @app.get("/music/play")
@@ -2105,22 +2229,34 @@ async def _music_stream_response(video_id: str, request: Request | None = None):
     # HTTP/1.1, que corrompía el stream PCM en el ESP (los chunk headers se
     # interpretaban como muestras de audio → golpe rítmico cada 16 KB).
     # PCM 16 kHz mono 16-bit ≈ 2 MB/min — manejable en RAM del servidor.
+    # Emisoras TuneIn (tune:*) son infinitas → ventana fija LIVE_RADIO_CHUNK_SEC.
+    live_radio = music.is_live_radio_id(video_id)
+    max_pcm = music.live_radio_chunk_bytes() if live_radio else None
     chunks: list[bytes] = [first_chunk]
+    pcm_total = len(first_chunk)
     try:
         while True:
+            if max_pcm is not None and pcm_total >= max_pcm:
+                break
             chunk = await asyncio.to_thread(music._next_chunk, stream_it)
             if chunk is None:
                 break
+            if max_pcm is not None and pcm_total + len(chunk) > max_pcm:
+                chunk = chunk[: max_pcm - pcm_total]
             chunks.append(chunk)
+            pcm_total += len(chunk)
+            if max_pcm is not None and pcm_total >= max_pcm:
+                break
     finally:
         music.shutdown_all_streams()
 
     pcm_all = b"".join(chunks)
     log.info(
-        "music/play ready id=%s %.1fs %d bytes",
+        "music/play ready id=%s %.1fs %d bytes%s",
         video_id,
         time.monotonic() - t0,
         len(pcm_all),
+        " (live chunk)" if live_radio else "",
     )
     return Response(
         content=pcm_all,
@@ -2601,15 +2737,28 @@ async def converse(request: Request):
     if _music_available():
         mq = music_command_query(text)
         if mq:
-            track = await _resolve_music_track(mq)
+            radio_name = extract_radio_station_name(text)
+            if radio_name:
+                track = await asyncio.to_thread(music.resolve_radio_station, radio_name)
+            else:
+                track = await _resolve_music_track(mq)
             if track:
-                log.info("music command '%s' -> %s (%s)", mq, track["title"], track["video_id"])
+                log.info(
+                    "music command '%s' -> %s (%s)",
+                    mq,
+                    track.get("title"),
+                    track.get("video_id") or track.get("stream_url", "")[:48],
+                )
+                is_radio = radio_name is not None
                 payload = {
                     "emotion": "happy", "reply": "", "heard": text, "sing": False,
                     "speak": False, "sound_effect": "none", "music": track,
                 }
+                if is_radio:
+                    payload["reply"] = ""
+                radio_q = (track.get("title") or radio_name or mq) if is_radio else mq
                 return _with_device_context(
-                    _attach_music_radio(payload, mq, _device_key(request))
+                    _attach_music_radio(payload, radio_q, _device_key(request))
                 )
             log.info("music command '%s' -> sin resultados", mq)
             return {

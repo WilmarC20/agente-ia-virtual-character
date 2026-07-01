@@ -22,6 +22,26 @@ struct AuraLayout {
   int mouthX = 120, mouthY = 155, mouthW = 80, mouthH = 28;
 };
 
+enum class KittButton : uint8_t {
+  None = 0,
+  Power,
+  MinRpm,
+  FuelOn,
+  Ignitors,
+  Air,
+  Oil,
+  P1,
+  P2,
+  S1,
+  S2,
+  P3,
+  P4,
+  AutoCruise,
+  NormalCruise,
+  Pursuit,
+  Modulator,
+};
+
 class LayoutManager {
  public:
   enum class ThemeKind { Kitt, Bender };
@@ -45,10 +65,7 @@ class LayoutManager {
     if (!id) return {};
     if (strcmp(id, "powerButton") == 0 || strcmp(id, "top.power") == 0) return topBar(0);
     if (strcmp(id, "settingsP4") == 0 || strcmp(id, "oval.p4") == 0) return hitZoneSettingsP4();
-    if (strcmp(id, "modulator") == 0) {
-      const int w = _layout.segW * 3 + _layout.segGap * 2;
-      return {_layout.colCxLeft - w / 2, _layout.colCenterY - 20, w, 40, true};
-    }
+    if (strcmp(id, "modulator") == 0) return modulatorZone();
     if (strcmp(id, "visor") == 0) {
       return {_layout.visorX, _layout.visorY, _layout.visorW, _layout.visorH, true};
     }
@@ -77,6 +94,53 @@ class LayoutManager {
   }
 
   AuraRect hitZoneSettingsP4() const { return ovalRight(3); }
+
+  // Caja real de las 3 columnas del modulador (idéntica al blackout del atlas):
+  // así el toque sobre las barras de voz y el clear coinciden con lo dibujado.
+  AuraRect modulatorZone() const {
+    const int cx[3] = {_layout.colCxLeft, _layout.colCxMid, _layout.colCxRight};
+    const int seg[3] = {_layout.colSegSide, _layout.colSegMid, _layout.colSegSide};
+    int minX = 9999, minY = 9999, maxX = 0, maxY = 0;
+    for (int i = 0; i < 3; i++) {
+      const int totalH = seg[i] * _layout.segH + (seg[i] - 1) * _layout.segGap;
+      const int topY = _layout.colCenterY - totalH / 2;
+      const int x0 = cx[i] - _layout.segW / 2;
+      if (x0 < minX) minX = x0;
+      if (x0 + _layout.segW > maxX) maxX = x0 + _layout.segW;
+      if (topY < minY) minY = topY;
+      if (topY + totalH > maxY) maxY = topY + totalH;
+    }
+    const int pad = 3;
+    return {minX - pad, minY - pad, (maxX - minX) + 2 * pad, (maxY - minY) + 2 * pad, true};
+  }
+
+  KittButton hitKittButton(int sx, int sy) const {
+    if (_kind != ThemeKind::Kitt) return KittButton::None;
+    auto hit = [&](AuraRect r) {
+      return r.valid && sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h;
+    };
+
+    for (int i = 0; i < 4; i++) {
+      if (hit(topBar(i))) {
+        return (KittButton)((int)KittButton::Power + i);
+      }
+    }
+    for (int i = 0; i < 4; i++) {
+      if (hit(ovalLeft(i))) {
+        return (KittButton)((int)KittButton::Air + i);
+      }
+      if (hit(ovalRight(i))) {
+        return (KittButton)((int)KittButton::S1 + i);
+      }
+    }
+    for (int i = 0; i < 3; i++) {
+      if (hit(bottomBar(i))) {
+        return (KittButton)((int)KittButton::AutoCruise + i);
+      }
+    }
+    if (hit(get("modulator"))) return KittButton::Modulator;
+    return KittButton::None;
+  }
 
  private:
   AuraLayout _layout;
