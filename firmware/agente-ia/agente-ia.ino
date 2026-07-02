@@ -40,7 +40,7 @@ static void applyServerPresentation(JsonVariantConst root, bool fromUser = false
 #include "touch_calib.h"
 
 // Cambia en cada flash para verificar en Serial Monitor que cargó el binario nuevo.
-static constexpr const char *FIRMWARE_BUILD_ID = "hiesp-wakenet-lifecycle-260701";
+static constexpr const char *FIRMWARE_BUILD_ID = "hiesp-mnn-format-260701";
 
 static void addBrainDeviceHeaders(HTTPClient &http) {
   http.addHeader("X-Device-MAC", WiFi.macAddress());
@@ -160,7 +160,8 @@ static const sr_cmd_t srCommands[] = {};
 
 // The ES8311 mono ADC sits on ONE I2S slot; the other reads ~silence. WakeNet
 // must listen to the active slot. Probe the noise floor of each channel at boot
-// and pick the louder one. Returns "MN" (mic left) or "NM" (mic right).
+// and pick the louder one. Returns "MNN" (mic left) or "NMN" (mic right) —
+// 3 chars to match the 3-channel frames the ESP_SR feed task builds.
 const char *detectMicInputFormat(I2SClass &i2s) {
 #ifdef WAKEWORD_INPUT_FORMAT_FORCE
   Serial.printf("Mic format forced: %s\n", WAKEWORD_INPUT_FORMAT_FORCE);
@@ -183,7 +184,7 @@ const char *detectMicInputFormat(I2SClass &i2s) {
   }
   i2s.setTimeout(1000);
   bool micRight = accR > accL;
-  const char *fmt = micRight ? "NM" : "MN";
+  const char *fmt = micRight ? "NMN" : "MNN";
   Serial.printf("Mic probe: L=%llu R=%llu frames=%u -> mic on %s (%s)\n",
                 (unsigned long long)accL, (unsigned long long)accR,
                 (unsigned)frames, micRight ? "RIGHT" : "LEFT", fmt);

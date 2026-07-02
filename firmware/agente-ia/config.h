@@ -65,8 +65,8 @@ extern uint8_t g_activeDisplayRotation;
 #define I2S_DRAIN_AFTER_PLAY_MS   500
 #define SR_PAUSE_SETTLE_MS        280
 // WakeNet (ESP-SR): "Hi ESP" on-device. Requires ESP SR 16M partition scheme.
-// Kept compiled so we can RETAKE it later; the board mic is too quiet for it to
-// fire reliably today, so the active wake path is WAKE_MODE_PC below.
+// Unreliable detection through June was NOT the mic level: the 2-char input
+// format made the AFE mis-parse the 3-channel feed (see WAKEWORD_INPUT_FORMAT).
 #define ENABLE_WAKEWORD     1
 // Wake path selector: 1 = PC-side "Hola asistente" (records a clip, server
 // /wake-check transcribes it with Whisper). 0 = on-device WakeNet "Hi ESP".
@@ -103,10 +103,13 @@ extern uint8_t g_activeDisplayRotation;
 #define IDLE_REMARK_MS      120000
 // ES8311 places the mono mic on ONE stereo slot (L or R). WakeNet's input_format
 // must point at that slot or it hears silence. Auto-detected at boot by energy.
-// Fallback if probe is inconclusive; "MN" = mic LEFT, "NM" = mic RIGHT.
-#define WAKEWORD_INPUT_FORMAT "MN"
+// MUST be 3 chars: the ESP_SR feed task always hands the AFE 3 interleaved
+// channels [L,R,0] and the AFE derives channel count from strlen(input_format).
+// A 2-char format ("MN") makes it parse frames misaligned -> scrambled mic
+// stream -> wake word never fires. "MNN" = mic LEFT, "NMN" = mic RIGHT.
+#define WAKEWORD_INPUT_FORMAT "MNN"
 // Uncomment to skip auto-detect and force a slot, e.g. if the probe misreads:
-// #define WAKEWORD_INPUT_FORMAT_FORCE "NM"
+// #define WAKEWORD_INPUT_FORMAT_FORCE "NMN"
 // User sound effects live on the "spiffs" partition (NOT the "model" partition).
 #define SPIFFS_PARTITION_LABEL "spiffs"
 #define I2S_MCLK_MULTIPLE   384     // ES8311 on ES3C28P: 16 kHz * 384 = 6.144 MHz MCLK
