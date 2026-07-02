@@ -40,7 +40,7 @@ static void applyServerPresentation(JsonVariantConst root, bool fromUser = false
 #include "touch_calib.h"
 
 // Cambia en cada flash para verificar en Serial Monitor que cargó el binario nuevo.
-static constexpr const char *FIRMWARE_BUILD_ID = "pres-kitt-radio-i2s-260701";
+static constexpr const char *FIRMWARE_BUILD_ID = "hiesp-wakenet-lifecycle-260701";
 
 static void addBrainDeviceHeaders(HTTPClient &http) {
   http.addHeader("X-Device-MAC", WiFi.macAddress());
@@ -200,16 +200,32 @@ void onSrEvent(sr_event_t event, int command_id, int phrase_id) {
 }
 #endif
 
+bool verifyMicRx(I2SClass &i2s);
+
 #if ENABLE_WAKEWORD
 void syncWakeNetFromSettings() {
   if (g_settings.hiEspWake) {
     if (!g_wakeNetRunning) {
-      g_srInputFormat = detectMicInputFormat(i2s);
+      // ESP_SR only stores the I2SClass pointer and reads via readBytes(); it
+      // never configures the bus. Starting against a dead RX would leave the
+      // feed task spinning on errors, so probe first and retry on a later sync.
+      if (!verifyMicRx(i2s)) {
+        Serial.println("WakeNet: RX not ready, start skipped");
+        return;
+      }
+      // The mic slot (L/R) is fixed by hardware: probe once, reuse on restarts.
+      static bool formatProbed = false;
+      if (!formatProbed) {
+        g_srInputFormat = detectMicInputFormat(i2s);
+        formatProbed = true;
+      }
       ESP_SR.onEvent(onSrEvent);
       static const sr_cmd_t srCommands[] = {};
+      wakeDetected = false;
       if (ESP_SR.begin(i2s, srCommands, 0, SR_CHANNELS_STEREO, SR_MODE_WAKEWORD, g_srInputFormat)) {
         g_wakeNetRunning = true;
-        Serial.printf("WakeNet started, input=%s\n", g_srInputFormat);
+        Serial.printf("WakeNet started, input=%s heap=%u psram=%u\n", g_srInputFormat,
+                      (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram());
       } else {
         Serial.println("WakeNet start failed");
       }
@@ -256,11 +272,18 @@ void onMicLevel(uint32_t rms) {
   face.drawMicLevel(rms);
 }
 
+// Fully stop WakeNet before the sketch takes the mic or reconfigures I2S.
+// ESP_SR.pause() is NOT safe for that: its feed task blocks inside an I2S read
+// with portMAX_DELAY, so tearing the bus down underneath it leaves the task
+// stuck and a later sr_stop() deadlocks waiting for it (the historical post-TTS
+// freeze). sr_stop() while RX is healthy exits cleanly, like the radio path.
 void pauseWakeListener(bool settle = true) {
+  (void)settle;
 #if ENABLE_WAKEWORD
   if (g_wakeNetRunning) {
-    ESP_SR.pause();
-    if (settle) delay(SR_PAUSE_SETTLE_MS);
+    ESP_SR.end();
+    g_wakeNetRunning = false;
+    wakeDetected = false;
   }
 #endif
 }
@@ -310,16 +333,13 @@ bool restoreMicBusAfterPlayback(I2SClass &i2s) {
   return ok;
 }
 
+// Restart WakeNet from scratch after the sketch used the audio bus. A fresh
+// begin() builds the AFE against the current (verified) RX state, so it can
+// never inherit a stale clock from before the playback — the old resume() path
+// re-hooked a paused AFE onto a rebuilt bus and left the mic at half rate.
 void resumeWakeListener() {
 #if ENABLE_WAKEWORD
-  if (!g_wakeNetRunning) return;  // PC wake mode: nothing to resume
-  // ESP_SR lee vía i2s->readBytes() en cada llamada; basta re-habilitar RX tras TTS.
-  if (!verifyMicRx(i2s)) {
-    Serial.println("WakeNet: RX probe failed");
-    return;
-  }
-  ESP_SR.resume();
-  ESP_SR.setMode(SR_MODE_WAKEWORD);
+  syncWakeNetFromSettings();
 #endif
 }
 
@@ -1614,16 +1634,20 @@ void loop() {
       face.setBored(!face.isVibing() && (int32_t)(millis() - lastActivityMs) > 20000);
 
       // Gesto vibing: espectrograma en boca según micrófono ambiente.
+      // WakeNet stays fully off while vibing (both would read the same mic);
+      // the first sample stops it and the exit edge below rearms it.
       static uint32_t lastVibingMic = 0;
+      static bool wasVibing = false;
       if (face.isVibing() && millis() - lastVibingMic > 16) {
         lastVibingMic = millis();
         uint8_t bands[12];
-        pauseWakeListener(false);
+        pauseWakeListener(false);  // no-op after the first vibing sample
         uint32_t peak = recorder.captureVibingBands(i2s, bands, 12, 32);
-        resumeWakeListener();
         face.setVibingSpectrum(bands, 12, peak);
         lastActivityMs = millis();
       }
+      if (wasVibing && !face.isVibing()) resumeWakeListener();
+      wasVibing = face.isVibing();
 
       // Deferred wake: a single tap fires Listening only after a short window passes with
       // no second tap (so a quick double-tap can be read as a "hit" instead).
@@ -1713,8 +1737,11 @@ void loop() {
       }
 
       // PC-side wake phrase via /wake-check (gated by g_voiceWakeEnabled).
+      // Skipped while on-device WakeNet runs: two mic readers steal each
+      // other's samples and neither detects reliably.
       static uint32_t lastWakeProbe = 0;
-      if (!touchCalibMode() && !face.isVibing() && g_voiceWakeEnabled && millis() >= wakeIgnoreUntil &&
+      if (!touchCalibMode() && !face.isVibing() && g_voiceWakeEnabled &&
+          !g_wakeNetRunning && millis() >= wakeIgnoreUntil &&
           millis() >= wakeRejectUntil &&
           millis() - lastWakeProbe >= WAKE_PROBE_INTERVAL_MS) {
         lastWakeProbe = millis();

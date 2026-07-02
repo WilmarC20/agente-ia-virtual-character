@@ -16,7 +16,7 @@ struct AppSettings {
   uint8_t volume = TTS_VOLUME_PERCENT;
   bool voiceWake = true;
 #if ENABLE_WAKEWORD
-  bool hiEspWake = false;
+  bool hiEspWake = true;
 #endif
   uint8_t phraseIdx = 0;
   bool idleRemarks = ENABLE_IDLE_REMARKS;
@@ -34,10 +34,10 @@ inline void loadSettings(AppSettings &s) {
   s.volume = p.getUChar("vol", s.volume);
   s.voiceWake = p.getBool("voice", s.voiceWake);
 #if ENABLE_WAKEWORD
-  // Hi ESP (ESP-SR) defaults OFF: running WakeNet shares the I2S bus and leaves the
-  // mic at half rate after TTS (2nd recording came out accelerated). Touch + PC-side
-  // "Hola asistente" still wake the device. Re-enable manually only if you accept that.
-  s.hiEspWake = p.getBool("hiesp", false);
+  // Hi ESP (ESP-SR) defaults ON: WakeNet is now fully stopped (ESP_SR.end) before
+  // any capture/playback and restarted fresh on idle, so it can no longer corrupt
+  // the mic clock. Key "hiesp2": older builds force-saved "hiesp"=false, ignore it.
+  s.hiEspWake = p.getBool("hiesp2", true);
 #endif
   s.phraseIdx = p.getUChar("phrase", s.phraseIdx);
   s.idleRemarks = p.getBool("idle", s.idleRemarks);
@@ -81,7 +81,7 @@ inline void saveSettings(const AppSettings &s) {
   p.putUChar("vol", s.volume);
   p.putBool("voice", s.voiceWake);
 #if ENABLE_WAKEWORD
-  p.putBool("hiesp", s.hiEspWake);
+  p.putBool("hiesp2", s.hiEspWake);
 #endif
   p.putUChar("phrase", s.phraseIdx);
   p.putBool("idle", s.idleRemarks);
